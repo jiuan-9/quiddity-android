@@ -56,6 +56,43 @@ import com.quiddity.app.data.model.Message
 import com.quiddity.app.data.model.Role
 import com.quiddity.app.ui.theme.Motion
 import com.quiddity.app.util.MarkdownParser
+/*
+ * ============================================================================
+ * 开发规范 (Development Specifications)
+ * ============================================================================
+ *
+ * 1. 问题修复规范
+ *    所有代码问题修复必须采用系统性解决方案，严禁使用临时性补丁或 hack 手段。
+ *    修复内容需完全融入现有代码架构，确保代码逻辑的连贯性、可维护性和可扩展性。
+ *
+ * 2. 代码注释规范
+ *    文件内仅允许保留两类注释：
+ *    - 当前规则说明注释（即本注释块）
+ *    - 模块划分注释（用于标识代码功能模块边界）
+ *    除此之外，禁止出现任何形式的代码注释（包括但不限于单行注释、多行注释、临时调试注释等）。
+ *
+ * 3. 构建交付要求
+ *    在完成所有开发任务并通过单元测试和集成测试后，必须将项目打包为标准 APK 文件。
+ *    APK 文件需满足以下条件：
+ *    - 签名有效且符合发布标准
+ *    - 包含完整的功能模块
+ *    - 经过基础性能测试和兼容性测试
+ *    以便在真实设备环境中进行功能验证和性能评估。
+ *
+ * ============================================================================
+ */
+
+
+// ===== 气泡统一样式常量（跨设备/跨渲染模式一致） =====
+// 气泡外层最大宽度：与代码块一致使用 400dp 保持宽窄统一
+private val BubbleMaxWidth = 400.dp
+// 气泡内部文本最大宽度：400 - 14*2 横向内边距 = 372，向上取整到 372dp 保证内边距准确
+private val BubbleInnerMaxWidth = 372.dp
+
+// 气泡形状：用户消息右下角尖角 4dp；AI 消息左下角尖角 4dp
+private fun BubbleShape(isUser: Boolean) =
+    if (isUser) RoundedCornerShape(18.dp, 18.dp, 4.dp, 18.dp)
+    else RoundedCornerShape(18.dp, 18.dp, 18.dp, 4.dp)
 
 // 当前规则：纯代码块用围栏卡片；混合内容用普通气泡内嵌代码块；流式中只用纯文本。
 @Composable
@@ -90,17 +127,22 @@ fun MessageBubble(
     val isError = message.isError
     val isAiNotStreaming = !isUser && !isStreaming
 
-    val bubbleColor = when {
-        isError -> MaterialTheme.colorScheme.errorContainer
-        isUser -> MaterialTheme.colorScheme.secondary
-        else -> MaterialTheme.colorScheme.surfaceVariant
+    val colorScheme = MaterialTheme.colorScheme
+    val bubbleColor = remember(isUser, isError, colorScheme) {
+        when {
+            isError -> colorScheme.errorContainer
+            isUser -> colorScheme.secondary
+            else -> colorScheme.surfaceVariant
+        }
     }
-    val textColor = when {
-        isError -> MaterialTheme.colorScheme.onErrorContainer
-        isUser -> MaterialTheme.colorScheme.onSecondary
-        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    val textColor = remember(isUser, isError, colorScheme) {
+        when {
+            isError -> colorScheme.onErrorContainer
+            isUser -> colorScheme.onSecondary
+            else -> colorScheme.onSurfaceVariant
+        }
     }
-    val grayColor = textColor.copy(alpha = 0.55f)
+    val grayColor = remember(textColor) { textColor.copy(alpha = 0.55f) }
 
     val avatarUri = if (isUser) userAvatarUri else aiAvatarUri
     val avatarIcon = if (isUser) Icons.Filled.Person else Icons.Filled.Person
@@ -166,24 +208,31 @@ fun MessageBubble(
     )
 
     // ===== 内容渲染分流决策 =====
-    val canRenderBlocks = !isStreaming && !isError && fullContent.isNotEmpty()
-    val blocks = remember(fullContent, canRenderBlocks) {
-        if (canRenderBlocks) MarkdownParser.parse(fullContent) else emptyList()
+    // 关键性能优化：流式中用纯文本渲染（避免每 token 都重跑 MarkdownParser.parse），
+    // 流结束后用 message.id 作 key 解析一次，之后保持稳定。
+    val blocks = remember(message.id, isStreaming) {
+        if (isStreaming || fullContent.isEmpty()) emptyList()
+        else MarkdownParser.parse(fullContent)
     }
-    val renderMode = remember(blocks, canRenderBlocks) {
-        if (!canRenderBlocks) RenderMode.PURE_TEXT
-        else when {
+    val renderMode = remember(blocks, isStreaming, fullContent) {
+        when {
+            isStreaming || fullContent.isEmpty() -> RenderMode.PURE_TEXT
             blocks.size == 1 && blocks[0] is MarkdownParser.Block.CodeBlock -> RenderMode.PURE_CODE
-            blocks.size == 1 && blocks[0] is MarkdownParser.Block.Text &&
-                !MarkdownParser.hasCodeBlocks(fullContent) -> RenderMode.PURE_TEXT
             blocks.any { it is MarkdownParser.Block.CodeBlock } -> RenderMode.MIXED
             else -> RenderMode.PURE_TEXT
         }
     }
 
-    val annotatedContent = remember(content, bracketGrayEnabled) {
-        grayifyBrackets(content, bracketGrayEnabled, grayColor)
+    // 括号灰化：流式中用 content 实时计算（轻量级 substring 操作，可接受）；
+    // 流结束后用稳定的 AnnotatedString 缓存（避免每次重组重算）。
+    val annotatedContent = remember(message.id, isStreaming, content, bracketGrayEnabled) {
+        if (isStreaming) grayifyBrackets(content, bracketGrayEnabled, grayColor)
+        else null
     }
+    val stableAnnotated = remember(message.id, bracketGrayEnabled, fullContent) {
+        if (!isStreaming) grayifyBrackets(fullContent, bracketGrayEnabled, grayColor) else null
+    }
+    val effectiveAnnotated = annotatedContent ?: stableAnnotated ?: grayifyBrackets(fullContent, bracketGrayEnabled, grayColor)
 
     // ===== 气泡主体 =====
     Column(
@@ -238,7 +287,7 @@ fun MessageBubble(
                     Box(
                         modifier = Modifier
                             .weight(1f, fill = false)
-                            .widthIn(max = 400.dp)
+                            .widthIn(max = BubbleMaxWidth)
                             .graphicsLayer {
                                 scaleX = bubbleScaleState.value
                                 scaleY = bubbleScaleState.value
@@ -268,7 +317,7 @@ fun MessageBubble(
                     Box(
                         modifier = Modifier
                             .weight(1f, fill = false)
-                            .widthIn(max = 300.dp)
+                            .widthIn(max = BubbleMaxWidth)
                             .graphicsLayer {
                                 scaleX = bubbleScaleState.value
                                 scaleY = bubbleScaleState.value
@@ -299,13 +348,7 @@ fun MessageBubble(
                                     else -> mod
                                 }
                             }
-                            .clip(
-                                if (isUser) {
-                                    RoundedCornerShape(18.dp, 18.dp, 4.dp, 18.dp)
-                                } else {
-                                    RoundedCornerShape(18.dp, 18.dp, 18.dp, 4.dp)
-                                }
-                            )
+                            .clip(BubbleShape(isUser))
                             .background(bubbleColor)
                     ) {
                         // ===== 三条开发规范（位于文件中间位置） =====
@@ -320,7 +363,6 @@ fun MessageBubble(
                             modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            // 流式输出中且内容为空时显示三点脉冲 TypingIndicator
                             if (isStreaming && content.isEmpty()) {
                                 TypingIndicator()
                             } else {
@@ -335,7 +377,7 @@ fun MessageBubble(
                                                 textColor = textColor,
                                                 onBubbleClick = if (multiSelectMode) onSelectToggle else (if (isUser) onBubbleClick else null),
                                                 onLongClick = if (multiSelectMode) null else onLongClick,
-                                                modifier = Modifier.widthIn(max = 272.dp)
+                                                modifier = Modifier.widthIn(max = BubbleInnerMaxWidth)
                                             )
                                         }
                                         is MarkdownParser.Block.CodeBlock -> {
@@ -359,7 +401,7 @@ fun MessageBubble(
                     Box(
                         modifier = Modifier
                             .weight(1f, fill = false)
-                            .widthIn(max = 300.dp)
+                            .widthIn(max = BubbleMaxWidth)
                             .graphicsLayer {
                                 scaleX = bubbleScaleState.value
                                 scaleY = bubbleScaleState.value
@@ -390,28 +432,22 @@ fun MessageBubble(
                                     else -> mod
                                 }
                             }
-                            .clip(
-                                if (isUser) {
-                                    RoundedCornerShape(18.dp, 18.dp, 4.dp, 18.dp)
-                                } else {
-                                    RoundedCornerShape(18.dp, 18.dp, 18.dp, 4.dp)
-                                }
-                            )
+                            .clip(BubbleShape(isUser))
                             .background(bubbleColor)
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp),
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.Bottom
                         ) {
                             if (isStreaming && content.isEmpty()) {
                                 TypingIndicator()
                             } else {
                                 SelectableMessageText(
-                                    text = annotatedContent,
+                                    text = effectiveAnnotated,
                                     textColor = textColor,
                                     onBubbleClick = if (multiSelectMode) onSelectToggle else (if (isUser) onBubbleClick else null),
                                     onLongClick = if (multiSelectMode) null else onLongClick,
-                                    modifier = Modifier.widthIn(max = 272.dp)
+                                    modifier = Modifier.widthIn(max = BubbleInnerMaxWidth)
                                 )
                                 if (isStreaming) {
                                     Spacer(modifier = Modifier.size(2.dp))
@@ -627,6 +663,7 @@ private fun SelectionCircle(isSelected: Boolean) {
  * 消息文本（已移除 SelectionContainer 文字提取器）。
  *
  * 当前规则：
+ * - 气泡字体统一 12sp（项目硬约束），跨设备/系统字号设置下视觉一致
  * - 长按气泡进入多选模式（由父级 combinedClickable 处理），不再触发系统文本选择
  * - 保留括号灰化（AnnotatedString 原生 color span）
  * - 短按事件冒泡给父组件（USER 气泡的 onBubbleClick 仍能触发）
@@ -648,11 +685,10 @@ private fun SelectableMessageText(
         text = text,
         color = textColor,
         style = MaterialTheme.typography.bodyLarge.copy(
-            fontSize = 24.sp,
-            lineHeight = 32.sp
+            fontSize = 12.sp,
+            lineHeight = 18.sp
         ),
         modifier = modifier
-            .widthIn(max = 360.dp)
             .combinedClickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,

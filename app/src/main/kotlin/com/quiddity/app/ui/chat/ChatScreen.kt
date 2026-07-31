@@ -43,12 +43,12 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -72,6 +72,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import com.quiddity.app.data.model.Message
 import com.quiddity.app.data.model.Role
 import com.quiddity.app.ui.chat.components.ChatInputBar
 import com.quiddity.app.ui.chat.components.CompressionProgressDialog
@@ -84,6 +85,32 @@ import com.quiddity.app.ui.chat.gesture.ChatDragController
 import com.quiddity.app.ui.chat.gesture.detectNativeHorizontalSwipe
 import com.quiddity.app.ui.theme.Motion
 import kotlinx.coroutines.launch
+/*
+ * ============================================================================
+ * 开发规范 (Development Specifications)
+ * ============================================================================
+ *
+ * 1. 问题修复规范
+ *    所有代码问题修复必须采用系统性解决方案，严禁使用临时性补丁或 hack 手段。
+ *    修复内容需完全融入现有代码架构，确保代码逻辑的连贯性、可维护性和可扩展性。
+ *
+ * 2. 代码注释规范
+ *    文件内仅允许保留两类注释：
+ *    - 当前规则说明注释（即本注释块）
+ *    - 模块划分注释（用于标识代码功能模块边界）
+ *    除此之外，禁止出现任何形式的代码注释（包括但不限于单行注释、多行注释、临时调试注释等）。
+ *
+ * 3. 构建交付要求
+ *    在完成所有开发任务并通过单元测试和集成测试后，必须将项目打包为标准 APK 文件。
+ *    APK 文件需满足以下条件：
+ *    - 签名有效且符合发布标准
+ *    - 包含完整的功能模块
+ *    - 经过基础性能测试和兼容性测试
+ *    以便在真实设备环境中进行功能验证和性能评估。
+ *
+ * ============================================================================
+ */
+
 
 // 当前规则（重做后）：
 // - 手指滑动距离 = 窗口滑动距离（1:1 跟手，无缩放、无视差、无透明度变化）
@@ -431,9 +458,9 @@ fun ChatScreen(
                                 key = { it.id },
                                 contentType = { if (it.isNotice) "notice" else it.role.name }
                             ) { message ->
-                                // 当前规则：isLastAi 跳过 isNotice 消息，避免提示气泡遮挡末位 AI 消息的操作按钮
-                                val isLastAi = message.role == Role.ASSISTANT &&
-                                    messages.lastOrNull { !it.isNotice }?.id == message.id
+                                // 关键性能优化：key(message.id) + 独立 composable 让 ChatScreen 重组时
+                                // message 内容未变的气泡完全跳过重组（流式每个 token 触发 messages 变化，
+                                // 原实现会让所有气泡都重组，因为 lambda 参数每帧都是新实例）
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -446,61 +473,32 @@ fun ChatScreen(
                                             fadeOutSpec = null
                                         )
                                 ) {
-                                    // 当前规则：isNotice 提示气泡居中渲染，不走 MessageBubble 的对话气泡逻辑
                                     if (message.isNotice) {
                                         NoticeBubble(content = message.content)
                                     } else {
-                                        // 多选模式下禁用所有常规操作（撤回/改写/重说/继续说），仅保留选择切换
-                                        val inMultiSelect = multiSelectMode
-                                        MessageBubble(
-                                            message = message,
-                                            userAvatarUri = settings.userAvatarUri,
-                                            aiAvatarUri = conversation?.persona?.aiAvatarUri,
-                                            bracketGrayEnabled = settings.bracketGrayEnabled,
-                                            typingDelayEnabled = settings.typingDelayEnabled,
-                                            typingDelayMsPerChar = settings.typingDelayMsPerChar,
-                                            isLastAiMessage = isLastAi,
-                                            onRegenerate = if (!inMultiSelect && isLastAi && !isGenerating) {
-                                                { viewModel.regenerate() }
-                                            } else null,
-                                            onContinue = if (!inMultiSelect && isLastAi && !isGenerating) {
-                                                { viewModel.continueGeneration() }
-                                            } else null,
-                                            onWithdraw = if (!inMultiSelect && message.role == Role.USER && !isGenerating) {
-                                                {
-                                                    viewModel.withdrawMessage(message.id)
-                                                    withdrawTargetId = null
-                                                }
-                                            } else null,
-                                            isWithdrawing = withdrawTargetId == message.id,
-                                            onBubbleClick = if (!inMultiSelect && message.role == Role.USER && !isGenerating) {
-                                                {
-                                                    withdrawTargetId =
-                                                        if (withdrawTargetId == message.id) null else message.id
-                                                }
-                                            } else null,
-                                            onLongClick = if (!inMultiSelect && !isGenerating) {
-                                                { enterMultiSelect(message.id) }
-                                            } else null,
-                                            onRewriteTrigger = if (!inMultiSelect && isLastAi && !isGenerating) {
-                                                {
-                                                    rewriteTargetId =
-                                                        if (rewriteTargetId == message.id) null else message.id
-                                                }
-                                            } else null,
-                                            onRewrite = if (!inMultiSelect && isLastAi && !isGenerating && rewriteTargetId == message.id) {
-                                                {
-                                                    rewritingMessageId = message.id
-                                                    rewriteTargetId = null
-                                                }
-                                            } else null,
-                                            isRewriting = rewriteTargetId == message.id,
-                                            multiSelectMode = inMultiSelect,
-                                            isSelected = selectedMessageIds.contains(message.id),
-                                            onSelectToggle = if (inMultiSelect) {
-                                                { toggleSelection(message.id) }
-                                            } else null
-                                        )
+                                        key(message.id) {
+                                            MessageBubbleItem(
+                                                message = message,
+                                                isLastAi = message.role == Role.ASSISTANT &&
+                                                    messages.lastOrNull { !it.isNotice }?.id == message.id,
+                                                inMultiSelect = multiSelectMode,
+                                                isGenerating = isGenerating,
+                                                userAvatarUri = settings.userAvatarUri,
+                                                aiAvatarUri = conversation?.persona?.aiAvatarUri,
+                                                bracketGrayEnabled = settings.bracketGrayEnabled,
+                                                typingDelayEnabled = settings.typingDelayEnabled,
+                                                typingDelayMsPerChar = settings.typingDelayMsPerChar,
+                                                isSelected = selectedMessageIds.contains(message.id),
+                                                isWithdrawing = withdrawTargetId == message.id,
+                                                isRewriting = rewriteTargetId == message.id,
+                                                viewModel = viewModel,
+                                                onEnterMultiSelect = ::enterMultiSelect,
+                                                onToggleSelection = ::toggleSelection,
+                                                onWithdrawTargetChange = { withdrawTargetId = it },
+                                                onRewriteTargetChange = { rewriteTargetId = it },
+                                                onStartRewrite = { rewritingMessageId = it; rewriteTargetId = null }
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -586,24 +584,24 @@ private fun EmptyChatState(
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center
     ) {
-        Surface(
+        // Box+background+clip 替代 Surface：避免 CompositionLocalProvider 与 elevation 处理开销
+        Box(
             modifier = Modifier
                 .clip(RoundedCornerShape(24.dp))
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
                     onClick = onLetAiStart
-                ),
-            shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerLow,
-            tonalElevation = 1.dp
+                )
+                .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                .padding(horizontal = 28.dp, vertical = 14.dp),
+            contentAlignment = Alignment.Center
         ) {
             Text(
                 text = if (isGenerating) "$aiName 正在说话..." else "让 $aiName 先发消息",
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurface,
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier.padding(horizontal = 28.dp, vertical = 14.dp)
+                fontWeight = FontWeight.Medium
             )
         }
     }
@@ -642,18 +640,16 @@ private fun ThinkingBubble(aiAvatarUri: String?) {
             }
         }
         Spacer(modifier = Modifier.size(8.dp))
-        Surface(
-            modifier = Modifier.widthIn(max = 360.dp),
-            shape = RoundedCornerShape(18.dp, 18.dp, 18.dp, 4.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant,
-            tonalElevation = 0.dp
+        // Box+background+clip 替代 Surface：去除 CompositionLocalProvider 开销
+        Box(
+            modifier = Modifier
+                .widthIn(max = 360.dp)
+                .clip(RoundedCornerShape(18.dp, 18.dp, 18.dp, 4.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .padding(horizontal = 18.dp, vertical = 14.dp),
+            contentAlignment = Alignment.CenterStart
         ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                TypingIndicator()
-            }
+            TypingIndicator()
         }
     }
 }
@@ -764,4 +760,104 @@ private fun MultiSelectTopBar(
             )
         }
     }
+}
+
+/**
+ * 单条消息气泡的包装层。
+ *
+ * 性能关键：把 ChatScreen 内的 lambda 计算下沉到这里 + 用 `remember` 缓存。
+ * 与父级 `key(message.id)` 配合，确保 ChatScreen 重组时（流式 token 触发 messages 变化）：
+ * - 不同 message.id 的气泡完全跳过（key 阻断）
+ * - 同 message.id 的气泡：其 lambdas 因 remember 引用稳定，MessageBubble 可跳过重组
+ *
+ * 关键技巧：lambda 的 remember key 全部为稳定来源（viewModel / message.id / 状态枚举），
+ * lambda body 内部直接调用 viewModel.xxx() 或用父级函数引用 (::fun) 避免捕获新 lambda 实例。
+ */
+@Composable
+private fun MessageBubbleItem(
+    message: Message,
+    isLastAi: Boolean,
+    inMultiSelect: Boolean,
+    isGenerating: Boolean,
+    userAvatarUri: String?,
+    aiAvatarUri: String?,
+    bracketGrayEnabled: Boolean,
+    typingDelayEnabled: Boolean,
+    typingDelayMsPerChar: Int,
+    isSelected: Boolean,
+    isWithdrawing: Boolean,
+    isRewriting: Boolean,
+    viewModel: ChatViewModel,
+    onEnterMultiSelect: (String) -> Unit,
+    onToggleSelection: (String) -> Unit,
+    onWithdrawTargetChange: (String?) -> Unit,
+    onRewriteTargetChange: (String?) -> Unit,
+    onStartRewrite: (String) -> Unit
+) {
+    val mid = message.id
+    val isUserMsg = message.role == Role.USER
+
+    // ===== 缓存 viewModel 直接回调（稳定来源：viewModel）=====
+    val regen = remember(viewModel) { { viewModel.regenerate() } }
+    val cont = remember(viewModel) { { viewModel.continueGeneration() } }
+    val withdraw = remember(viewModel, mid) {
+        {
+            viewModel.withdrawMessage(mid)
+            onWithdrawTargetChange(null)
+        }
+    }
+
+    // ===== 缓存依赖状态的回调（key 用稳定的状态枚举）=====
+    // lambda body 用 { ... } 包裹成 () -> Unit 表达式，避免 Kotlin 把单语句函数调用当成 Unit 返回值
+    // （推断出 Unit 而非 () -> Unit，类型不匹配）。
+    val onRegenFinal: (() -> Unit)? = if (!inMultiSelect && isLastAi && !isGenerating) {
+        remember<() -> Unit>(inMultiSelect, isLastAi, isGenerating, regen) { { regen() } }
+    } else null
+    val onContFinal: (() -> Unit)? = if (!inMultiSelect && isLastAi && !isGenerating) {
+        remember<() -> Unit>(inMultiSelect, isLastAi, isGenerating, cont) { { cont() } }
+    } else null
+    val onWithdrawFinal: (() -> Unit)? = if (!inMultiSelect && isUserMsg && !isGenerating) {
+        remember<() -> Unit>(inMultiSelect, isUserMsg, isGenerating, withdraw) { { withdraw() } }
+    } else null
+    val onBubbleClickFinal: (() -> Unit)? = if (!inMultiSelect && isUserMsg && !isGenerating) {
+        remember<() -> Unit>(inMultiSelect, isUserMsg, isGenerating, isWithdrawing) {
+            { onWithdrawTargetChange(if (isWithdrawing) null else mid) }
+        }
+    } else null
+    val onLongClickFinal: (() -> Unit)? = if (!inMultiSelect && !isGenerating) {
+        remember<() -> Unit>(inMultiSelect, isGenerating) { { onEnterMultiSelect(mid) } }
+    } else null
+    val onRewriteTriggerFinal: (() -> Unit)? = if (!inMultiSelect && isLastAi && !isGenerating) {
+        remember<() -> Unit>(inMultiSelect, isLastAi, isGenerating, isRewriting) {
+            { onRewriteTargetChange(if (isRewriting) null else mid) }
+        }
+    } else null
+    val onRewriteFinal: (() -> Unit)? = if (!inMultiSelect && isLastAi && !isGenerating && isRewriting) {
+        remember<() -> Unit>(inMultiSelect, isLastAi, isGenerating, isRewriting) { { onStartRewrite(mid) } }
+    } else null
+    val onSelectFinal: (() -> Unit)? = if (inMultiSelect) {
+        remember<() -> Unit>(inMultiSelect) { { onToggleSelection(mid) } }
+    } else null
+
+    MessageBubble(
+        message = message,
+        userAvatarUri = userAvatarUri,
+        aiAvatarUri = aiAvatarUri,
+        bracketGrayEnabled = bracketGrayEnabled,
+        typingDelayEnabled = typingDelayEnabled,
+        typingDelayMsPerChar = typingDelayMsPerChar,
+        isLastAiMessage = isLastAi,
+        onRegenerate = onRegenFinal,
+        onContinue = onContFinal,
+        onWithdraw = onWithdrawFinal,
+        isWithdrawing = isWithdrawing,
+        onBubbleClick = onBubbleClickFinal,
+        onLongClick = onLongClickFinal,
+        onRewriteTrigger = onRewriteTriggerFinal,
+        onRewrite = onRewriteFinal,
+        isRewriting = isRewriting,
+        multiSelectMode = inMultiSelect,
+        isSelected = isSelected,
+        onSelectToggle = onSelectFinal
+    )
 }

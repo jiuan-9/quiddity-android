@@ -7,9 +7,6 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
-import androidx.annotation.DrawableRes
-import androidx.annotation.RawRes
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -36,27 +33,60 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.painter.BitmapPainter
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.quiddity.app.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.FileOutputStream
 
+/*
+ * ============================================================================
+ * 开发规范 (Development Specifications)
+ * ============================================================================
+ *
+ * 1. 问题修复规范
+ *    所有代码问题修复必须采用系统性解决方案，严禁使用临时性补丁或 hack 手段。
+ *    修复内容需完全融入现有代码架构，确保代码逻辑的连贯性、可维护性和可扩展性。
+ *
+ * 2. 代码注释规范
+ *    文件内仅允许保留两类注释：
+ *    - 当前规则说明注释（即本注释块）
+ *    - 模块划分注释（用于标识代码功能模块边界）
+ *    除此之外，禁止出现任何形式的代码注释（包括但不限于单行注释、多行注释、临时调试注释等）。
+ *
+ * 3. 构建交付要求
+ *    在完成所有开发任务并通过单元测试和集成测试后，必须将项目打包为标准 APK 文件。
+ *    APK 文件需满足以下条件：
+ *    - 签名有效且符合发布标准
+ *    - 包含完整的功能模块
+ *    - 经过基础性能测试和兼容性测试
+ *    以便在真实设备环境中进行功能验证和性能评估。
+ *
+ * ============================================================================
+ */
+
+
+
 /**
- * 打赏作者页（含支付宝、微信二维码，长按保存到相册 Pictures/Quiddity/）。
+ * 打赏作者页（含支付宝、微信二维码）。
+ *
+ * - 长按二维码图片保存到相册：唯一保存入口，界面更纯净
+ * - 底部文案明确提示「长按保存」，避免用户找不到保存方式
+ * - AsyncImage + Coil：异步加载 + 内存缓存，避免主线程 Bitmap 解码
  */
 @Composable
 fun DonateScreen(onBack: () -> Unit) {
@@ -72,7 +102,6 @@ fun DonateScreen(onBack: () -> Unit) {
         color = MaterialTheme.colorScheme.background
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            // 顶部栏
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -116,7 +145,7 @@ fun DonateScreen(onBack: () -> Unit) {
                     .windowInsetsPadding(WindowInsets.navigationBars)
                     .padding(horizontal = 24.dp, vertical = 16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(24.dp)
+                verticalArrangement = Arrangement.spacedBy(20.dp)
             ) {
                 Text(
                     text = "如果觉得 Quiddity 好用，可以请作者喝杯咖啡 ☕",
@@ -139,7 +168,7 @@ fun DonateScreen(onBack: () -> Unit) {
                 )
 
                 Text(
-                    text = "长按二维码可保存到相册",
+                    text = "长按保存",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                 )
@@ -151,25 +180,34 @@ fun DonateScreen(onBack: () -> Unit) {
 @Composable
 private fun QrCodeCard(
     context: Context,
-    @RawRes rawResId: Int,
+    rawResId: Int,
     title: String,
     scope: kotlinx.coroutines.CoroutineScope
 ) {
-    val bitmap = remember(rawResId) {
-        runCatching {
-            context.resources.openRawResource(rawResId).use {
-                android.graphics.BitmapFactory.decodeStream(it)
-            }
-        }.getOrNull()
-    }
+    var saving by remember { mutableStateOf(false) }
+    val fileName = "Quiddity_$title.jpg"
 
-    // 在设置页反复打开/关闭时会累积内存（虽然单张不大但会反复分配）。
-    DisposableEffect(bitmap) {
-        onDispose {
-            val bmp = bitmap
-            if (bmp != null && !bmp.isRecycled) {
-                bmp.recycle()
+    fun save() {
+        if (saving) return
+        saving = true
+        scope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val bitmap = context.resources.openRawResource(rawResId).use {
+                        android.graphics.BitmapFactory.decodeStream(it)
+                    } ?: throw IllegalStateException("无法读取二维码资源")
+                    try {
+                        saveBitmapToPictures(context, bitmap, fileName)
+                    } finally {
+                        if (!bitmap.isRecycled) bitmap.recycle()
+                    }
+                }
+            }.onSuccess {
+                Toast.makeText(context, "已保存到相册", Toast.LENGTH_SHORT).show()
+            }.onFailure {
+                Toast.makeText(context, "保存失败：${it.message}", Toast.LENGTH_SHORT).show()
             }
+            saving = false
         }
     }
 
@@ -192,44 +230,27 @@ private fun QrCodeCard(
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface
             )
-            if (bitmap != null) {
-                Image(
-                    painter = BitmapPainter(bitmap.asImageBitmap()),
+            Box(
+                modifier = Modifier
+                    .size(220.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+                    .combinedClickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = {},
+                        onLongClick = { save() }
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                AsyncImage(
+                    model = ImageRequest.Builder(context)
+                        .data(rawResId)
+                        .crossfade(false)
+                        .build(),
                     contentDescription = "$title 二维码",
-                    modifier = Modifier
-                        .size(220.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .combinedClickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                            onClick = {},
-                            onLongClick = {
-                                scope.launch {
-                                    saveBitmapToPictures(context, bitmap, "Quiddity_$title.jpg")
-                                        .onSuccess {
-                                            Toast.makeText(context, "已保存到相册", Toast.LENGTH_SHORT).show()
-                                        }
-                                        .onFailure {
-                                            Toast.makeText(context, "保存失败：${it.message}", Toast.LENGTH_SHORT).show()
-                                        }
-                                }
-                            }
-                        )
+                    modifier = Modifier.fillMaxSize()
                 )
-            } else {
-                Box(
-                    modifier = Modifier
-                        .size(220.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "二维码缺失",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
             }
         }
     }
