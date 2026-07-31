@@ -1,14 +1,26 @@
 package com.quiddity.app.util
 
+import android.app.DownloadManager
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.database.Cursor
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.io.File
 import java.util.concurrent.TimeUnit
 
 /*
@@ -46,20 +58,16 @@ import java.util.concurrent.TimeUnit
  * - 从网站获取最新版本信息（version.json）
  * - 与当前应用版本比较
  * - 支持"不再提醒当前版本"（持久化到 SharedPreferences）
+ * - 解析 GitHub Releases 页面为 APK 直链（避免用户去网页手动找下载链接）
+ * - 通过系统 DownloadManager 在应用内下载 APK 并触发安装
  *
  * 检测目标：手机端（Android）版本号。
  * version.json 优先读取 `androidVersion` 字段；若不存在则回退到 `version` 字段。
- *
- * 对齐 PC 端 [d:\Quiddity-Chat\src\renderer\update-check.js] 的实现逻辑：
- * - 相同的 VERSION_CHECK_URL
- * - 语义化版本比较（支持预发布标签）
- * - 关闭后该版本不再提醒
  */
 object UpdateChecker {
 
     /**
      * 网站版本信息 URL。
-     * 与 PC 端 update-check.js 保持一致。
      */
     private const val VERSION_CHECK_URL =
         "https://raw.githubusercontent.com/jiuan-9/quiddity-website/main/public/version.json"
@@ -71,18 +79,20 @@ object UpdateChecker {
 
     /**
      * GitHub Releases 兜底 URL。
-     * 当前规则：website 域名尚未配置 Pages 时，downloadUrl 退到此 URL，
-     * 确保用户始终能跳转到可用的下载页（GitHub Releases 直接展示最新 APK）。
      */
     private const val GITHUB_RELEASES_URL =
         "https://github.com/jiuan-9/quiddity-website/releases/latest"
 
     /**
      * SharedPreferences 存储键：已忽略的版本号。
-     * 用户点击"本次不再提醒"后，该版本号被存储；后续检测到相同版本不再弹窗。
      */
     private const val PREFS_NAME = "update_check_prefs"
     private const val KEY_DISMISSED_VERSION = "dismissed_version"
+
+    /**
+     * APK 下载子目录（应用 cache 内），用于 FileProvider 暴露给系统安装器。
+     */
+    private const val APK_DOWNLOAD_SUBDIR = "apk_update"
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -96,11 +106,6 @@ object UpdateChecker {
             .build()
     }
 
-    /**
-     * 网站版本信息结构。
-     *
-     * `androidVersion` 字段为手机端专用版本号（若网站未提供则回退到 `version`）。
-     */
     @Serializable
     data class RemoteVersionInfo(
         val version: String = "",
@@ -109,18 +114,11 @@ object UpdateChecker {
         val downloadUrl: String = "",
         val releaseNotes: String = ""
     ) {
-        /**
-         * 手机端有效版本号：优先 androidVersion，回退到 version。
-         */
         val effectiveAndroidVersion: String
             get() = androidVersion?.takeIf { it.isNotBlank() } ?: version
     }
 
-    /**
-     * 版本检测结果。
-     */
     sealed class Result {
-        /** 有新版本可用。 */
         data class UpdateAvailable(
             val currentVersion: String,
             val remoteVersion: String,
@@ -129,16 +127,39 @@ object UpdateChecker {
             val releaseDate: String
         ) : Result()
 
-        /** 已是最新版。 */
         data class UpToDate(val currentVersion: String) : Result()
 
-        /** 检测失败（网络错误等）。 */
         data class Error(val message: String) : Result()
     }
 
     /**
-     * 获取当前应用版本名。
+     * 下载状态。
      */
+    enum class DownloadStatus {
+        PENDING,
+        RUNNING,
+        PAUSED,
+        SUCCESSFUL,
+        FAILED,
+        CANCELED
+    }
+
+    /**
+     * 下载进度。
+     */
+    data class DownloadProgress(
+        val downloadId: Long,
+        val status: DownloadStatus,
+        val bytesDownloaded: Long,
+        val totalBytes: Long,
+        val localUri: String?,
+        val reason: String
+    ) {
+        /** 进度百分比（0-100）。无 totalBytes 时返回 0。 */
+        val percent: Int
+            get() = if (totalBytes > 0) ((bytesDownloaded * 100L) / totalBytes).toInt() else 0
+    }
+
     fun getCurrentVersion(context: Context): String {
         return try {
             val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
@@ -148,17 +169,10 @@ object UpdateChecker {
         }
     }
 
-    /**
-     * 检查更新（网络请求）。
-     *
-     * @param context 用于读取当前版本号
-     * @param forceCheck true=强制检查（忽略"已忽略版本"）；false=自动检查时如果已忽略则跳过
-     */
     suspend fun checkForUpdates(context: Context, forceCheck: Boolean = false): Result = withContext(Dispatchers.IO) {
         try {
             val currentVersion = getCurrentVersion(context)
 
-            // 构建请求（加时间戳防缓存）
             val url = "$VERSION_CHECK_URL?t=${System.currentTimeMillis()}"
             val request = Request.Builder().url(url).get().build()
 
@@ -177,16 +191,12 @@ object UpdateChecker {
                 return@withContext Result.Error("版本信息格式错误")
             }
 
-            // 比较版本号
             val cmp = compareVersions(remoteVersion, currentVersion)
 
             if (cmp > 0) {
-                // 远程版本 > 当前版本 → 有更新
-                // 检查是否已被用户忽略
                 if (!forceCheck) {
                     val dismissed = getDismissedVersion(context)
                     if (dismissed != null && compareVersions(dismissed, remoteVersion) >= 0) {
-                        // 用户已忽略此版本或更高版本，不弹窗
                         return@withContext Result.UpToDate(currentVersion)
                     }
                 }
@@ -205,28 +215,21 @@ object UpdateChecker {
         }
     }
 
-    /**
-     * 记录用户忽略了某个版本（"本次不再提醒"）。
-     */
     fun dismissVersion(context: Context, version: String) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit().putString(KEY_DISMISSED_VERSION, version).apply()
     }
 
-    /**
-     * 读取已忽略的版本号。
-     */
     fun getDismissedVersion(context: Context): String? {
         return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .getString(KEY_DISMISSED_VERSION, null)
     }
 
     /**
-     * 打开浏览器跳转下载页面。
+     * 打开浏览器跳转下载页面（兜底入口）。
      *
-     * 当前规则：当 downloadUrl 是首页或空字符串时，自动回退到 GitHub Releases
-     * 兜底 URL，避免用户跳转到尚未配置 GitHub Pages 的网站首页（404）。
-     * 其他异常（如无浏览器）静默失败。
+     * 当 downloadUrl 是首页或空字符串时，自动回退到 GitHub Releases URL。
+     * 当 APK 下载链路整体失败时（如网络/解析异常）也走这里作为最终兜底。
      */
     fun openDownloadPage(context: Context, url: String) {
         try {
@@ -245,12 +248,311 @@ object UpdateChecker {
     }
 
     /**
-     * 语义化版本比较（对齐 PC 端 update-check.js 的 compareVersions）。
+     * 解析最终 APK 直链。
      *
-     * 支持格式：1.2.0、1.2.0-beta、1.2.0-rc.1
+     * 规则：
+     * 1. URL 为空 / 官网首页 → 返回 null（调用方走 openDownloadPage 兜底）
+     * 2. URL 已以 .apk 结尾 → 原样返回
+     * 3. URL 指向 GitHub Releases 页面（HTML）→ 调用 GitHub Releases API 解析出
+     *    最新 Release 中第一个 .apk 资产的 browser_download_url
+     * 4. 其他 URL → 原样返回（不保证是 APK 链接；调用方视情况使用或兜底）
      *
-     * @return 正数=a>b，负数=a<b，0=相等
+     * @return APK 直链；解析失败返回 null
      */
+    suspend fun resolveApkUrl(rawUrl: String): String? = withContext(Dispatchers.IO) {
+        val url = rawUrl.trim()
+        if (url.isBlank() || url.equals(WEBSITE_URL, ignoreCase = true)) return@withContext null
+
+        if (url.endsWith(".apk", ignoreCase = true)) return@withContext url
+
+        if (!isGitHubReleasesUrl(url)) return@withContext url
+
+        val (owner, repo) = parseGitHubOwnerRepo(url) ?: return@withContext null
+        fetchLatestApkFromGitHub(owner, repo)
+    }
+
+    /**
+     * 是否指向 GitHub Releases 页面。
+     * 匹配：https://github.com/{owner}/{repo}/releases[/latest][/tag/xxx]
+     */
+    private fun isGitHubReleasesUrl(url: String): Boolean {
+        val regex = Regex("^https?://github\\.com/[^/]+/[^/]+/releases(/.*)?$", RegexOption.IGNORE_CASE)
+        return regex.matches(url)
+    }
+
+    /**
+     * 从 GitHub Releases URL 中解析 owner / repo。
+     * 例：https://github.com/jiuan-9/quiddity-website/releases/latest → ("jiuan-9", "quiddity-website")
+     */
+    private fun parseGitHubOwnerRepo(url: String): Pair<String, String>? {
+        val regex = Regex("^https?://github\\.com/([^/]+)/([^/]+)/releases(/.*)?$", RegexOption.IGNORE_CASE)
+        val match = regex.matchEntire(url) ?: return null
+        val owner = match.groupValues[1]
+        val repo = match.groupValues[2]
+        if (owner.isBlank() || repo.isBlank()) return null
+        return owner to repo
+    }
+
+    /**
+     * 通过 GitHub Releases API 拉取最新 Release 的第一个 .apk 资产直链。
+     */
+    @Serializable
+    private data class GitHubAsset(
+        val name: String = "",
+        val browser_download_url: String = "",
+        val content_type: String = ""
+    )
+
+    @Serializable
+    private data class GitHubRelease(
+        val tag_name: String = "",
+        val assets: List<GitHubAsset> = emptyList()
+    )
+
+    private fun fetchLatestApkFromGitHub(owner: String, repo: String): String? {
+        return try {
+            val apiUrl = "https://api.github.com/repos/$owner/$repo/releases/latest"
+            val request = Request.Builder()
+                .url(apiUrl)
+                .header("Accept", "application/vnd.github+json")
+                .get()
+                .build()
+            val response = httpClient.newCall(request).execute()
+            if (!response.isSuccessful) return null
+            val body = response.body?.string() ?: return null
+            val release = json.decodeFromString(GitHubRelease.serializer(), body)
+            release.assets.firstOrNull { asset ->
+                asset.name.endsWith(".apk", ignoreCase = true) ||
+                    asset.content_type == "application/vnd.android.package-archive"
+            }?.browser_download_url?.takeIf { it.isNotBlank() }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * 启动系统 DownloadManager 下载 APK。
+     *
+     * 文件落地：context.cacheDir/apk_update/<filename>
+     * 该路径在 file_paths.xml 中已通过 cache-path 暴露给 FileProvider。
+     *
+     * @return DownloadManager 分配的 downloadId；参数异常返回 -1
+     */
+    fun downloadApk(
+        context: Context,
+        apkUrl: String,
+        fileName: String,
+        title: String,
+        description: String
+    ): Long {
+        return try {
+            val request = DownloadManager.Request(Uri.parse(apkUrl))
+                .setTitle(title)
+                .setDescription(description)
+                .setMimeType("application/vnd.android.package-archive")
+                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                .setAllowedOverMetered(true)
+                .setAllowedOverRoaming(true)
+                .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, fileName)
+            val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            dm.enqueue(request)
+        } catch (e: Exception) {
+            -1L
+        }
+    }
+
+    /**
+     * 查询当前下载状态。
+     */
+    fun queryDownload(context: Context, downloadId: Long): DownloadProgress? {
+        if (downloadId <= 0) return null
+        val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+        val query = DownloadManager.Query().setFilterById(downloadId)
+        return try {
+            dm.query(query).use { cursor ->
+                if (cursor == null || !cursor.moveToFirst()) return null
+                readProgress(cursor, downloadId)
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * 监听下载进度的 Flow。
+     *
+     * 实现：注册 DownloadManager.ACTION_DOWNLOAD_COMPLETE 广播 + 每 500ms 主动轮询。
+     * 关闭 Flow 时自动注销广播。
+     */
+    fun observeDownload(context: Context, downloadId: Long): Flow<DownloadProgress> = callbackFlow {
+        if (downloadId <= 0) {
+            close()
+            return@callbackFlow
+        }
+        val appContext = context.applicationContext
+        val dm = appContext.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context?, intent: Intent?) {
+                val id = intent?.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L) ?: -1L
+                if (id == downloadId) {
+                    queryDownload(appContext, downloadId)?.let { trySend(it) }
+                }
+            }
+        }
+        val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            appContext.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            appContext.registerReceiver(receiver, filter)
+        }
+
+        val thread = Thread {
+            while (!isClosedForSend) {
+                val p = queryDownload(appContext, downloadId)
+                if (p != null) {
+                    trySend(p)
+                    if (p.status == DownloadStatus.SUCCESSFUL ||
+                        p.status == DownloadStatus.FAILED ||
+                        p.status == DownloadStatus.CANCELED
+                    ) {
+                        break
+                    }
+                }
+                try {
+                    Thread.sleep(500)
+                } catch (e: InterruptedException) {
+                    break
+                }
+            }
+        }.also { it.isDaemon = true; it.start() }
+
+        queryDownload(appContext, downloadId)?.let { trySend(it) }
+
+        awaitClose {
+            try {
+                appContext.unregisterReceiver(receiver)
+            } catch (_: Exception) {
+                // 已注销
+            }
+        }
+    }.flowOn(Dispatchers.IO)
+
+    /**
+     * 触发 APK 安装。
+     *
+     * 优先通过 FileProvider 暴露 content:// URI（Android 7.0+ 强制要求）；
+     * 失败时回退到 file:// URI（仅 Android < 7.0 或 FileProvider 未配置时）。
+     *
+     * @return true=已成功发起安装 Intent；false=失败（无 APK / 无法解析文件）
+     */
+    fun installApk(context: Context, downloadId: Long): Boolean {
+        val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+        val apkUri: Uri = try {
+            // 优先尝试 DownloadManager.getUriForDownloadedFile（Android 8.0+）
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                val uri = dm.getUriForDownloadedFile(downloadId)
+                if (uri != null && uri.toString().isNotBlank()) uri
+                else getApkUriFromLocalPath(context, downloadId) ?: return false
+            } else {
+                getApkUriFromLocalPath(context, downloadId) ?: return false
+            }
+        } catch (e: Exception) {
+            getApkUriFromLocalPath(context, downloadId) ?: return false
+        }
+
+        val grantUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            try {
+                context.grantUriPermission(
+                    context.packageName,
+                    apkUri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+                true
+            } catch (e: Exception) {
+                false
+            }
+        } else true
+
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(apkUri, "application/vnd.android.package-archive")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        return try {
+            context.startActivity(intent)
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /**
+     * 取消下载。
+     */
+    fun cancelDownload(context: Context, downloadId: Long) {
+        if (downloadId <= 0) return
+        try {
+            val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            dm.remove(downloadId)
+        } catch (_: Exception) {
+            // 静默失败
+        }
+    }
+
+    private fun getApkUriFromLocalPath(context: Context, downloadId: Long): Uri? {
+        val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+        val column = DownloadManager.COLUMN_LOCAL_FILENAME
+        return try {
+            dm.query(DownloadManager.Query().setFilterById(downloadId)).use { cursor ->
+                if (cursor == null || !cursor.moveToFirst()) return null
+                val idx = cursor.getColumnIndex(column)
+                if (idx < 0) return null
+                val path = cursor.getString(idx) ?: return null
+                val file = File(path)
+                if (!file.exists()) return null
+                FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.fileprovider",
+                    file
+                )
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun readProgress(cursor: Cursor, downloadId: Long): DownloadProgress {
+        val statusIdx = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
+        val bytesIdx = cursor.getColumnIndex(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
+        val totalIdx = cursor.getColumnIndex(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
+        val localUriIdx = cursor.getColumnIndex(DownloadManager.COLUMN_LOCAL_URI)
+        val reasonIdx = cursor.getColumnIndex(DownloadManager.COLUMN_REASON)
+
+        val statusCode = if (statusIdx >= 0) cursor.getInt(statusIdx) else DownloadManager.STATUS_FAILED
+        val status = when (statusCode) {
+            DownloadManager.STATUS_PENDING -> DownloadStatus.PENDING
+            DownloadManager.STATUS_RUNNING -> DownloadStatus.RUNNING
+            DownloadManager.STATUS_PAUSED -> DownloadStatus.PAUSED
+            DownloadManager.STATUS_SUCCESSFUL -> DownloadStatus.SUCCESSFUL
+            DownloadManager.STATUS_FAILED -> DownloadStatus.FAILED
+            else -> DownloadStatus.FAILED
+        }
+        val bytes = if (bytesIdx >= 0) cursor.getLong(bytesIdx) else 0L
+        val total = if (totalIdx >= 0) cursor.getLong(totalIdx) else -1L
+        val localUri = if (localUriIdx >= 0) cursor.getString(localUriIdx) else null
+        val reason = if (reasonIdx >= 0) cursor.getString(reasonIdx) ?: "" else ""
+        return DownloadProgress(
+            downloadId = downloadId,
+            status = status,
+            bytesDownloaded = bytes,
+            totalBytes = if (total >= 0) total else 0L,
+            localUri = localUri,
+            reason = reason
+        )
+    }
+
     fun compareVersions(a: String, b: String): Int {
         fun parse(v: String): Pair<List<Int>, String> {
             val parts = v.split("-", limit = 2)
@@ -264,19 +566,16 @@ object UpdateChecker {
         val (numsA, preA) = parse(a)
         val (numsB, preB) = parse(b)
 
-        // 比较数字部分
         for (i in 0 until maxOf(numsA.size, numsB.size)) {
             val na = numsA.getOrElse(i) { 0 }
             val nb = numsB.getOrElse(i) { 0 }
             if (na != nb) return na - nb
         }
 
-        // 数字部分相同，比较预发布标签
-        // 有预发布标签的版本 < 无标签的正式版
         return when {
             preA.isEmpty() && preB.isEmpty() -> 0
-            preA.isEmpty() -> 1  // a 是正式版，b 是预发布 → a > b
-            preB.isEmpty() -> -1 // b 是正式版，a 是预发布 → a < b
+            preA.isEmpty() -> 1
+            preB.isEmpty() -> -1
             else -> preA.compareTo(preB)
         }
     }

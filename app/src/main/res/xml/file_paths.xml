@@ -37,4 +37,5 @@
     <files-path name="avatars" path="avatars/" />
     <files-path name="list_wallpapers" path="list_wallpapers/" />
     <external-files-path name="external_files" path="." />
+    <external-files-path name="downloads" path="Download/" />
 </paths>

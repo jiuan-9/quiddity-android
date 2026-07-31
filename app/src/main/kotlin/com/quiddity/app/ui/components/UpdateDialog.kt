@@ -1,10 +1,11 @@
 package com.quiddity.app.ui.components
 
+import android.content.Context
+import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -27,11 +28,13 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -42,8 +45,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.quiddity.app.ui.theme.Motion
 import com.quiddity.app.util.UpdateChecker
 import kotlinx.coroutines.launch
@@ -61,7 +67,7 @@ import kotlinx.coroutines.launch
  *    文件内仅允许保留两类注释：
  *    - 当前规则说明注释（即本注释块）
  *    - 模块划分注释（用于标识代码功能模块边界）
- *    除此之外，禁止出现任何形式的代码注释（包括但不限于单行注释、多行注释、临时调试注释等）。
+ *    除此之外，禁止出现任何形式的代码注释（包括但不限于单行注释、多行调试注释等）。
  *
  * 3. 构建交付要求
  *    在完成所有开发任务并通过单元测试和集成测试后，必须将项目打包为标准 APK 文件。
@@ -81,19 +87,39 @@ import kotlinx.coroutines.launch
  *
  * 功能：
  * - 显示新版本号、发布日期、更新说明
- * - "前往下载"按钮：打开浏览器跳转下载页
+ * - "立即下载"按钮：解析 APK 直链 → 系统 DownloadManager 下载 → 进度展示 → 自动触发安装
+ * - "浏览器下载"兜底：解析失败时退化为浏览器跳转
  * - "本次不再提醒"按钮：记录当前远程版本到 SharedPreferences，后续不再弹窗
- * - "稍后"按钮：仅关闭弹窗，下次启动仍会检测
+ * - 下载中可"取消"
  *
  * @param result 检测结果（仅 UpdateAvailable 时显示弹窗）
  * @param onDismiss 关闭回调
+ * @param onOpenBrowser 浏览器兜底回调（默认走 [UpdateChecker.openDownloadPage]）
  */
 @Composable
 fun UpdateDialog(
     result: UpdateChecker.Result.UpdateAvailable,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onOpenBrowser: (Context, String) -> Unit = { ctx, url -> UpdateChecker.openDownloadPage(ctx, url) }
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    var phase by remember { mutableStateOf<DownloadPhase>(DownloadPhase.Idle) }
+    var currentDownloadId by remember { mutableStateOf(0L) }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_DESTROY) {
+                if (currentDownloadId > 0) {
+                    UpdateChecker.cancelDownload(context, currentDownloadId)
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     Box(
         modifier = Modifier
@@ -102,7 +128,11 @@ fun UpdateDialog(
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
-                onClick = onDismiss
+                onClick = {
+                    if (phase !is DownloadPhase.Downloading && phase !is DownloadPhase.Resolving) {
+                        onDismiss()
+                    }
+                }
             ),
         contentAlignment = Alignment.Center
     ) {
@@ -113,7 +143,7 @@ fun UpdateDialog(
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
-                    onClick = {} // 阻止点击穿透
+                    onClick = {}
                 ),
             shape = RoundedCornerShape(20.dp),
             color = MaterialTheme.colorScheme.surface,
@@ -124,7 +154,6 @@ fun UpdateDialog(
                 modifier = Modifier.padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // 顶部图标
                 Box(
                     modifier = Modifier
                         .size(56.dp)
@@ -151,7 +180,6 @@ fun UpdateDialog(
 
                 Spacer(modifier = Modifier.size(8.dp))
 
-                // 版本号对比
                 Text(
                     text = "v${result.currentVersion} → v${result.remoteVersion}",
                     style = MaterialTheme.typography.bodyMedium,
@@ -168,7 +196,6 @@ fun UpdateDialog(
                     )
                 }
 
-                // 更新说明
                 if (result.releaseNotes.isNotBlank()) {
                     Spacer(modifier = Modifier.size(12.dp))
                     Surface(
@@ -188,32 +215,178 @@ fun UpdateDialog(
                     }
                 }
 
+                val showProgress = phase is DownloadPhase.Downloading || phase is DownloadPhase.Resolving
+                AnimatedVisibility(
+                    visible = showProgress,
+                    enter = fadeIn(tween(Motion.DurationShort)),
+                    exit = fadeOut(tween(Motion.DurationShort))
+                ) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Spacer(modifier = Modifier.size(12.dp))
+                        when (val p = phase) {
+                            is DownloadPhase.Resolving -> {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(14.dp),
+                                        strokeWidth = 2.dp
+                                    )
+                                    Text(
+                                        text = "正在解析下载链接…",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            is DownloadPhase.Downloading -> {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = "下载中",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        text = "${p.percent}%",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                                Spacer(modifier = Modifier.size(4.dp))
+                                LinearProgressIndicator(
+                                    progress = { p.fraction },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(6.dp)
+                                        .clip(RoundedCornerShape(3.dp))
+                                )
+                            }
+                            else -> Unit
+                        }
+                    }
+                }
+
                 Spacer(modifier = Modifier.size(20.dp))
 
-                // 按钮区
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    // "本次不再提醒"
-                    TextButton(
-                        onClick = {
-                            UpdateChecker.dismissVersion(context, result.remoteVersion)
-                            onDismiss()
-                        },
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("本次不再提醒", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    // "前往下载"
-                    TextButton(
-                        onClick = {
-                            UpdateChecker.openDownloadPage(context, result.downloadUrl)
-                            onDismiss()
-                        },
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("前往下载", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                    when (val p = phase) {
+                        is DownloadPhase.Idle, is DownloadPhase.Failed -> {
+                            TextButton(
+                                onClick = {
+                                    UpdateChecker.dismissVersion(context, result.remoteVersion)
+                                    onDismiss()
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text(
+                                    "本次不再提醒",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            TextButton(
+                                onClick = {
+                                    if (p is DownloadPhase.Failed) {
+                                        phase = DownloadPhase.Idle
+                                    }
+                                    startDownload(
+                                        context = context,
+                                        scope = scope,
+                                        result = result,
+                                        onPhase = { phase = it },
+                                        onDownloadId = { currentDownloadId = it },
+                                        onOpenBrowser = onOpenBrowser
+                                    )
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text(
+                                    if (p is DownloadPhase.Failed) "重试" else "立即下载",
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+                        is DownloadPhase.Resolving -> {
+                            TextButton(
+                                onClick = onDismiss,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("关闭", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            TextButton(
+                                onClick = {},
+                                enabled = false,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text(
+                                    "解析中…",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                )
+                            }
+                        }
+                        is DownloadPhase.Downloading -> {
+                            TextButton(
+                                onClick = {
+                                    if (currentDownloadId > 0) {
+                                        UpdateChecker.cancelDownload(context, currentDownloadId)
+                                    }
+                                    currentDownloadId = 0L
+                                    phase = DownloadPhase.Idle
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("取消", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            TextButton(
+                                onClick = {},
+                                enabled = false,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text(
+                                    "${p.percent}%",
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+                        is DownloadPhase.Ready -> {
+                            TextButton(
+                                onClick = onDismiss,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("稍后", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            TextButton(
+                                onClick = {
+                                    val ok = UpdateChecker.installApk(context, p.downloadId)
+                                    if (!ok) {
+                                        Toast.makeText(
+                                            context,
+                                            "无法启动安装器，请重试",
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                    } else {
+                                        onDismiss()
+                                    }
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text(
+                                    "立即安装",
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -221,17 +394,75 @@ fun UpdateDialog(
     }
 }
 
+private fun startDownload(
+    context: Context,
+    scope: kotlinx.coroutines.CoroutineScope,
+    result: UpdateChecker.Result.UpdateAvailable,
+    onPhase: (DownloadPhase) -> Unit,
+    onDownloadId: (Long) -> Unit,
+    onOpenBrowser: (Context, String) -> Unit
+) {
+    scope.launch {
+        onPhase(DownloadPhase.Resolving)
+        val apkUrl = UpdateChecker.resolveApkUrl(result.downloadUrl)
+        if (apkUrl.isNullOrBlank()) {
+            onOpenBrowser(context, result.downloadUrl)
+            onPhase(DownloadPhase.Idle)
+            return@launch
+        }
+        val fileName = "quiddity-${result.remoteVersion}.apk"
+        val downloadId = UpdateChecker.downloadApk(
+            context = context,
+            apkUrl = apkUrl,
+            fileName = fileName,
+            title = "Quiddity v${result.remoteVersion}",
+            description = "正在下载新版本 APK"
+        )
+        if (downloadId <= 0) {
+            Toast.makeText(context, "启动下载失败，请稍后重试", Toast.LENGTH_LONG).show()
+            onPhase(DownloadPhase.Failed("启动下载失败"))
+            return@launch
+        }
+        onDownloadId(downloadId)
+        UpdateChecker.observeDownload(context, downloadId).collect { progress ->
+            when (progress.status) {
+                UpdateChecker.DownloadStatus.SUCCESSFUL -> {
+                    onPhase(DownloadPhase.Ready(downloadId))
+                }
+                UpdateChecker.DownloadStatus.FAILED -> {
+                    onPhase(DownloadPhase.Failed(progress.reason.ifBlank { "下载失败" }))
+                }
+                UpdateChecker.DownloadStatus.CANCELED -> {
+                    onPhase(DownloadPhase.Idle)
+                }
+                else -> {
+                    onPhase(
+                        DownloadPhase.Downloading(
+                            percent = progress.percent,
+                            fraction = if (progress.totalBytes > 0) {
+                                (progress.bytesDownloaded.toFloat() / progress.totalBytes.toFloat())
+                                    .coerceIn(0f, 1f)
+                            } else 0f
+                        )
+                    )
+                }
+            }
+        }
+    }
+}
+
+sealed class DownloadPhase {
+    object Idle : DownloadPhase()
+    object Resolving : DownloadPhase()
+    data class Downloading(val percent: Int, val fraction: Float) : DownloadPhase()
+    data class Ready(val downloadId: Long) : DownloadPhase()
+    data class Failed(val message: String) : DownloadPhase()
+}
+
 /**
  * 版本检测控制器。
  *
  * 封装自动检测 + 手动检测逻辑，暴露给顶层 Composable 使用。
- *
- * 使用方式：
- * ```
- * val updateController = rememberUpdateController()
- * updateController.autoCheck()  // 启动时自动检测
- * updateController.manualCheck() // 用户点击"检查更新"时手动检测
- * ```
  */
 @Composable
 fun rememberUpdateController(): UpdateController {
@@ -240,58 +471,37 @@ fun rememberUpdateController(): UpdateController {
     return remember { UpdateController(context, scope) }
 }
 
-/**
- * 版本检测控制器实例。
- *
- * 持有检测状态（StateFlow），UI 据此渲染弹窗/Toast。
- */
 class UpdateController(
     private val context: android.content.Context,
     private val scope: kotlinx.coroutines.CoroutineScope
 ) {
-    /** 当前检测结果（仅 UpdateAvailable 时显示弹窗）。 */
     var updateResult by mutableStateOf<UpdateChecker.Result.UpdateAvailable?>(null)
         private set
 
-    /** 手动检测时的"检测中"状态。 */
     var isChecking by mutableStateOf(false)
         private set
 
-    /** 手动检测的反馈消息（"已是最新版"/"检测失败"等）。 */
     var toastMessage by mutableStateOf<String?>(null)
         private set
 
-    /** 已消费 toast（UI 显示后调用）。 */
     fun consumeToast() {
         toastMessage = null
     }
 
-    /** 关闭弹窗。 */
     fun dismissDialog() {
         updateResult = null
     }
 
-    /**
-     * 自动检测（启动时调用）。
-     * - 静默模式：检测失败不提示
-     * - 仅在有更新且未被忽略时弹窗
-     */
     fun autoCheck() {
         scope.launch {
-            // 延迟 2 秒，避免影响启动速度
             kotlinx.coroutines.delay(2000)
             val result = UpdateChecker.checkForUpdates(context, forceCheck = false)
             if (result is UpdateChecker.Result.UpdateAvailable) {
                 updateResult = result
             }
-            // 自动检测时不显示"已是最新版"或错误 toast
         }
     }
 
-    /**
-     * 手动检测（用户点击"检查版本"时调用）。
-     * - 强制模式：忽略"已忽略版本"
-     */
     fun manualCheck() {
         scope.launch {
             isChecking = true
