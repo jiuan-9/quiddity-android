@@ -1,0 +1,35 @@
+<resources>
+    <string name="app_name">Quiddity</string>
+    <string name="welcome_title">Quiddity</string>
+    <string name="welcome_subtitle">开始你的旅程</string>
+    <string name="hint_input">输入消息…</string>
+    <string name="action_send">发送</string>
+    <string name="action_new_chat">新建对话</string>
+    <string name="action_settings">设置</string>
+    <string name="action_back">返回</string>
+    <string name="action_close">关闭</string>
+    <string name="action_menu">菜单</string>
+    <string name="empty_state_ai_first">让 AI 先发消息</string>
+    <string name="conversations_title">会话</string>
+    <string name="new_conversation_default">新对话</string>
+    <string name="confirm_delete">确认删除</string>
+    <string name="confirm_clear">确认清空</string>
+    <string name="cancel">取消</string>
+    <string name="confirm">确认</string>
+    <string name="settings_title">设置</string>
+    <string name="settings_dark_mode">切换明暗</string>
+    <string name="settings_api_catalog">模型配置</string>
+    <string name="settings_token">TOKEN 设置</string>
+    <string name="settings_memory">记忆设置</string>
+    <string name="settings_multiline_split">多行文本自动切分</string>
+    <string name="settings_enter_to_send">回车键发送</string>
+    <string name="settings_check_version">检查版本</string>
+    <string name="settings_donate">打赏作者</string>
+    <string name="settings_export_data">数据导出</string>
+    <string name="settings_import_data">数据导入</string>
+    <string name="settings_max_tokens">最大回复 token</string>
+    <string name="settings_single_message_tokens">单条消息 token</string>
+    <string name="settings_context_limit">给 AI 提供多少条对话</string>
+    <string name="version_dev">开发中</string>
+    <string name="coming_soon">功能开发中</string>
+</resources>

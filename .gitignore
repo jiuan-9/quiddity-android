@@ -1,0 +1,54 @@
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+/app/build
+keystore/
+*.jks
+*.keystore
+
+# 签名配置（含密码，禁止提交）
+keystore.properties
+keystore.properties.*
+
+# 不带密码的模板可提交
+!keystore.properties.example
+
+# 调试输出
+*.log
+hs_err_pid*.log
+replay_pid*.log
+build-*.log
+build_*.log
+build_compile*.log
+build_release*.log
+app_build_test_crypto.log
+
+# Python 工具脚本（仅本地使用，不入仓）
+clean_comments.py
+add-rules.ps1
+verify-apk.bat
+verify-release.bat
+build-env.bat
+崩溃记录727.txt
+
+# IDE / 编辑器私有配置
+.trae/
+.idea/
+.vscode/
+
+# Gradle 安装包（136MB，应在 https://services.gradle.org/distributions/ 下载）
+gradle-*.zip
+gradle-*-all.zip
+gradle-*-bin.zip
+
+# Gradle / Kotlin 缓存
+.gradle/
+.kotlin/
+.kotlin/

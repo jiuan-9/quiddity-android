@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="cream_bg">#FAF9F6</color>
+    <color name="card_bg">#FFFFFF</color>
+    <color name="text_primary">#1A1A1A</color>
+    <color name="text_secondary">#4D4C48</color>
+    <color name="text_tertiary">#87867F</color>
+    <color name="divider">#F0EEE6</color>
+    <color name="user_bubble_light">#3A3A3A</color>
+    <color name="danger">#B53333</color>
+
+    <color name="dark_bg">#1A1A1A</color>
+    <color name="dark_card_bg">#2A2A2A</color>
+    <color name="dark_text_primary">#FAF9F6</color>
+    <color name="dark_text_secondary">#C8C6BE</color>
+    <color name="dark_divider">#3A3A3A</color>
+    <color name="dark_user_bubble">#4A4A4A</color>
+    <color name="dark_danger">#C84545</color>
+
+    <color name="ic_launcher_background">#FAF9F6</color>
+</resources>

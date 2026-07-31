@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 启动屏图标（简化版 Q） -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="120dp"
+    android:height="120dp"
+    android:viewportWidth="120"
+    android:viewportHeight="120">
+    <path
+        android:fillColor="#1A1A1A"
+        android:pathData="M60,30 m-22,0 a22,22 0 1,0 44,0 a22,22 0 1,0 -44,0 M60,30 m-14,0 a14,14 0 1,1 28,0 a14,14 0 1,1 -28,0 Z" />
+    <path
+        android:fillColor="#1A1A1A"
+        android:pathData="M64,48 L80,48 L80,56 L64,56 Z" />
+    <path
+        android:fillColor="#FAF9F6"
+        android:pathData="M60,30 m-14,0 a14,14 0 1,0 28,0 a14,14 0 1,0 -28,0" />
+    <path
+        android:fillColor="#1A1A1A"
+        android:pathData="M64,48 L80,48 L80,56 L64,56 Z" />
+</vector>

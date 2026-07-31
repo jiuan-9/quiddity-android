@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 暗色模式 splash 背景（与 DarkBg #1A1A1A 一致） -->
+    <color name="cream_bg">#1A1A1A</color>
+    <color name="card_bg">#2A2A2A</color>
+    <color name="text_primary">#FAF9F6</color>
+    <color name="text_secondary">#C8C6BE</color>
+    <color name="text_tertiary">#87867F</color>
+    <color name="divider">#3A3A3A</color>
+    <color name="user_bubble_light">#4A4A4A</color>
+    <color name="danger">#C84545</color>
+
+    <color name="dark_bg">#1A1A1A</color>
+    <color name="dark_card_bg">#2A2A2A</color>
+    <color name="dark_text_primary">#FAF9F6</color>
+    <color name="dark_text_secondary">#C8C6BE</color>
+    <color name="dark_divider">#3A3A3A</color>
+    <color name="dark_user_bubble">#4A4A4A</color>
+    <color name="dark_danger">#C84545</color>
+
+    <color name="ic_launcher_background">#1A1A1A</color>
+</resources>

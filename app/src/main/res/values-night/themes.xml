@@ -1,0 +1,11 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- 暗色模式启动屏主题（与 DarkBg 一致） -->
+    <style name="Theme.Quiddity.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/dark_bg</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_splash_icon</item>
+        <item name="windowSplashScreenIconBackgroundColor">@color/dark_bg</item>
+        <item name="postSplashScreenTheme">@style/Theme.Quiddity.Dark</item>
+    </style>
+
+</resources>
