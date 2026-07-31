@@ -4,14 +4,14 @@
 >
 > 知所不尽，往复不止 — Know no bounds, repeat no end.
 
-[![Release](https://img.shields.io/badge/release-v1.0.0-blue)](#下载)
+[![Release](https://img.shields.io/badge/release-v1.0.1-blue)](#下载)
 [![Android](https://img.shields.io/badge/Android-8.0%2B-green)](#系统要求)
 [![License](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.0.21-purple)](#技术栈)
 
 ## 项目简介
 
-Quiddity Android 是 Quiddity 桌面端（[Quiddity Agent](https://github.com/jiuan-9/quiddity-agent)）的移动版本，移用了桌面端的核心能力并针对 Android 平台做了深度重构与体验优化。
+Quiddity Android 是 Quiddity 移动端的独立产品（与 Quiddity-Chat、Quiddity-Agent 桌面端完全分离，三个产品数据互不互通）。本仓库为 Android 端的独立实现。
 
 ### 核心特性
 
@@ -29,9 +29,9 @@ Quiddity Android 是 Quiddity 桌面端（[Quiddity Agent](https://github.com/ji
 
 ## 下载
 
-前往官网 [https://quiddity-3by.pages.dev/](https://quiddity-3by.pages.dev/) 下载最新版本（v1.0.0，约 2.75 MB）。
+前往官网 [https://quiddity-3by.pages.dev/](https://quiddity-3by.pages.dev/) 下载最新版本（v1.0.1，约 2.75 MB）。
 
-或直接下载：[`quiddity-1.0.0.apk`](https://quiddity-3by.pages.dev/downloads/quiddity-1.0.0.apk)
+或直接下载：[`quiddity-1.0.1.apk`](https://github.com/jiuan-9/Quiddity-website/releases/download/v1.0.1/quiddity-1.0.1.apk)
 
 ## 系统要求
 
@@ -244,6 +244,7 @@ keyPassword=xxx
 ## 路线图
 
 - [x] 1.0.0：核心对话、多模型、压缩、记忆
+- [x] 1.0.1：版本号递增（versionCode 1 → 2），重新签名发布
 - [ ] 1.1.0：联网搜索（RAG）
 - [ ] 1.2.0：语音输入 / TTS 输出
 - [ ] 1.3.0：图片生成（多模态输出）
@@ -255,7 +256,8 @@ keyPassword=xxx
 | 仓库 | 描述 |
 |---|---|
 | [Quiddity-website](https://github.com/jiuan-9/Quiddity-website) | 官方网站（React + Vite） |
-| [quiddity-agent](https://github.com/jiuan-9/quiddity-agent) | 桌面端（Electron） |
+| [Quiddity-Chat-Windows](https://github.com/jiuan-9/Quiddity-Chat-Windows) | Quiddity-Chat 桌面端安装包（Electron，源码暂未公开） |
+| [Quiddity-Agent](https://github.com/jiuan-9/Quiddity-Agent) | Quiddity-Agent 桌面端（Electron，源码暂未公开） |
 
 ## 贡献
 
