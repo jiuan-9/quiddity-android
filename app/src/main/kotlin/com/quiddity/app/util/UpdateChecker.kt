@@ -101,8 +101,8 @@ object UpdateChecker {
      * 当 version.json 中的 downloadUrl 不可用时的最终兜底）。
      */
     private val APK_FALLBACK_URLS: List<String> = listOf(
-        "https://quiddity-3by.pages.dev/downloads/quiddity-1.1.1.apk",
-        "https://github.com/jiuan-9/Quiddity-website/releases/download/v1.1.1/quiddity-1.1.1.apk"
+        "https://quiddity-3by.pages.dev/downloads/quiddity-1.1.2.apk",
+        "https://github.com/jiuan-9/Quiddity-website/releases/download/v1.1.2/quiddity-1.1.2.apk"
     )
 
     /**
@@ -430,6 +430,129 @@ object UpdateChecker {
     }
 
     /**
+     * 使用 OkHttp 直接下载 APK（绕过系统 DownloadManager，兼容所有 ROM）。
+     *
+     * 下载到 context.filesDir/<fileName>（内部存储，无需权限），
+     * 通过 FileProvider 安装（已配置 <files-path name="internal_files" path="." />）。
+     *
+     * 相比 DownloadManager 的优势：
+     * - 不受国产 ROM 对 DownloadManager 的魔改影响
+     * - 进度回调实时准确
+     * - 失败原因清晰可读
+     *
+     * @return Flow，发射下载进度，最终状态为 SUCCESSFUL 或 FAILED
+     */
+    fun downloadApkDirect(
+        context: Context,
+        apkUrl: String,
+        fileName: String
+    ): Flow<DownloadProgress> = callbackFlow {
+        val targetFile = File(context.filesDir, fileName)
+
+        if (targetFile.exists() && targetFile.length() > 0) {
+            trySend(
+                DownloadProgress(
+                    downloadId = 0,
+                    status = DownloadStatus.SUCCESSFUL,
+                    bytesDownloaded = targetFile.length(),
+                    totalBytes = targetFile.length(),
+                    localUri = targetFile.absolutePath,
+                    reason = ""
+                )
+            )
+            close()
+            return@callbackFlow
+        }
+
+        try {
+            val request = Request.Builder()
+                .url(apkUrl)
+                .header("Cache-Control", "no-cache")
+                .get()
+                .build()
+            val response = httpClient.newCall(request).execute()
+            if (!response.isSuccessful) {
+                trySend(
+                    DownloadProgress(
+                        downloadId = 0,
+                        status = DownloadStatus.FAILED,
+                        bytesDownloaded = 0,
+                        totalBytes = 0,
+                        localUri = null,
+                        reason = "HTTP ${response.code}"
+                    )
+                )
+                close()
+                return@callbackFlow
+            }
+
+            val body = response.body ?: run {
+                trySend(DownloadProgress(0, DownloadStatus.FAILED, 0, 0, null, "空响应体"))
+                close()
+                return@callbackFlow
+            }
+
+            val contentLength = body.contentLength()
+            var downloaded = 0L
+            val tempFile = File(context.filesDir, "${fileName}.tmp")
+
+            body.byteStream().use { input ->
+                tempFile.outputStream().use { output ->
+                    val buffer = ByteArray(8192)
+                    var bytesRead: Int
+                    while (input.read(buffer).also { bytesRead = it } != -1) {
+                        output.write(buffer, 0, bytesRead)
+                        downloaded += bytesRead
+                        trySend(
+                            DownloadProgress(
+                                downloadId = 0,
+                                status = DownloadStatus.RUNNING,
+                                bytesDownloaded = downloaded,
+                                totalBytes = if (contentLength > 0) contentLength else downloaded,
+                                localUri = null,
+                                reason = ""
+                            )
+                        )
+                    }
+                }
+            }
+
+            if (tempFile.exists()) {
+                targetFile.delete()
+                tempFile.renameTo(targetFile)
+            }
+
+            if (targetFile.exists() && targetFile.length() > 0) {
+                trySend(
+                    DownloadProgress(
+                        downloadId = 0,
+                        status = DownloadStatus.SUCCESSFUL,
+                        bytesDownloaded = targetFile.length(),
+                        totalBytes = targetFile.length(),
+                        localUri = targetFile.absolutePath,
+                        reason = ""
+                    )
+                )
+            } else {
+                trySend(DownloadProgress(0, DownloadStatus.FAILED, 0, 0, null, "文件写入失败"))
+            }
+        } catch (e: Exception) {
+            trySend(
+                DownloadProgress(
+                    downloadId = 0,
+                    status = DownloadStatus.FAILED,
+                    bytesDownloaded = 0,
+                    totalBytes = 0,
+                    localUri = null,
+                    reason = e.message ?: "下载异常"
+                )
+            )
+        }
+
+        close()
+    }.flowOn(Dispatchers.IO)
+
+    /**
      * 查询当前下载状态。
      */
     fun queryDownload(context: Context, downloadId: Long): DownloadProgress? {
@@ -508,27 +631,19 @@ object UpdateChecker {
     }.flowOn(Dispatchers.IO)
 
     /**
-     * 触发 APK 安装。
+     * 触发 APK 安装（直接指定文件）。
      *
-     * 关键修复（v1.1.1）：
-     * - 旧实现使用 DownloadManager.getUriForDownloadedFile() 返回的 content:// URI
-     *   直接安装，会因 DownloadsProvider 不对外授权导致部分 ROM 安装器读不到。
-     * - 新实现统一通过 FileProvider.getUriForFile() 包装本地文件，
-     *   并通过 Intent.FLAG_GRANT_READ_URI_PERMISSION 授权给目标 Activity。
-     * - 同时不再调用无效的 grantUriPermission（自己给自己授权毫无意义）。
-     * - 路径解析：优先用 COLUMN_LOCAL_URI（未废弃，返回 content:// URI），
-     *   再按已知下载路径直接构造 File 对象兜底，最后全局扫描。
+     * 通过 FileProvider.getUriForFile() 包装本地文件，
+     * 并通过 Intent.FLAG_GRANT_READ_URI_PERMISSION 授权给目标 Activity。
      *
      * @return true=已成功发起安装 Intent；false=失败（无 APK / 无法解析文件）
      */
-    fun installApk(context: Context, downloadId: Long): Boolean {
-        val localFile: File = resolveLocalApkFile(context, downloadId) ?: return false
-
+    fun installApk(context: Context, apkFile: File): Boolean {
         val apkUri: Uri = try {
             FileProvider.getUriForFile(
                 context,
                 "${context.packageName}.fileprovider",
-                localFile
+                apkFile
             )
         } catch (e: Exception) {
             return false
@@ -546,6 +661,25 @@ object UpdateChecker {
         } catch (e: Exception) {
             false
         }
+    }
+
+    /**
+     * 触发 APK 安装（通过 DownloadManager downloadId）。
+     *
+     * 关键修复（v1.1.1）：
+     * - 旧实现使用 DownloadManager.getUriForDownloadedFile() 返回的 content:// URI
+     *   直接安装，会因 DownloadsProvider 不对外授权导致部分 ROM 安装器读不到。
+     * - 新实现统一通过 FileProvider.getUriForFile() 包装本地文件，
+     *   并通过 Intent.FLAG_GRANT_READ_URI_PERMISSION 授权给目标 Activity。
+     * - 同时不再调用无效的 grantUriPermission（自己给自己授权毫无意义）。
+     * - 路径解析：优先用 COLUMN_LOCAL_URI（未废弃，返回 content:// URI），
+     *   再按已知下载路径直接构造 File 对象兜底，最后全局扫描。
+     *
+     * @return true=已成功发起安装 Intent；false=失败（无 APK / 无法解析文件）
+     */
+    fun installApk(context: Context, downloadId: Long): Boolean {
+        val localFile: File = resolveLocalApkFile(context, downloadId) ?: return false
+        return installApk(context, localFile)
     }
 
     /**

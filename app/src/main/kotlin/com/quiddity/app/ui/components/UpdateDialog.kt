@@ -24,7 +24,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -35,7 +34,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -53,6 +51,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.quiddity.app.ui.theme.Motion
 import com.quiddity.app.util.UpdateChecker
 import kotlinx.coroutines.launch
+import java.io.File
 
 /*
  * ============================================================================
@@ -367,7 +366,11 @@ fun UpdateDialog(
                             }
                             TextButton(
                                 onClick = {
-                                    val ok = UpdateChecker.installApk(context, p.downloadId)
+                                    val ok = if (p.localPath != null) {
+                                        UpdateChecker.installApk(context, File(p.localPath))
+                                    } else {
+                                        UpdateChecker.installApk(context, p.downloadId)
+                                    }
                                     if (!ok) {
                                         Toast.makeText(
                                             context,
@@ -411,29 +414,13 @@ private fun startDownload(
             return@launch
         }
         val fileName = "quiddity-${result.remoteVersion}.apk"
-        val downloadId = UpdateChecker.downloadApk(
-            context = context,
-            apkUrl = apkUrl,
-            fileName = fileName,
-            title = "Quiddity v${result.remoteVersion}",
-            description = "正在下载新版本 APK"
-        )
-        if (downloadId <= 0) {
-            Toast.makeText(context, "启动下载失败，请稍后重试", Toast.LENGTH_LONG).show()
-            onPhase(DownloadPhase.Failed("启动下载失败"))
-            return@launch
-        }
-        onDownloadId(downloadId)
-        UpdateChecker.observeDownload(context, downloadId).collect { progress ->
+        UpdateChecker.downloadApkDirect(context, apkUrl, fileName).collect { progress ->
             when (progress.status) {
                 UpdateChecker.DownloadStatus.SUCCESSFUL -> {
-                    onPhase(DownloadPhase.Ready(downloadId))
+                    onPhase(DownloadPhase.Ready(downloadId = 0, localPath = progress.localUri))
                 }
                 UpdateChecker.DownloadStatus.FAILED -> {
                     onPhase(DownloadPhase.Failed(progress.reason.ifBlank { "下载失败" }))
-                }
-                UpdateChecker.DownloadStatus.CANCELED -> {
-                    onPhase(DownloadPhase.Idle)
                 }
                 else -> {
                     onPhase(
@@ -455,7 +442,7 @@ sealed class DownloadPhase {
     object Idle : DownloadPhase()
     object Resolving : DownloadPhase()
     data class Downloading(val percent: Int, val fraction: Float) : DownloadPhase()
-    data class Ready(val downloadId: Long) : DownloadPhase()
+    data class Ready(val downloadId: Long, val localPath: String? = null) : DownloadPhase()
     data class Failed(val message: String) : DownloadPhase()
 }
 
