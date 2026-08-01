@@ -5,17 +5,12 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.graphicsLayer
 import com.quiddity.app.ui.theme.Motion
-
 /*
  * ============================================================================
  * 开发规范 (Development Specifications)
@@ -47,12 +42,13 @@ import com.quiddity.app.ui.theme.Motion
 /**
  * 流式输出时的闪烁光标 `▋`。
  *
- * 动画在 Draw 阶段完成（alpha modifier），避免重组。
+ * 当前规则：alpha 通过 graphicsLayer 在 draw phase 读取 State.value，
+ * 避免 Modifier.alpha() 在组合阶段读取 state 导致每帧重组。
  */
 @Composable
 fun StreamingCursor(modifier: Modifier = Modifier) {
     val transition = rememberInfiniteTransition(label = "cursor")
-    val alpha by transition.animateFloat(
+    val alphaState = transition.animateFloat(
         initialValue = 0.3f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
@@ -65,6 +61,6 @@ fun StreamingCursor(modifier: Modifier = Modifier) {
         text = "▋",
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurface,
-        modifier = modifier.alpha(alpha)
+        modifier = modifier.graphicsLayer { alpha = alphaState.value }
     )
 }

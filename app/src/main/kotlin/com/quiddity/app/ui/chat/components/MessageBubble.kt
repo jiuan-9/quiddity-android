@@ -663,7 +663,7 @@ private fun SelectionCircle(isSelected: Boolean) {
  * 消息文本（已移除 SelectionContainer 文字提取器）。
  *
  * 当前规则：
- * - 气泡字体统一 12sp（项目硬约束），跨设备/系统字号设置下视觉一致
+ * - 气泡字体统一 18sp（项目硬约束），跨设备/系统字号设置下视觉一致
  * - 长按气泡进入多选模式（由父级 combinedClickable 处理），不再触发系统文本选择
  * - 保留括号灰化（AnnotatedString 原生 color span）
  * - 短按事件冒泡给父组件（USER 气泡的 onBubbleClick 仍能触发）
@@ -685,8 +685,8 @@ private fun SelectableMessageText(
         text = text,
         color = textColor,
         style = MaterialTheme.typography.bodyLarge.copy(
-            fontSize = 12.sp,
-            lineHeight = 18.sp
+            fontSize = 18.sp,
+            lineHeight = 27.sp
         ),
         modifier = modifier
             .combinedClickable(

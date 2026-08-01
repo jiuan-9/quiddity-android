@@ -61,6 +61,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.quiddity.app.data.model.Conversation
 import com.quiddity.app.data.model.ExportPayload
@@ -142,6 +144,8 @@ fun HamburgerMenu(
     var pendingClearSettings by remember { mutableStateOf(false) }
     var pendingClearMessages by remember { mutableStateOf(false) }
     var toastMsg by remember { mutableStateOf<String?>(null) }
+    // JSON 全量导入时暂存 payload，已有数据则弹窗让用户抉择替换/合并/取消
+    var pendingImportPayload by remember { mutableStateOf<ExportPayload?>(null) }
 
     LaunchedEffect(visible) {
         if (!visible) {
@@ -299,8 +303,13 @@ fun HamburgerMenu(
                         trimmed.startsWith("{") || trimmed.startsWith("[") -> {
                             DataPorter.importFrom(context, uri)
                                 .onSuccess { payload ->
-                                    settingsViewModel.importAllPayload(payload)
-                                    toastMsg = "对话记录已导入（JSON）"
+                                    // 已有数据时弹窗让用户抉择；无数据时直接合并导入
+                                    if (settingsViewModel.hasExistingData()) {
+                                        pendingImportPayload = payload
+                                    } else {
+                                        settingsViewModel.importAllPayload(payload, replace = false)
+                                        toastMsg = "对话记录已导入（JSON）"
+                                    }
                                 }
                                 .onFailure { toastMsg = "导入失败：${it.message}" }
                         }
@@ -645,6 +654,83 @@ fun HamburgerMenu(
                 }
             }
         )
+    }
+
+    // JSON 全量导入抉择弹窗：已有数据时让用户选择替换/合并/取消
+    pendingImportPayload?.let { payload ->
+        Dialog(
+            onDismissRequest = { pendingImportPayload = null },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+                shape = RoundedCornerShape(24.dp),
+                color = MaterialTheme.colorScheme.surface,
+                tonalElevation = 3.dp
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(24.dp)
+                ) {
+                    Text(
+                        text = "导入数据",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(modifier = Modifier.size(12.dp))
+                    Text(
+                        text = "检测到应用已有对话数据，请选择导入方式：",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(modifier = Modifier.size(8.dp))
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerLow
+                    ) {
+                        Text(
+                            text = "提示：你也可以在此菜单中单独导入人设卡或对话记录",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(12.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.size(20.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TextButton(onClick = { pendingImportPayload = null }) {
+                            Text("取消")
+                        }
+                        Spacer(modifier = Modifier.size(4.dp))
+                        TextButton(onClick = {
+                            val p = payload
+                            pendingImportPayload = null
+                            scope.launch {
+                                settingsViewModel.importAllPayload(p, replace = false)
+                                toastMsg = "导入成功（已合并）"
+                            }
+                        }) { Text("合并") }
+                        Spacer(modifier = Modifier.size(4.dp))
+                        TextButton(onClick = {
+                            val p = payload
+                            pendingImportPayload = null
+                            scope.launch {
+                                settingsViewModel.importAllPayload(p, replace = true)
+                                toastMsg = "导入成功（已替换）"
+                            }
+                        }) { Text("替换", color = MaterialTheme.colorScheme.error) }
+                    }
+                }
+            }
+        }
     }
 }
 

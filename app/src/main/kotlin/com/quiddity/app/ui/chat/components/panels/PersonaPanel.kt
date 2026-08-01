@@ -33,11 +33,13 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -395,6 +397,39 @@ fun PersonaPanel(
             modelTier = modelTier
         )
         onAutoSave(autoPersona, compiledEnabledState)
+    }
+
+    // 面板关闭时最终保存：确保用户快速返回（500ms 内）不丢失编辑。
+    // DisposableEffect(Unit) 仅在进入/离开组合时执行，onDispose 读取最新状态。
+    // rememberUpdatedState 保持对最新字段值的引用，避免 onDispose 捕获到过期值。
+    val latestName = rememberUpdatedState(name)
+    val latestDesired = rememberUpdatedState(desired)
+    val latestPersonaField = rememberUpdatedState(persona)
+    val latestCharacter = rememberUpdatedState(character)
+    val latestAppearance = rememberUpdatedState(appearance)
+    val latestWorldBackground = rememberUpdatedState(worldBackground)
+    val latestAiAvatarUri = rememberUpdatedState(aiAvatarUri)
+    val latestCompiledEnabled = rememberUpdatedState(compiledEnabledState)
+    val latestIsCompiling = rememberUpdatedState(isCompiling)
+    val latestCompilePreview = rememberUpdatedState(compilePreview)
+    val latestOnAutoSave = rememberUpdatedState(onAutoSave)
+    DisposableEffect(Unit) {
+        onDispose {
+            if (latestIsCompiling.value || latestCompilePreview.value != null) return@onDispose
+            val finalPersona = buildPersonaFromState(
+                initial = initial,
+                name = latestName.value,
+                desired = latestDesired.value,
+                persona = latestPersonaField.value,
+                character = latestCharacter.value,
+                appearance = latestAppearance.value,
+                worldBackground = latestWorldBackground.value,
+                aiAvatarUri = latestAiAvatarUri.value,
+                compiledPersona = null,
+                modelTier = modelTier
+            )
+            latestOnAutoSave.value(finalPersona, latestCompiledEnabled.value)
+        }
     }
 
     SubPanelScaffold(title = "AI 人设", onBack = onBack) {

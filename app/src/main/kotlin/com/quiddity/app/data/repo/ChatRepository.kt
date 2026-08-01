@@ -57,9 +57,9 @@ class ChatRepository(
      * 协调器工厂。默认使用 [MessageStreamCoordinator]。
      * 每轮新 run 都注入新 runId（基于 UUID），保证消息 id 全局唯一。
      */
-    private val coordinatorFactory: (conversationId: String, runId: String, singleMessageTokens: Int) -> StreamCoordinator =
-        { conversationId, runId, singleMessageTokens ->
-            MessageStreamCoordinator(conversationId, runId, singleMessageTokens)
+    private val coordinatorFactory: (conversationId: String, runId: String, splitEnabled: Boolean, singleMessageTokens: Int) -> StreamCoordinator =
+        { conversationId, runId, splitEnabled, singleMessageTokens ->
+            MessageStreamCoordinator(conversationId, runId, singleMessageTokens, splitEnabled)
         }
 ) {
 
@@ -97,8 +97,7 @@ class ChatRepository(
         access as ApiAccess.Resolved
 
         val systemPrompt = PromptBuilder.buildSystemPrompt(
-            conv = conv,
-            multilineAutoSplit = settings.multilineAutoSplit
+            conv = conv
         )
         val contextLimit = if (conv.contextLimit > 0) conv.contextLimit else settings.globalContextLimit
         // 过滤 isNotice 提示气泡：不发给 LLM（UI 专用，非对话内容）
@@ -122,7 +121,8 @@ class ChatRepository(
             // runId 是协调器内部标签，使用不带前缀的 UUID 即可；
             // 最终消息 ID 由 MessageStreamCoordinator 拼装为 `{convId}_{runId}_ai_{index}`。
             IdGenerator.newUuid(),
-            if (settings.multilineAutoSplit) singleMsgTokens else Int.MAX_VALUE
+            settings.multilineAutoSplit,
+            singleMsgTokens
         )
 
         runStream(api, access.apiUrl, access.apiKey, request, coordinator, onEvent)
@@ -143,8 +143,7 @@ class ChatRepository(
         access as ApiAccess.Resolved
 
         val systemPrompt = PromptBuilder.buildSystemPrompt(
-            conv = conv,
-            multilineAutoSplit = settings.multilineAutoSplit
+            conv = conv
         )
         // 引导：让 AI 主动发起对话
         val guidedMessages = listOf(
@@ -166,7 +165,8 @@ class ChatRepository(
         val coordinator = coordinatorFactory(
             conv.id,
             IdGenerator.newUuid(),
-            if (settings.multilineAutoSplit) singleMsgTokens else Int.MAX_VALUE
+            settings.multilineAutoSplit,
+            singleMsgTokens
         )
 
         runStream(api, access.apiUrl, access.apiKey, request, coordinator, onEvent)

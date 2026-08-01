@@ -328,4 +328,37 @@ class ConversationStore(private val context: Context) {
             }
         }
     }
+
+    /**
+     * 替换式导入：删除全部现有会话与消息，写入导入数据。
+     *
+     * 与 [importAll]（合并模式）互补：用户选择"替换现有数据"时调用。
+     * 先清理旧会话的消息文件与缓存，再写入新数据，避免残留。
+     */
+    suspend fun replaceAll(
+        conversations: List<Conversation>,
+        messages: Map<String, List<Message>>
+    ) = withContext(Dispatchers.IO) {
+        // 清理旧会话的消息文件与内存缓存
+        _conversations.value.forEach { conv ->
+            getMessageLock(conv.id).withLock {
+                messagesFile(conv.id).delete()
+                messagesCache.remove(conv.id)
+                messagesFlows.remove(conv.id)?.value = emptyList()
+            }
+        }
+        // 写入新会话列表
+        val sorted = conversations
+            .sortedWith(compareByDescending<Conversation> { it.pinned }.thenByDescending { it.updatedAt })
+        writeConversationsAtomic(sorted)
+        _conversations.value = sorted
+        // 写入新消息
+        messages.forEach { (convId, msgs) ->
+            getMessageLock(convId).withLock {
+                messagesCache[convId] = msgs.toMutableList()
+                messagesFlows[convId]?.value = msgs
+                writeMessagesAtomic(convId, msgs)
+            }
+        }
+    }
 }

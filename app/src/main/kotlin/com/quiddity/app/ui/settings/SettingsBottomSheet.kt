@@ -65,6 +65,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -88,6 +89,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.quiddity.app.util.QuiddityConstants
+import kotlin.math.roundToInt
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.quiddity.app.di.ServiceLocator
 import com.quiddity.app.ui.components.ConfirmDialog
@@ -108,6 +111,8 @@ import com.quiddity.app.ui.settings.components.TokenEditorPanel
 import com.quiddity.app.ui.theme.Motion
 import com.quiddity.app.util.DataPorter
 import com.quiddity.app.util.IdGenerator
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -172,6 +177,10 @@ fun SettingsBottomSheet(
     var showListWallpaper by rememberSaveable { mutableStateOf(false) }
     var showLegalDocs by rememberSaveable { mutableStateOf(false) }
     var toastMsg by remember { mutableStateOf<String?>(null) }
+    // 导入抉择：已有数据时暂存 payload，弹窗让用户选择替换/合并/取消
+    var pendingImportPayload by remember {
+        mutableStateOf<com.quiddity.app.data.model.ExportPayload?>(null)
+    }
     var visible by remember { mutableStateOf(false) }
     // 拖动关闭偏移：直接同步赋值，零协程。graphicsLayer 内 draw phase 读取。
     // 用 mutableFloatStateOf 持有，禁止用 by 委托在组合阶段读取——否则拖动时整个面板每帧重组。
@@ -216,8 +225,13 @@ fun SettingsBottomSheet(
             scope.launch {
                 DataPorter.importFrom(context, uri)
                     .onSuccess { payload ->
-                        viewModel.importAllPayload(payload)
-                        toastMsg = "导入成功"
+                        // 已有数据时弹窗让用户抉择导入方式；无数据时直接合并导入
+                        if (viewModel.hasExistingData()) {
+                            pendingImportPayload = payload
+                        } else {
+                            viewModel.importAllPayload(payload, replace = false)
+                            toastMsg = "导入成功"
+                        }
                     }
                     .onFailure { toastMsg = "导入失败：${it.message}" }
             }
@@ -377,6 +391,26 @@ fun SettingsBottomSheet(
                                 else "全部文本统一颜色",
                                 checked = settings.bracketGrayEnabled,
                                 onCheckedChange = { viewModel.setBracketGrayEnabled(it) }
+                            )
+                        }
+                        item(key = "follow_system_font", contentType = { "toggle" }) {
+                            ToggleRow(
+                                icon = Icons.Filled.FormatSize,
+                                title = "跟随系统字体",
+                                subtitle = if (settings.followSystemFont) "使用系统字号设置"
+                                else "使用应用内字号（不受系统字号影响）",
+                                checked = settings.followSystemFont,
+                                onCheckedChange = { viewModel.setFollowSystemFont(it) }
+                            )
+                        }
+                        item(key = "font_size", contentType = { "slider" }) {
+                            FontSizeRow(
+                                fontScale = settings.fontScale,
+                                enabled = !settings.followSystemFont,
+                                onValueChangeFinished = { value ->
+                                    viewModel.setFontScale(value)
+                                    Toast.makeText(context, "已保存", Toast.LENGTH_SHORT).show()
+                                }
                             )
                         }
                         item(key = "list_wallpaper", contentType = { "click" }) {
@@ -660,6 +694,83 @@ fun SettingsBottomSheet(
             DonateScreen(onBack = { showDonate = false })
         }
 
+        // 导入抉择弹窗：已有数据时让用户选择替换/合并/取消
+        pendingImportPayload?.let { payload ->
+            Dialog(
+                onDismissRequest = { pendingImportPayload = null },
+                properties = DialogProperties(usePlatformDefaultWidth = false)
+            ) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    shape = RoundedCornerShape(24.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 3.dp
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(24.dp)
+                    ) {
+                        Text(
+                            text = "导入数据",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.size(12.dp))
+                        Text(
+                            text = "检测到应用已有对话数据，请选择导入方式：",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.size(8.dp))
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainerLow
+                        ) {
+                            Text(
+                                text = "提示：你也可以在会话内汉堡菜单中单独导入人设卡或对话记录",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(12.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.size(20.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            TextButton(onClick = { pendingImportPayload = null }) {
+                                Text("取消")
+                            }
+                            Spacer(modifier = Modifier.size(4.dp))
+                            TextButton(onClick = {
+                                val p = payload
+                                pendingImportPayload = null
+                                scope.launch {
+                                    viewModel.importAllPayload(p, replace = false)
+                                    toastMsg = "导入成功（已合并）"
+                                }
+                            }) { Text("合并") }
+                            Spacer(modifier = Modifier.size(4.dp))
+                            TextButton(onClick = {
+                                val p = payload
+                                pendingImportPayload = null
+                                scope.launch {
+                                    viewModel.importAllPayload(p, replace = true)
+                                    toastMsg = "导入成功（已替换）"
+                                }
+                            }) { Text("替换", color = MaterialTheme.colorScheme.error) }
+                        }
+                    }
+                }
+            }
+        }
+
         // 版本更新弹窗（手动检测触发）
         updateController.updateResult?.let { result ->
             UpdateDialog(
@@ -780,6 +891,85 @@ private fun SectionHeader(title: String) {
         color = MaterialTheme.colorScheme.primary,
         modifier = Modifier.padding(start = 24.dp, top = 16.dp, bottom = 6.dp)
     )
+}
+
+/**
+ * 字体大小调节行。
+ *
+ * 本地状态驱动拖动，仅在 [onValueChangeFinished] 时写入 ViewModel，减少 DataStore 写频率。
+ * 离散步进（0.1 一档），避免连续写入与精度漂移。跟随系统字体时整行禁用。
+ */
+@Composable
+private fun FontSizeRow(
+    fontScale: Float,
+    enabled: Boolean,
+    onValueChangeFinished: (Float) -> Unit
+) {
+    // 本地拖动状态：拖动时即时跟随，松手才落盘
+    var sliderValue by remember(fontScale) { mutableFloatStateOf(fontScale) }
+    val percent = (sliderValue * 100).roundToInt()
+    val sizeLabel = when {
+        sliderValue < 0.95f -> "小"
+        sliderValue <= 1.05f -> "标准"
+        sliderValue <= 1.2f -> "大"
+        else -> "特大"
+    }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 3.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 14.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Filled.FormatSize,
+                        contentDescription = null,
+                        tint = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant
+                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.size(14.dp))
+                    Text(
+                        text = "字体大小",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = if (enabled) MaterialTheme.colorScheme.onSurface
+                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                    )
+                }
+                Text(
+                    text = "$sizeLabel · $percent%",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                )
+            }
+            Spacer(modifier = Modifier.size(8.dp))
+            Slider(
+                value = sliderValue,
+                onValueChange = { sliderValue = it },
+                onValueChangeFinished = {
+                    // 离散化到 0.1 一档，落盘
+                    val stepped = (sliderValue * 10f).roundToInt() / 10f
+                    sliderValue = stepped
+                    onValueChangeFinished(stepped)
+                },
+                valueRange = QuiddityConstants.MIN_FONT_SCALE..QuiddityConstants.MAX_FONT_SCALE,
+                steps = 5,
+                enabled = enabled
+            )
+        }
+    }
 }
 
 @Composable

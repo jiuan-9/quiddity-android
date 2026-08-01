@@ -135,6 +135,14 @@ class SettingsViewModel(
         settingsRepository.setSendDelaySeconds(value)
     }
 
+    fun setFollowSystemFont(enabled: Boolean) = viewModelScope.launch {
+        settingsRepository.setFollowSystemFont(enabled)
+    }
+
+    fun setFontScale(value: Float) = viewModelScope.launch {
+        settingsRepository.setFontScale(value)
+    }
+
     // ===== 头像 =====
     fun setUserAvatar(uri: String?) = viewModelScope.launch {
         settingsRepository.setUserAvatar(uri)
@@ -198,15 +206,33 @@ class SettingsViewModel(
         )
     }
 
-    suspend fun importAllPayload(payload: com.quiddity.app.data.model.ExportPayload) {
+    /**
+     * 导入完整备份数据。
+     *
+     * @param payload 解析后的导出数据
+     * @param replace true=替换现有数据（删除旧会话后写入），false=合并（按 id 去重追加）
+     */
+    suspend fun importAllPayload(
+        payload: com.quiddity.app.data.model.ExportPayload,
+        replace: Boolean = false
+    ) {
         val sanitizedSettings = if (payload.listWallpaper == null) {
             payload.settings.copy(listWallpaperUri = null)
         } else {
             payload.settings
         }
         settingsRepository.update { _ -> sanitizedSettings }
-        conversationRepository.importAll(payload.conversations, payload.messages)
+        if (replace) {
+            conversationRepository.replaceAll(payload.conversations, payload.messages)
+        } else {
+            conversationRepository.importAll(payload.conversations, payload.messages)
+        }
     }
+
+    /**
+     * 当前是否有会话数据（UI 据此决定是否弹窗让用户抉择导入方式）。
+     */
+    fun hasExistingData(): Boolean = conversationRepository.hasConversations()
 }
 
 class SettingsViewModelFactory(

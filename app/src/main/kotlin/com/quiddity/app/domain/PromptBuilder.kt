@@ -36,12 +36,15 @@ import com.quiddity.app.util.QuiddityConstants
  * 提示词中枢：统一管理所有发给 LLM 的提示词，分为两大类。
  *
  * 一、功能类——与具体人设无关的工具型提示词：记忆压缩 / 人设精调。
- * 二、人设类——聊天 system 提示词：AI 人设 / 用户人设 / 场景 / 记忆 / 多消息分割。
+ * 二、人设类——聊天 system 提示词：AI 人设 / 用户人设 / 场景 / 记忆。
  *
  * 字段命名规范（全文件统一，跨提示词一致，对准应用内设置填空项）：
  * - AI 人设：【名字】【身份背景】【性格】【外观】【世界背景】【期望特质】
  * - 用户人设（【对话伙伴信息】下）：名字 / 身份 / 性别 / 年龄 / 外观
- * - 其他：【当前场景】【历史对话摘要】【需要记住的事】【多消息分割】
+ * - 其他：【当前场景】【历史对话摘要】【需要记住的事】
+ *
+ * 多消息切分不再由提示词驱动：[MessageStreamCoordinator] 在流式输出阶段按句末标点 +
+ * 括号确定性切分，无需告知 LLM 任何分割标记或规则。
  */
 object PromptBuilder {
 
@@ -177,11 +180,9 @@ object PromptBuilder {
      * 2. 用户人设
      * 3. 场景
      * 4. 记忆（压缩摘要 + 固定记忆）
-     * 5. 多消息分割指令
      */
     fun buildSystemPrompt(
-        conv: Conversation,
-        multilineAutoSplit: Boolean = true
+        conv: Conversation
     ): String {
         val sb = StringBuilder()
 
@@ -246,21 +247,6 @@ object PromptBuilder {
         }
         if (conv.memory.isNotBlank()) {
             sb.append("【需要记住的事】\n").append(conv.memory).append("\n\n")
-        }
-
-        // ===== 5. 多消息分割指令 =====
-        // 让 LLM 自主决定切分点，使用 ⫟⫟⫟ 标记分隔。
-        // MessageStreamCoordinator 优先按标记切分，标记不存在时退化为按段落切分。
-        if (multilineAutoSplit) {
-            sb.append("【多消息分割】\n")
-            sb.append("像真人聊天一样，将回复拆分为多条短消息发送。在每条消息之间使用「")
-                .append(QuiddityConstants.MESSAGE_SPLIT_MARKER)
-                .append("」标记分隔（独占一行）。\n")
-            sb.append("拆分原则：\n")
-            sb.append("- 每条消息为一个完整的语义单元（一句话、一段对白、一个动作描写）。\n")
-            sb.append("- 避免单条消息过长（一般不超过 3-4 句）。\n")
-            sb.append("- 标记必须独占一行，前后不要附加其他文字。\n")
-            sb.append("- 不要在代码块、列表等结构内部使用标记。\n\n")
         }
 
         return sb.toString().trim()

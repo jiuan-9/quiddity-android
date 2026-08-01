@@ -7,8 +7,11 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
@@ -90,8 +93,23 @@ class MainActivity : ComponentActivity() {
                 if (settings.darkMode) android.graphics.Color.parseColor("#1A1A1A")
                 else android.graphics.Color.parseColor("#FAF9F6")
             )
-            QuiddityTheme(darkMode = settings.darkMode) {
-                QuiddityNavHost()
+            // ===== 字体缩放 =====
+            // QuiddityApp 已在 Configuration 层锁定 fontScale=1.0（整体强制默认字体，不受系统字号影响）。
+            // 此处用 LocalDensity 覆盖做二次精细控制，无需 recreate 即可平滑生效：
+            // - followSystemFont=true：读取系统字号（Resources.getSystem 反映系统设置，不受应用 Configuration 锁定影响）
+            // - followSystemFont=false：使用用户在总设置中选择的 fontScale（默认 1.0 = 设计稿原尺寸）
+            val baseDensity = LocalDensity.current
+            val effectiveFontScale = if (settings.followSystemFont) {
+                android.content.res.Resources.getSystem().configuration.fontScale
+                    .takeIf { it > 0f } ?: 1.0f
+            } else {
+                settings.fontScale
+            }
+            val scaledDensity = Density(density = baseDensity.density, fontScale = effectiveFontScale)
+            CompositionLocalProvider(LocalDensity provides scaledDensity) {
+                QuiddityTheme(darkMode = settings.darkMode) {
+                    QuiddityNavHost()
+                }
             }
         }
     }

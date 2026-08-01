@@ -183,4 +183,19 @@ class ConversationRepository(
         conversations: List<Conversation>,
         messages: Map<String, List<Message>>
     ) = store.importAll(conversations, messages)
+
+    /**
+     * 替换式导入：删除全部现有会话与消息，写入导入数据。
+     *
+     * 与 [importAll]（合并模式）互补：用户选择"替换现有数据"时调用。
+     */
+    suspend fun replaceAll(
+        conversations: List<Conversation>,
+        messages: Map<String, List<Message>>
+    ) = store.replaceAll(conversations, messages)
+
+    /**
+     * 当前是否有会话数据（用于导入时判断是否需要弹窗让用户抉择）。
+     */
+    fun hasConversations(): Boolean = store.conversations.value.isNotEmpty()
 }

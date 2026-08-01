@@ -36,7 +36,7 @@ import com.quiddity.app.util.TokenEstimator
  * 流式消息协调器通用接口。
  *
  * 定义"接收 delta -> 派发信号"的核心契约。
- * [MessageStreamCoordinator] 作为默认实现（按段落 + token 数切分）。
+ * [MessageStreamCoordinator] 为默认实现（按句末标点 + 括号切分）。
  */
 interface StreamCoordinator {
     sealed class Signal {
@@ -51,37 +51,45 @@ interface StreamCoordinator {
 }
 
 /**
- * 切分点信息。
+ * 一次切分的结果。
  *
- * @param completedEnd 完成消息的结束索引（exclusive）：buffer[0, completedEnd) 为完成消息内容
- * @param remainingStart 剩余内容的起始索引（inclusive）：buffer[remainingStart, length) 留在 buffer
- * @param trimTrailing 是否 trim 完成消息的尾部空白
+ * @param text 切出的段落文本（已 trim）
+ * @param consumeEnd buffer 中被消费的结束索引（exclusive）：buffer[0, consumeEnd) 被移除
+ * @param emit 是否作为消息发出。仅含句末标点 / 空括号等无实质内容的段落 emit=false，
+ *             仍从 buffer 消费但不产生消息，避免发出"。。。"这类空消息。
  */
-private data class SplitPoint(
-    val completedEnd: Int,
-    val remainingStart: Int,
-    val trimTrailing: Boolean
+private data class Segment(
+    val text: String,
+    val consumeEnd: Int,
+    val emit: Boolean
 )
 
 /**
  * 流式消息协调器默认实现。
  *
- * ## 切分策略
+ * ## 切分策略（句末标点 + 括号）
  *
- * 1. **段落切分（主）**：当 buffer 中出现段落结束标记（`\n\n`）时，在段落边界切分。
- *    每个完整段落作为一条独立消息发送——符合用户选择的「按段落切」粒度。
- * 2. **标点兜底（次）**：当单个段落超过 token 上限但还没有 `\n\n` 时，在最后一个
- *    句末标点（。！？.!?）处切分，避免单条消息过长。
- * 3. **硬上限保护**：当 buffer 累计字符数达到硬上限且找不到任何合适切分点时，
- *    强制在当前位置切分，防止 OOM。
- * 4. **保护区域**：不切割代码块（``` ... ```）、未闭合括号（()（）[]【】{}）
- *    内部的内容——避免破坏 Markdown 格式和语义完整性。
- * 5. **合并短片段**：切分后如果剩余片段过短（< 10 字符），追加到前一条消息末尾。
+ * 全面替代旧的"段落 / token 阈值 / 分割标记"切分方式，改为确定性切分：
+ *
+ * 1. **句末标点切分**：buffer 中出现句末标点（。！？.!?）即在该处切分，
+ *    标点保留在前一条消息末尾。连续的句末标点（如 ?!、！！）合并到同一条消息，
+ *    不会切出仅含标点的空片段。
+ * 2. **省略号不切分**：ASCII `...`（连续 ≥2 个 `.`）与单字符 `…`（U+2026）视为省略号，
+ *    不触发切分，保留在当前消息内——例如"要不歇歇...不要太累。"只在末尾 `。` 切分。
+ * 3. **括号内容另起一句**：成对括号 `()` `（）` `[]` `【】` `{}` `<>` 内的内容
+ *    作为独立消息发出（含括号本身）。括号前的文本作为前一条消息结束，
+ *    括号闭合即视为该段完成。示例"（伸手）你真的还好吗？"切为"（伸手）"+"你真的还好吗？"。
+ * 4. **硬上限保护**：当 buffer 累计字符数达到硬上限且找不到任何切分点时
+ *    （如模型输出超长无标点文本），强制在当前位置切分，防止 OOM。
+ *
+ * 切分开关 [splitEnabled]：关闭时（多行文本自动切分 = off）不进行任何切分，
+ * 整条回复作为单条消息累计输出，仅在 [finalize] 时完成。
  */
 class MessageStreamCoordinator(
     private val conversationId: String,
     private val runId: String,
     private val singleMessageTokens: Int = 800,
+    private val splitEnabled: Boolean = true,
     private val startTimestamp: Long = System.currentTimeMillis()
 ) : StreamCoordinator {
 
@@ -90,75 +98,51 @@ class MessageStreamCoordinator(
     private val knownIds: MutableSet<String> = LinkedHashSet()
     private var currentIndex = 0
     private var currentStartTs = startTimestamp
-    private var droppedOnOverflow = 0L
 
     override fun accept(delta: String): List<StreamCoordinator.Signal> {
         if (delta.isEmpty()) return emptyList()
-
-        // 硬上限保护：防异常 server 永不切分时无限增长导致 OOM
-        val hardCharLimit = (singleMessageTokens.toLong() * HARD_LIMIT_MULTIPLIER * CHARS_PER_TOKEN)
-            .coerceAtMost(MAX_HARD_LIMIT_CHARS.toLong())
-        if (buffer.length >= hardCharLimit) {
-            droppedOnOverflow += delta.length
-            return emptyList()
-        }
         buffer.append(delta)
 
         val signals = mutableListOf<StreamCoordinator.Signal>()
-        // 循环切分：一次 delta 可能包含多个段落边界，需要全部切分
-        var splitPoint = findSplitPoint()
-        while (splitPoint != null) {
-            // 取出切分点之前的内容作为完成消息
-            val completedContent = if (splitPoint.trimTrailing) {
-                buffer.substring(0, splitPoint.completedEnd).trimEnd()
-            } else {
-                buffer.substring(0, splitPoint.completedEnd)
-            }
-            // 剩余内容：trim 前导空白，避免下一条消息开头出现空行。
-            // 代码块受保护不会被切分，因此前导空白只是分割符残留，可安全去除。
-            val remaining = if (splitPoint.remainingStart < buffer.length) {
-                buffer.substring(splitPoint.remainingStart).trimStart()
-            } else {
-                ""
-            }
-
-            // 清空 buffer，放入剩余内容
-            buffer.clear()
-            buffer.append(remaining)
-
-            // 跳过空完成内容（如 buffer 以 \n\n 开头时）
-            if (completedContent.isNotBlank()) {
-                // 如果切分后剩余内容太短（< 10 字符），合并到前一条消息
-                if (remaining.length < MIN_TAIL_MERGE_CHARS && completed.isNotEmpty() && remaining.isNotBlank()) {
-                    val lastCompleted = completed.last()
-                    val mergedContent = lastCompleted.content + remaining
-                    val mergedMsg = lastCompleted.copy(
-                        content = mergedContent,
-                        tokenCount = TokenEstimator.estimate(mergedContent)
-                    )
-                    completed[completed.lastIndex] = mergedMsg
-                    signals += StreamCoordinator.Signal.Update(mergedMsg)
-                    buffer.clear()
-                    break
+        // 循环切分：一次 delta 可能包含多个切分点，全部切出
+        while (true) {
+            val seg = findNextCompleteSegment()
+            if (seg != null) {
+                // 从 buffer 移除已消费部分
+                consumeFromBuffer(seg.consumeEnd)
+                if (seg.emit && seg.text.isNotBlank()) {
+                    val completedMsg = buildMessageFromContent(seg.text, streaming = false)
+                    if (knownIds.add(completedMsg.id)) {
+                        signals += StreamCoordinator.Signal.New(completedMsg)
+                    } else {
+                        signals += StreamCoordinator.Signal.Update(completedMsg)
+                    }
+                    signals += StreamCoordinator.Signal.Complete(completedMsg)
+                    completed += completedMsg
+                    currentIndex++
+                    currentStartTs = System.currentTimeMillis()
                 }
-
-                // 构建完成消息
-                val completedMsg = buildMessageFromContent(completedContent, streaming = false)
-                if (knownIds.add(completedMsg.id)) {
-                    signals += StreamCoordinator.Signal.New(completedMsg)
-                } else {
-                    signals += StreamCoordinator.Signal.Update(completedMsg)
-                }
-                signals += StreamCoordinator.Signal.Complete(completedMsg)
-                completed += completedMsg
-
-                // 开启新消息
-                currentIndex++
-                currentStartTs = System.currentTimeMillis()
+                continue
             }
-
-            // 继续检查是否有更多切分点
-            splitPoint = findSplitPoint()
+            // 无完整切分点：硬上限保护，强制切分防 OOM
+            if (splitEnabled && buffer.length >= hardCharLimit() && buffer.isNotBlank()) {
+                val forced = buffer.toString().trim()
+                buffer.clear()
+                if (forced.isNotEmpty()) {
+                    val completedMsg = buildMessageFromContent(forced, streaming = false)
+                    if (knownIds.add(completedMsg.id)) {
+                        signals += StreamCoordinator.Signal.New(completedMsg)
+                    } else {
+                        signals += StreamCoordinator.Signal.Update(completedMsg)
+                    }
+                    signals += StreamCoordinator.Signal.Complete(completedMsg)
+                    completed += completedMsg
+                    currentIndex++
+                    currentStartTs = System.currentTimeMillis()
+                }
+                continue
+            }
+            break
         }
 
         // 单条更新（当前 buffer 内容）
@@ -176,19 +160,12 @@ class MessageStreamCoordinator(
 
     override fun finalize(): List<StreamCoordinator.Signal> {
         val signals = mutableListOf<StreamCoordinator.Signal>()
-        val currentId = buildCurrentId()
-
         if (buffer.isEmpty() && completed.isNotEmpty()) {
-            // buffer 已空且已有完成消息——无需额外操作
             return signals
         }
-
         if (buffer.isEmpty() && completed.isEmpty()) {
-            // 极端：从未 accept 过任何 delta
             return signals
         }
-
-        // 把当前的 streaming 消息完整收尾
         val finalMsg = buildMessage(streaming = false)
         if (finalMsg.id in knownIds) {
             signals += StreamCoordinator.Signal.Complete(finalMsg)
@@ -209,204 +186,163 @@ class MessageStreamCoordinator(
         return out
     }
 
-    // ==================== 智能切分核心 ====================
+    // ==================== 句末标点 + 括号切分核心 ====================
 
     /**
-     * 在 buffer 中寻找切分点。
+     * 在 buffer 起始处寻找下一个完整可切分段落。
      *
-     * 切分优先级：
-     * 2. \n\n 段落边界（主切分方式，不在保护区域内）
-     * 3. 句末标点（。！？.!?，当 buffer 超过 token 上限时触发）
-     * 4. \n 换行（buffer 远超上限时兜底）
-     * 5. 硬上限强制切分
-     *
-     * @return [SplitPoint] 或 null（无需切分）
+     * @return [Segment] 或 null（buffer 中尚无完整段落，等待更多 delta）
      */
-    private fun findSplitPoint(): SplitPoint? {
-        if (buffer.isBlank()) return null
-
-        // 计算保护区域
-        val protectedRanges = findProtectedRanges()
-
-        // 分割标记检测：LLM 可能不严格按系统提示输出 ⫟⫟⫟（3 个），
-        // 实测会出现单个 ⫟ 或两个 ⫟⫟ 的情况。这里检测任意 ⫟ 连续串（≥1 个）
-        // 作为分割点，避免残留 ⫟ 字符泄漏到用户可见的回复中。
-        // 标记串本身在切分时被丢弃，前后内容分别 trim 空白。
-        val markerChar = QuiddityConstants.MESSAGE_SPLIT_MARKER.first()
-        val markerIdx = buffer.indexOf(markerChar)
-        if (markerIdx >= 0) {
-            // 计算连续 ⫟ 串的长度（吞掉 1 个以上的连续标记字符）
-            var runEnd = markerIdx
-            while (runEnd < buffer.length && buffer[runEnd] == markerChar) {
-                runEnd++
-            }
-            return SplitPoint(
-                completedEnd = markerIdx,
-                remainingStart = runEnd,
-                trimTrailing = true
-            )
-        }
-
-        // 2. 段落边界 \n\n（主切分方式）
-        val paragraphSplit = findLastUnprotectedIndex("\n\n", protectedRanges)
-        if (paragraphSplit >= 0) {
-            // 在 \n\n 之后切分（\n\n 本身作为分隔符被移除）
-            val splitAfter = paragraphSplit + 2
-            // 确保 \n\n 后面有内容（否则等更多 delta）
-            if (splitAfter < buffer.length) {
-                return SplitPoint(
-                    completedEnd = paragraphSplit,
-                    remainingStart = splitAfter,
-                    trimTrailing = true
-                )
-            }
-        }
-
-        // 3. 仅在 buffer 超过 token 上限时才按标点切分
-        val tokenCount = TokenEstimator.estimate(buffer.toString())
-        if (tokenCount >= singleMessageTokens) {
-            // 按句末标点切分
-            val sentenceSplit = findLastSentenceEnd(protectedRanges)
-            if (sentenceSplit >= 0) {
-                // 在标点之后切分（标点保留在完成消息中）
-                return SplitPoint(
-                    completedEnd = sentenceSplit + 1,
-                    remainingStart = sentenceSplit + 1,
-                    trimTrailing = false
-                )
-            }
-
-            // 4. \n 换行兜底
-            val newlineSplit = findLastUnprotectedIndex("\n", protectedRanges)
-            if (newlineSplit >= 0) {
-                return SplitPoint(
-                    completedEnd = newlineSplit,
-                    remainingStart = newlineSplit + 1,
-                    trimTrailing = true
-                )
-            }
-
-            // 5. 硬上限：找不到任何切分点，但 buffer 已达硬上限
-            val hardCharLimit = (singleMessageTokens.toLong() * HARD_LIMIT_MULTIPLIER * CHARS_PER_TOKEN)
-                .coerceAtMost(MAX_HARD_LIMIT_CHARS.toLong())
-            if (buffer.length >= hardCharLimit) {
-                // 强制在当前位置切分
-                return SplitPoint(
-                    completedEnd = buffer.length,
-                    remainingStart = buffer.length,
-                    trimTrailing = false
-                )
-            }
-        }
-
-        return null
-    }
-
-    /**
-     * 寻找保护区域范围：代码块、未闭合括号。
-     *
-     * 保护区域内的索引不应作为切分点——避免破坏 Markdown 格式和语义完整性。
-     *
-     * @return 保护区域列表，每个 Pair(start, end) 表示 [start, end) 区间受保护
-     */
-    private fun findProtectedRanges(): List<Pair<Int, Int>> {
-        val ranges = mutableListOf<Pair<Int, Int>>()
-        val text = buffer.toString()
-
-        // 1. 代码块保护：``` ... ```
-        var codeBlockStart = -1
+    private fun findNextCompleteSegment(): Segment? {
+        if (!splitEnabled || buffer.isBlank()) return null
+        val text = buffer
         var i = 0
-        while (i <= text.length - 3) {
-            if (text.substring(i, i + 3) == "```") {
-                if (codeBlockStart >= 0) {
-                    // 找到闭合标记
-                    ranges.add(Pair(codeBlockStart, i + 3))
-                    codeBlockStart = -1
-                } else {
-                    // 找到开始标记
-                    codeBlockStart = i
+        while (i < text.length) {
+            val ch = text[i]
+            val openMatch = matchingClose(ch)
+            if (openMatch != null) {
+                // 括号前的文本作为前一段消息（若非空）
+                if (i > 0 && text.subSequence(0, i).isNotBlank()) {
+                    return Segment(
+                        text = text.subSequence(0, i).toString().trim(),
+                        consumeEnd = i,
+                        emit = true
+                    )
                 }
-                i += 3
+                // 括号在 buffer 起始：寻找匹配的闭合括号
+                val closeIdx = findMatchingCloseBracket(text, i)
+                if (closeIdx < 0) {
+                    // 括号未闭合，等待更多 delta
+                    return null
+                }
+                val bracketContent = text.subSequence(i, closeIdx + 1).toString()
+                // 仅含括号 / 空白时不发出（如"（）"），但仍消费
+                val hasInnerContent = bracketContent.any { c ->
+                    !c.isWhitespace() && matchingClose(c) == null && matchingOpen(c) == null
+                }
+                return Segment(
+                    text = bracketContent,
+                    consumeEnd = closeIdx + 1,
+                    emit = hasInnerContent
+                )
+            } else if (isSentenceEnder(ch)) {
+                // 省略号处理：ASCII 连续点（≥2）与单字符 … 不切分
+                if (ch == '.') {
+                    val runLen = countConsecutive(text, i, '.')
+                    if (runLen >= 2) {
+                        i += runLen
+                        continue
+                    }
+                    // 单个 '.' 在 buffer 末尾：可能后续还有点组成 '...'，等待更多 delta
+                    if (i + 1 >= text.length) return null
+                }
+                if (ch == '…') {
+                    i++
+                    continue
+                }
+                // 消费本标点 + 紧随其后的连续句末标点（如 ?!、！！、。！）
+                var end = i + 1
+                while (end < text.length) {
+                    val nc = text[end]
+                    if (nc == '…') break
+                    if (nc == '.') {
+                        // 连续点视为省略号，停止合并
+                        if (end + 1 < text.length && text[end + 1] == '.') break
+                    }
+                    if (!isSentenceEnder(nc)) break
+                    end++
+                }
+                val seg = text.subSequence(0, end).toString().trim()
+                // 仅含句末标点 / 空白的片段不发出（如行首"。。。"）
+                val hasContent = seg.any { c -> !c.isWhitespace() && !isSentenceEnder(c) }
+                return Segment(text = seg, consumeEnd = end, emit = hasContent)
             } else {
                 i++
             }
         }
-        // 未闭合的代码块：从开始标记到 buffer 末尾都受保护
-        if (codeBlockStart >= 0) {
-            ranges.add(Pair(codeBlockStart, text.length))
-        }
-
-        // 2. 未闭合括号保护
-        // 如果有未闭合的括号，整个 buffer 受保护（无法确定切分点是否在括号内）
-        val bracketDepth = countUnclosedBrackets(text)
-        if (bracketDepth > 0) {
-            ranges.add(Pair(0, text.length))
-        }
-
-        return ranges
+        return null
     }
 
     /**
-     * 统计未闭合的括号深度。
-     * 支持：()（）[]【】{}<>
+     * 从 buffer 头部移除 [consumeEnd] 长度，并 trim 前导空白。
      */
-    private fun countUnclosedBrackets(text: String): Int {
-        var depth = 0
-        for (ch in text) {
-            when (ch) {
-                '(', '（', '[', '【', '{', '<' -> depth++
-                ')', '）', ']', '】', '}', '>' -> depth = (depth - 1).coerceAtLeast(0)
-            }
+    private fun consumeFromBuffer(consumeEnd: Int) {
+        buffer.delete(0, consumeEnd)
+        // 移除前导空白，避免下一条消息开头出现空行
+        var trimLen = 0
+        while (trimLen < buffer.length && buffer[trimLen].isWhitespace()) {
+            trimLen++
         }
-        return depth
+        if (trimLen > 0) buffer.delete(0, trimLen)
     }
 
     /**
-     * 在保护区域之外寻找目标字符串的最后一个出现位置。
+     * 寻找 [openIdx] 处开括号匹配的闭括号索引（支持同类型嵌套）。
+     * @return 闭括号索引，未闭合返回 -1
      */
-    private fun findLastUnprotectedIndex(target: String, protectedRanges: List<Pair<Int, Int>>): Int {
-        val text = buffer.toString()
-        var searchFrom = 0
-        var lastFound = -1
-        while (true) {
-            val idx = text.indexOf(target, searchFrom)
-            if (idx < 0) break
-            val isProtected = protectedRanges.any { (start, end) ->
-                idx >= start && idx < end
+    private fun findMatchingCloseBracket(text: CharSequence, openIdx: Int): Int {
+        val open = text[openIdx]
+        val close = matchingClose(open) ?: return -1
+        var depth = 1
+        var i = openIdx + 1
+        while (i < text.length) {
+            val c = text[i]
+            if (c == open) {
+                depth++
+            } else if (c == close) {
+                depth--
+                if (depth == 0) return i
             }
-            if (!isProtected) {
-                lastFound = idx
-            }
-            searchFrom = idx + target.length
+            i++
         }
-        return lastFound
+        return -1
     }
 
-    /**
-     * 寻找最后一个不受保护的句末标点位置。
-     * 句末标点：。！？.!?（后跟换行、空格或字符串末尾时才算句末）
-     */
-    private fun findLastSentenceEnd(protectedRanges: List<Pair<Int, Int>>): Int {
-        val text = buffer.toString()
-        val sentenceEnds = charArrayOf('。', '！', '？', '.', '!', '?')
-        var lastFound = -1
-        for (i in text.indices) {
-            if (text[i] in sentenceEnds) {
-                val isProtected = protectedRanges.any { (start, end) ->
-                    i >= start && i < end
-                }
-                if (!isProtected) {
-                    val afterIdx = i + 1
-                    if (afterIdx >= text.length || text[afterIdx] == '\n' || text[afterIdx] == ' ' || text[afterIdx] == '　') {
-                        lastFound = i
-                    }
-                }
-            }
+    /** 句末标点：。！？.!?（省略号 … 与连续点另行处理）。 */
+    private fun isSentenceEnder(ch: Char): Boolean = when (ch) {
+        '。', '！', '？', '.', '!', '?' -> true
+        else -> false
+    }
+
+    /** 若为开括号，返回对应的闭括号；否则返回 null。 */
+    private fun matchingClose(ch: Char): Char? = when (ch) {
+        '(' -> ')'
+        '（' -> '）'
+        '[' -> ']'
+        '【' -> '】'
+        '{' -> '}'
+        '<' -> '>'
+        else -> null
+    }
+
+    /** 若为闭括号，返回对应的开括号；否则返回 null。 */
+    private fun matchingOpen(ch: Char): Char? = when (ch) {
+        ')' -> '('
+        '）' -> '（'
+        ']' -> '['
+        '】' -> '【'
+        '}' -> '{'
+        '>' -> '<'
+        else -> null
+    }
+
+    /** 从 [start] 起连续等于 [ch] 的字符数。 */
+    private fun countConsecutive(text: CharSequence, start: Int, ch: Char): Int {
+        var n = 0
+        var i = start
+        while (i < text.length && text[i] == ch) {
+            n++
+            i++
         }
-        return lastFound
+        return n
     }
 
     // ==================== 内部 ====================
+
+    private fun hardCharLimit(): Long {
+        return (singleMessageTokens.toLong() * HARD_LIMIT_MULTIPLIER * CHARS_PER_TOKEN)
+            .coerceAtMost(MAX_HARD_LIMIT_CHARS.toLong())
+    }
 
     private fun buildCurrentId(): String = "${conversationId}_${runId}_ai_$currentIndex"
 
@@ -437,8 +373,5 @@ class MessageStreamCoordinator(
         const val HARD_LIMIT_MULTIPLIER = QuiddityConstants.SPLITTER_HARD_LIMIT_MULTIPLIER
         const val CHARS_PER_TOKEN = QuiddityConstants.SPLITTER_CHARS_PER_TOKEN
         const val MAX_HARD_LIMIT_CHARS = QuiddityConstants.SPLITTER_MAX_HARD_LIMIT_CHARS
-
-        // 切分后尾部内容过短时合并到前一条消息的阈值（字符数）
-        const val MIN_TAIL_MERGE_CHARS = 10
     }
 }

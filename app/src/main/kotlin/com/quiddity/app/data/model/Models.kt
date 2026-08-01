@@ -270,7 +270,21 @@ data class AppSettings(
      * - 范围 [QuiddityConstants.MIN_SEND_DELAY_SECONDS] - [QuiddityConstants.MAX_SEND_DELAY_SECONDS]
      * - 默认 [QuiddityConstants.DEFAULT_SEND_DELAY_SECONDS]（3秒）
      */
-    val sendDelaySeconds: Int = QuiddityConstants.DEFAULT_SEND_DELAY_SECONDS
+    val sendDelaySeconds: Int = QuiddityConstants.DEFAULT_SEND_DELAY_SECONDS,
+    /**
+     * 是否跟随系统字体大小。
+     * - true = 使用系统字号（用户在系统设置里调整的 fontScale）
+     * - false = 强制应用内字号（[fontScale]），不受系统字号影响（默认）
+     * - 默认 false：与"整体强制默认字体"约束一致
+     */
+    val followSystemFont: Boolean = false,
+    /**
+     * 应用内字体缩放系数（仅在 [followSystemFont]=false 时生效）。
+     * - 1.0 = 设计稿原尺寸
+     * - 范围 [QuiddityConstants.MIN_FONT_SCALE] - [QuiddityConstants.MAX_FONT_SCALE]
+     * - 默认 [QuiddityConstants.DEFAULT_FONT_SCALE]
+     */
+    val fontScale: Float = QuiddityConstants.DEFAULT_FONT_SCALE
 ) {
     companion object {
         val Default = AppSettings()

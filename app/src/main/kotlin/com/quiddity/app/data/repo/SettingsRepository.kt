@@ -145,6 +145,19 @@ class SettingsRepository(private val store: SettingsStore) {
         )
     }
 
+    suspend fun setFollowSystemFont(enabled: Boolean) = update {
+        it.copy(followSystemFont = enabled)
+    }
+
+    suspend fun setFontScale(value: Float) = update {
+        it.copy(
+            fontScale = value.coerceIn(
+                com.quiddity.app.util.QuiddityConstants.MIN_FONT_SCALE,
+                com.quiddity.app.util.QuiddityConstants.MAX_FONT_SCALE
+            )
+        )
+    }
+
     suspend fun upsertCatalog(entry: ApiCatalogEntry) = update { s ->
         val list = s.catalog.filterNot { it.id == entry.id } + entry
         s.copy(catalog = list, activeCatalogId = s.activeCatalogId ?: entry.id)

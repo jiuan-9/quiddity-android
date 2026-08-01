@@ -527,12 +527,15 @@ class ChatViewModel(
     fun updatePersona(persona: Persona, compileEnabled: Boolean) {
         val conv = conversation.value ?: return
         viewModelScope.launch {
-            // 如果会话名还是默认的"新会话"，且人设名不为空，则自动将会话名改为人设名
-            val newTitle = if (conv.title == QuiddityConstants.DEFAULT_CONVERSATION_TITLE && persona.name.isNotBlank()) {
-                persona.name
-            } else {
-                conv.title
-            }
+            // 头部名字框同步规则：标题跟随人设名，除非用户已手动重命名过。
+            // - 标题仍是默认"新会话" → 同步为新名
+            // - 标题当前等于旧人设名（之前自动同步过）→ 跟随更新为新名
+            // - 用户已手动重命名（标题 != 默认 且 != 旧人设名）→ 尊重用户选择，不覆盖
+            val newTitle = syncTitleWithPersonaName(
+                currentTitle = conv.title,
+                oldPersonaName = conv.persona.name,
+                newPersonaName = persona.name
+            )
             // 人设字段是否已变更（除 compiledPersona 和 aiAvatarUri 外）
             val personaChanged = hasUserEditableFieldsChanged(conv.persona, persona)
             // 已变更 → 清空 compiledPersona 缓存（与 updatePersona 解耦）
@@ -549,6 +552,35 @@ class ChatViewModel(
                     compileEnabled = compileEnabled
                 )
             )
+        }
+    }
+
+    /**
+     * 计算头部名字框（会话标题）与人设名的同步结果。
+     *
+     * 系统性修复"会话内头部名字不随人设名设置而改变"的问题：
+     * 旧实现仅在标题为默认"新会话"时同步，首次同步后标题已变为人设名，
+     * 后续再改人设名时因标题 != 默认值而不再同步，导致头部名字框停留在旧名。
+     *
+     * 现规则：只要标题当前等于旧人设名（即此前由自动同步产生）或仍是默认值，
+     * 就跟随新名更新；若用户曾手动重命名（标题与旧人设名、默认值都不一致）则保留用户命名。
+     *
+     * @param currentTitle 当前会话标题
+     * @param oldPersonaName 修改前的 AI 人设名
+     * @param newPersonaName 修改后的 AI 人设名
+     * @return 应写入的标题
+     */
+    private fun syncTitleWithPersonaName(
+        currentTitle: String,
+        oldPersonaName: String,
+        newPersonaName: String
+    ): String {
+        // 新名为空：保持原标题（不因清空名字而清空标题）
+        if (newPersonaName.isBlank()) return currentTitle
+        return when (currentTitle) {
+            QuiddityConstants.DEFAULT_CONVERSATION_TITLE -> newPersonaName
+            oldPersonaName -> newPersonaName
+            else -> currentTitle
         }
     }
 
@@ -643,11 +675,11 @@ class ChatViewModel(
         _isCompiling.value = true
         try {
             // 先把最新 persona 写入会话，确保 repository 读到的是最新字段
-            val newTitle = if (conv.title == QuiddityConstants.DEFAULT_CONVERSATION_TITLE && persona.name.isNotBlank()) {
-                persona.name
-            } else {
-                conv.title
-            }
+            val newTitle = syncTitleWithPersonaName(
+                currentTitle = conv.title,
+                oldPersonaName = conv.persona.name,
+                newPersonaName = persona.name
+            )
             val updatedConv = conv.copy(persona = persona, title = newTitle)
             conversationRepository.updateConversation(updatedConv)
             // 调用 AI 编译，传入 token 上限约束
@@ -697,13 +729,11 @@ class ChatViewModel(
         val conv = conversation.value ?: return
         val result = com.quiddity.app.domain.QuickSetupPrompt
             .parseQuickSetupResult(rawText, tier)
-        val newTitle = if (conv.title == QuiddityConstants.DEFAULT_CONVERSATION_TITLE &&
-            result.persona.name.isNotBlank()
-        ) {
-            result.persona.name
-        } else {
-            conv.title
-        }
+        val newTitle = syncTitleWithPersonaName(
+            currentTitle = conv.title,
+            oldPersonaName = conv.persona.name,
+            newPersonaName = result.persona.name
+        )
         // 构造提示气泡内容：世界类型（世界背景前4个字）+ 当前场景
         val worldType = result.persona.worldBackground.take(4)
         val noticeContent = buildNoticeContent(worldType, result.scene)

@@ -146,7 +146,11 @@ object QuiddityConstants {
     const val MIN_MEMORY_BANK_ROUNDS = 5
     const val MAX_MEMORY_BANK_ROUNDS = 200
 
-    // ===== 多消息分割标记 =====
-    /** AI 在回复中使用此标记分割多条消息（系统提示词中告知 AI）。 */
-    const val MESSAGE_SPLIT_MARKER = "⫟⫟⫟"
+    // ===== 字体大小 =====
+    /** 应用内字体缩放默认值（1.0 = 设计稿原尺寸，强制默认字体不受系统字号影响）。 */
+    const val DEFAULT_FONT_SCALE = 1.0f
+    /** 应用内字体缩放下界（小字号）。 */
+    const val MIN_FONT_SCALE = 0.8f
+    /** 应用内字体缩放上界（大字号）。 */
+    const val MAX_FONT_SCALE = 1.4f
 }

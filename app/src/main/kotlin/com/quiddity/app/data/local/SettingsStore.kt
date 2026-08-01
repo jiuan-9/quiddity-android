@@ -98,6 +98,8 @@ class SettingsStore(private val context: Context) {
         val TYPING_DELAY_MS_PER_CHAR = intPreferencesKey("typing_delay_ms_per_char")
         val SEND_DELAY_ENABLED = booleanPreferencesKey("send_delay_enabled")
         val SEND_DELAY_SECONDS = intPreferencesKey("send_delay_seconds")
+        val FOLLOW_SYSTEM_FONT = booleanPreferencesKey("follow_system_font")
+        val FONT_SCALE = floatPreferencesKey("font_scale")
     }
 
     /** 从 Preferences 还原 [AppSettings]，缺省值统一来自 [AppSettings.Default]。 */
@@ -119,7 +121,9 @@ class SettingsStore(private val context: Context) {
             typingDelayEnabled = this[Keys.TYPING_DELAY_ENABLED] ?: d.typingDelayEnabled,
             typingDelayMsPerChar = this[Keys.TYPING_DELAY_MS_PER_CHAR] ?: d.typingDelayMsPerChar,
             sendDelayEnabled = this[Keys.SEND_DELAY_ENABLED] ?: d.sendDelayEnabled,
-            sendDelaySeconds = this[Keys.SEND_DELAY_SECONDS] ?: d.sendDelaySeconds
+            sendDelaySeconds = this[Keys.SEND_DELAY_SECONDS] ?: d.sendDelaySeconds,
+            followSystemFont = this[Keys.FOLLOW_SYSTEM_FONT] ?: d.followSystemFont,
+            fontScale = this[Keys.FONT_SCALE] ?: d.fontScale
         )
     }
 
@@ -146,6 +150,8 @@ class SettingsStore(private val context: Context) {
             prefs[Keys.TYPING_DELAY_MS_PER_CHAR] = next.typingDelayMsPerChar
             prefs[Keys.SEND_DELAY_ENABLED] = next.sendDelayEnabled
             prefs[Keys.SEND_DELAY_SECONDS] = next.sendDelaySeconds
+            prefs[Keys.FOLLOW_SYSTEM_FONT] = next.followSystemFont
+            prefs[Keys.FONT_SCALE] = next.fontScale
             // JSON 序列化失败不应让整个 edit 事务失败；失败时记录到 logcat。
             runCatching {
                 json.encodeToString(

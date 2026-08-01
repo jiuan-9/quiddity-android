@@ -394,7 +394,9 @@ fun ChatScreen(
                         )
                     }
                     Text(
-                        text = conversation?.title ?: "新会话",
+                        text = conversation?.persona?.name?.takeIf { it.isNotBlank() }
+                            ?: conversation?.title
+                            ?: "新会话",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Medium,
                         color = MaterialTheme.colorScheme.onSurface,

@@ -463,7 +463,7 @@ data class SessionTokenStats(
  * 人设卡总字量包括系统给的字量。
  * - 用户填写字量：人设字段（name/persona/character/appearance/worldBackground/desired）
  *   + 用户人设 + 场景 + 记忆
- * - 系统指令字量：段落标题（【你的名字】【身份背景】等）+ 多消息分割指令
+ * - 系统指令字量：段落标题（【你的名字】【身份背景】等）
  * - 总字量 = 用户填写 + 系统指令
  */
 fun calculateStats(
