@@ -295,30 +295,39 @@ object UpdateChecker {
      * 解析最终 APK 直链。
      *
      * 规则：
-     * 1. URL 为空 / 官网首页 → 尝试 GitHub API 解析最新 APK；失败则用 APK_FALLBACK_URLS 中的预置链接
-     * 2. URL 已以 .apk 结尾 → 原样返回
+     * 1. URL 为空 / 相对路径（./ ../ /） / 官网首页 → 回退到 GitHub API 解析最新 APK 直链；
+     *    失败则用 APK_FALLBACK_URLS 中的预置链接
+     * 2. URL 已以 .apk 结尾且是合法 HTTP(S) 链接 → 原样返回
      * 3. URL 指向 GitHub Releases 页面（HTML）→ 调用 GitHub Releases API 解析出
      *    最新 Release 中第一个 .apk 资产的 browser_download_url
      * 4. 其他 URL → 原样返回（不保证是 APK 链接；调用方视情况使用或兜底）
+     *
+     * 关键修复：相对路径（如 ./downloads/quiddity-1.1.1.apk）不是合法 HTTP URL，
+     * DownloadManager 无法解析，必须回退到预置绝对链接。
      *
      * @return APK 直链；解析失败返回 null
      */
     suspend fun resolveApkUrl(rawUrl: String): String? = withContext(Dispatchers.IO) {
         val url = rawUrl.trim()
+
         if (url.isBlank() ||
+            url.startsWith("./") || url.startsWith("../") || url.startsWith("/") ||
             url.equals(WEBSITE_URL, ignoreCase = true) ||
             url.equals("https://quiddity-3by.pages.dev/", ignoreCase = true)
         ) {
-            return@withContext resolveApkFromGitHubApi()
-                ?: APK_FALLBACK_URLS.firstOrNull()
+            return@withContext APK_FALLBACK_URLS.firstOrNull()
+                ?: resolveApkFromGitHubApi()
         }
 
-        if (url.endsWith(".apk", ignoreCase = true)) return@withContext url
+        if (url.endsWith(".apk", ignoreCase = true) && url.startsWith("http", ignoreCase = true)) {
+            return@withContext url
+        }
 
         if (!isGitHubReleasesUrl(url)) return@withContext url
 
         val (owner, repo) = parseGitHubOwnerRepo(url) ?: return@withContext null
-        fetchLatestApkFromGitHub(owner, repo) ?: APK_FALLBACK_URLS.firstOrNull()
+        APK_FALLBACK_URLS.firstOrNull()
+            ?: fetchLatestApkFromGitHub(owner, repo)
     }
 
     /**
@@ -507,6 +516,8 @@ object UpdateChecker {
      * - 新实现统一通过 FileProvider.getUriForFile() 包装本地文件，
      *   并通过 Intent.FLAG_GRANT_READ_URI_PERMISSION 授权给目标 Activity。
      * - 同时不再调用无效的 grantUriPermission（自己给自己授权毫无意义）。
+     * - 路径解析：优先用 COLUMN_LOCAL_URI（未废弃，返回 content:// URI），
+     *   再按已知下载路径直接构造 File 对象兜底，最后全局扫描。
      *
      * @return true=已成功发起安装 Intent；false=失败（无 APK / 无法解析文件）
      */
@@ -539,24 +550,63 @@ object UpdateChecker {
 
     /**
      * 解析已下载的 APK 本地文件路径。
-     * 优先级：先查 COLUMN_LOCAL_FILENAME，再查自定义目标目录，再查 Downloads 公共目录。
+     *
+     * 优先级：
+     * 1. COLUMN_LOCAL_URI（API 11+ 可用，未废弃）→ 解析 content:// URI 为 File
+     * 2. COLUMN_LOCAL_FILENAME（API 29+ 废弃，部分 ROM 返回 null）→ 直接构造 File
+     * 3. 已知下载路径兜底：getExternalFilesDir(null) + quiddity-*.apk
+     * 4. 全局扫描：cacheDir + 公共 Downloads 目录
      */
     private fun resolveLocalApkFile(context: Context, downloadId: Long): File? {
         val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-        val localFilename: String? = try {
+        try {
             dm.query(DownloadManager.Query().setFilterById(downloadId)).use { cursor ->
                 if (cursor != null && cursor.moveToFirst()) {
-                    val idx = cursor.getColumnIndex(DownloadManager.COLUMN_LOCAL_FILENAME)
-                    if (idx >= 0) cursor.getString(idx) else null
-                } else null
+                    // 方法 1: COLUMN_LOCAL_URI（未废弃，返回 content:// URI）
+                    val localUriIdx = cursor.getColumnIndex(DownloadManager.COLUMN_LOCAL_URI)
+                    if (localUriIdx >= 0) {
+                        val uriStr = cursor.getString(localUriIdx)
+                        if (!uriStr.isNullOrBlank()) {
+                            val uri = Uri.parse(uriStr)
+                            if (uri.scheme == "file") {
+                                val f = File(uri.path ?: "")
+                                if (f.exists() && f.length() > 0) return f
+                            }
+                        }
+                    }
+
+                    // 方法 2: COLUMN_LOCAL_FILENAME（API 29+ 废弃，但部分 ROM 仍返回）
+                    val localFnIdx = cursor.getColumnIndex(DownloadManager.COLUMN_LOCAL_FILENAME)
+                    if (localFnIdx >= 0) {
+                        val fn = cursor.getString(localFnIdx)
+                        if (!fn.isNullOrBlank()) {
+                            val f = File(fn)
+                            if (f.exists() && f.length() > 0) return f
+                        }
+                    }
+                }
             }
-        } catch (e: Exception) {
-            null
+        } catch (_: Exception) {
+            // 静默
         }
-        if (!localFilename.isNullOrBlank()) {
-            val f = File(localFilename)
-            if (f.exists() && f.length() > 0) return f
+
+        // 方法 3: 已知下载路径兜底（与 downloadApk 中 setDestinationInExternalFilesDir 一致）
+        try {
+            context.getExternalFilesDir(null)?.let { base ->
+                val candidates = base.listFiles { f ->
+                    f.isFile && f.name.startsWith("quiddity-", true) && f.name.endsWith(".apk", true)
+                }
+                if (candidates != null) {
+                    candidates.filter { it.length() > 0 }
+                        .maxByOrNull { it.lastModified() }
+                        ?.let { return it }
+                }
+            }
+        } catch (_: Exception) {
+            // 静默
         }
+
+        // 方法 4: 全局扫描
         return findApkInTargetDirs(context)
     }
 
