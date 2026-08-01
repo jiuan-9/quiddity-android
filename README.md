@@ -29,9 +29,9 @@ Quiddity Android 是 Quiddity 移动端的独立产品（与 Quiddity-Chat、Qui
 
 ## 下载
 
-前往官网 [https://quiddity-3by.pages.dev/](https://quiddity-3by.pages.dev/) 下载最新版本（v1.0.3，约 2.77 MB）。
+前往官网 [https://quiddity-3by.pages.dev/](https://quiddity-3by.pages.dev/) 下载最新版本（v1.1.0，约 2.77 MB）。
 
-或直接下载：[`quiddity-1.0.3.apk`](https://github.com/jiuan-9/Quiddity-website/releases/download/v1.0.3/quiddity-1.0.3.apk)
+或直接下载：[`quiddity-1.1.0.apk`](https://github.com/jiuan-9/Quiddity-website/releases/download/v1.1.0/quiddity-1.1.0.apk)
 
 ## 系统要求
 
@@ -247,7 +247,7 @@ keyPassword=xxx
 - [x] 1.0.1：版本号递增（versionCode 1 → 2），重新签名发布
 - [x] 1.0.2：版本号递增（versionCode 2 → 3），重新签名发布
 - [x] 1.0.3：版本号递增（versionCode 3 → 4），重写 UpdateChecker（DownloadManager + FileProvider），修复应用内更新下载
-- [ ] 1.1.0：联网搜索（RAG）
+- [x] 1.1.0：联网搜索（RAG），版本号递增（versionCode 4 → 5），AI 可实时联网检索 + 来源列表 + 手动/自动模式 + 搜索范围控制 + 缓存去重
 - [ ] 1.2.0：语音输入 / TTS 输出
 - [ ] 1.3.0：图片生成（多模态输出）
 - [ ] 1.4.0：插件系统
