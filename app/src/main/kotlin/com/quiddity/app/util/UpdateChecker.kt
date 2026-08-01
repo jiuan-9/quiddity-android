@@ -44,7 +44,7 @@ import java.util.concurrent.TimeUnit
  *    - 签名有效且符合发布标准
  *    - 包含完整的功能模块
  *    - 经过基础性能测试和兼容性测试
- *    以便在真实设备环境中进行功能验证和性能评估。
+ *    - 以便在真实设备环境中进行功能验证和性能评估。
  *
  * ============================================================================
  */
@@ -67,10 +67,17 @@ import java.util.concurrent.TimeUnit
 object UpdateChecker {
 
     /**
-     * 网站版本信息 URL。
+     * 版本信息源 URL 列表（按优先级排序）。
+     *
+     * 关键设计：国内访问 raw.githubusercontent.com 经常超时 / 被墙，
+     * 必须把 Cloudflare Pages 放在第一位，GitHub 源作为兜底。
+     * 任一源成功即返回，失败才尝试下一个。
      */
-    private const val VERSION_CHECK_URL =
-        "https://raw.githubusercontent.com/jiuan-9/quiddity-website/main/public/version.json"
+    private val VERSION_CHECK_URLS: List<String> = listOf(
+        "https://quiddity-3by.pages.dev/version.json",
+        "https://jiuan-9.github.io/Quiddity-website/version.json",
+        "https://raw.githubusercontent.com/jiuan-9/Quiddity-website/main/public/version.json"
+    )
 
     /**
      * 官网下载页面 URL（首页）。
@@ -81,18 +88,28 @@ object UpdateChecker {
      * GitHub Releases 兜底 URL。
      */
     private const val GITHUB_RELEASES_URL =
-        "https://github.com/jiuan-9/quiddity-website/releases/latest"
+        "https://github.com/jiuan-9/Quiddity-website/releases/latest"
+
+    /**
+     * GitHub Releases API 兜底 URL（解析出 APK 直链，国内可通过镜像访问）。
+     */
+    private const val GITHUB_API_LATEST =
+        "https://api.github.com/repos/jiuan-9/Quiddity-website/releases/latest"
+
+    /**
+     * APK 备用直链（直接给出的 GitHub Releases APK URL，
+     * 当 version.json 中的 downloadUrl 不可用时的最终兜底）。
+     */
+    private val APK_FALLBACK_URLS: List<String> = listOf(
+        "https://quiddity-3by.pages.dev/downloads/quiddity-1.1.0.apk",
+        "https://github.com/jiuan-9/Quiddity-website/releases/download/v1.1.0/quiddity-1.1.0.apk"
+    )
 
     /**
      * SharedPreferences 存储键：已忽略的版本号。
      */
     private const val PREFS_NAME = "update_check_prefs"
     private const val KEY_DISMISSED_VERSION = "dismissed_version"
-
-    /**
-     * APK 下载子目录（应用 cache 内），用于 FileProvider 暴露给系统安装器。
-     */
-    private const val APK_DOWNLOAD_SUBDIR = "apk_update"
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -101,8 +118,10 @@ object UpdateChecker {
 
     private val httpClient by lazy {
         OkHttpClient.Builder()
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(15, TimeUnit.SECONDS)
+            .connectTimeout(8, TimeUnit.SECONDS)
+            .readTimeout(12, TimeUnit.SECONDS)
+            .callTimeout(20, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
             .build()
     }
 
@@ -173,20 +192,10 @@ object UpdateChecker {
         try {
             val currentVersion = getCurrentVersion(context)
 
-            val url = "$VERSION_CHECK_URL?t=${System.currentTimeMillis()}"
-            val request = Request.Builder().url(url).get().build()
+            val remoteInfo = fetchRemoteVersionInfo()
+                ?: return@withContext Result.Error("所有版本源均不可达")
 
-            val response = httpClient.newCall(request).execute()
-            if (!response.isSuccessful) {
-                return@withContext Result.Error("服务器返回 ${response.code}")
-            }
-
-            val body = response.body?.string()
-                ?: return@withContext Result.Error("服务器返回空内容")
-
-            val remoteInfo = json.decodeFromString(RemoteVersionInfo.serializer(), body)
             val remoteVersion = remoteInfo.effectiveAndroidVersion
-
             if (remoteVersion.isBlank()) {
                 return@withContext Result.Error("版本信息格式错误")
             }
@@ -215,6 +224,40 @@ object UpdateChecker {
         }
     }
 
+    /**
+     * 多源拉取版本信息，命中任一源即返回。
+     * 关键：每次请求都附加 ?t=<timestamp> 绕过 CDN 缓存。
+     */
+    private fun fetchRemoteVersionInfo(): RemoteVersionInfo? {
+        val ts = System.currentTimeMillis()
+        for (baseUrl in VERSION_CHECK_URLS) {
+            try {
+                val url = "$baseUrl?t=$ts"
+                val request = Request.Builder()
+                    .url(url)
+                    .header("Cache-Control", "no-cache")
+                    .header("Pragma", "no-cache")
+                    .get()
+                    .build()
+                val response = httpClient.newCall(request).execute()
+                if (!response.isSuccessful) {
+                    response.close()
+                    continue
+                }
+                val body = response.body?.string()
+                response.close()
+                if (body.isNullOrBlank()) continue
+                val info = json.decodeFromString(RemoteVersionInfo.serializer(), body)
+                if (info.effectiveAndroidVersion.isNotBlank()) {
+                    return info
+                }
+            } catch (_: Exception) {
+                // 静默失败，继续尝试下一个源
+            }
+        }
+        return null
+    }
+
     fun dismissVersion(context: Context, version: String) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit().putString(KEY_DISMISSED_VERSION, version).apply()
@@ -236,6 +279,7 @@ object UpdateChecker {
             val finalUrl = when {
                 url.isBlank() -> GITHUB_RELEASES_URL
                 url.equals(WEBSITE_URL, ignoreCase = true) -> GITHUB_RELEASES_URL
+                url.equals("https://quiddity-3by.pages.dev/", ignoreCase = true) -> GITHUB_RELEASES_URL
                 else -> url
             }
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse(finalUrl)).apply {
@@ -251,7 +295,7 @@ object UpdateChecker {
      * 解析最终 APK 直链。
      *
      * 规则：
-     * 1. URL 为空 / 官网首页 → 返回 null（调用方走 openDownloadPage 兜底）
+     * 1. URL 为空 / 官网首页 → 尝试 GitHub API 解析最新 APK；失败则用 APK_FALLBACK_URLS 中的预置链接
      * 2. URL 已以 .apk 结尾 → 原样返回
      * 3. URL 指向 GitHub Releases 页面（HTML）→ 调用 GitHub Releases API 解析出
      *    最新 Release 中第一个 .apk 资产的 browser_download_url
@@ -261,14 +305,20 @@ object UpdateChecker {
      */
     suspend fun resolveApkUrl(rawUrl: String): String? = withContext(Dispatchers.IO) {
         val url = rawUrl.trim()
-        if (url.isBlank() || url.equals(WEBSITE_URL, ignoreCase = true)) return@withContext null
+        if (url.isBlank() ||
+            url.equals(WEBSITE_URL, ignoreCase = true) ||
+            url.equals("https://quiddity-3by.pages.dev/", ignoreCase = true)
+        ) {
+            return@withContext resolveApkFromGitHubApi()
+                ?: APK_FALLBACK_URLS.firstOrNull()
+        }
 
         if (url.endsWith(".apk", ignoreCase = true)) return@withContext url
 
         if (!isGitHubReleasesUrl(url)) return@withContext url
 
         val (owner, repo) = parseGitHubOwnerRepo(url) ?: return@withContext null
-        fetchLatestApkFromGitHub(owner, repo)
+        fetchLatestApkFromGitHub(owner, repo) ?: APK_FALLBACK_URLS.firstOrNull()
     }
 
     /**
@@ -294,8 +344,13 @@ object UpdateChecker {
     }
 
     /**
-     * 通过 GitHub Releases API 拉取最新 Release 的第一个 .apk 资产直链。
+     * 通过 GitHub Releases API 拉取默认仓库最新 Release 的第一个 .apk 资产直链。
      */
+    private fun resolveApkFromGitHubApi(): String? {
+        val (owner, repo) = parseGitHubOwnerRepo(GITHUB_RELEASES_URL) ?: return null
+        return fetchLatestApkFromGitHub(owner, repo)
+    }
+
     @Serializable
     private data class GitHubAsset(
         val name: String = "",
@@ -315,6 +370,7 @@ object UpdateChecker {
             val request = Request.Builder()
                 .url(apiUrl)
                 .header("Accept", "application/vnd.github+json")
+                .header("User-Agent", "Quiddity-Android")
                 .get()
                 .build()
             val response = httpClient.newCall(request).execute()
@@ -333,8 +389,11 @@ object UpdateChecker {
     /**
      * 启动系统 DownloadManager 下载 APK。
      *
-     * 文件落地：context.cacheDir/apk_update/<filename>
-     * 该路径在 file_paths.xml 中已通过 cache-path 暴露给 FileProvider。
+     * 落地策略：
+     * - 使用 setDestinationInExternalFilesDir(context, null, fileName)：
+     *   落地到 context.getExternalFilesDir(null)/<fileName> = Android/data/<package>/files/<fileName>
+     *   这是 app-private 目录，不受 Scoped Storage 影响，所有 ROM 上都稳定。
+     * - 该路径在 file_paths.xml 中已通过 <external-files-path> 暴露给 FileProvider。
      *
      * @return DownloadManager 分配的 downloadId；参数异常返回 -1
      */
@@ -353,7 +412,7 @@ object UpdateChecker {
                 .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                 .setAllowedOverMetered(true)
                 .setAllowedOverRoaming(true)
-                .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, fileName)
+                .setDestinationInExternalFilesDir(context, null, fileName)
             val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
             dm.enqueue(request)
         } catch (e: Exception) {
@@ -442,50 +501,87 @@ object UpdateChecker {
     /**
      * 触发 APK 安装。
      *
-     * 优先通过 FileProvider 暴露 content:// URI（Android 7.0+ 强制要求）；
-     * 失败时回退到 file:// URI（仅 Android < 7.0 或 FileProvider 未配置时）。
+     * 关键修复（v1.1.1）：
+     * - 旧实现使用 DownloadManager.getUriForDownloadedFile() 返回的 content:// URI
+     *   直接安装，会因 DownloadsProvider 不对外授权导致部分 ROM 安装器读不到。
+     * - 新实现统一通过 FileProvider.getUriForFile() 包装本地文件，
+     *   并通过 Intent.FLAG_GRANT_READ_URI_PERMISSION 授权给目标 Activity。
+     * - 同时不再调用无效的 grantUriPermission（自己给自己授权毫无意义）。
      *
      * @return true=已成功发起安装 Intent；false=失败（无 APK / 无法解析文件）
      */
     fun installApk(context: Context, downloadId: Long): Boolean {
-        val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-        val apkUri: Uri = try {
-            // 优先尝试 DownloadManager.getUriForDownloadedFile（Android 8.0+）
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                val uri = dm.getUriForDownloadedFile(downloadId)
-                if (uri != null && uri.toString().isNotBlank()) uri
-                else getApkUriFromLocalPath(context, downloadId) ?: return false
-            } else {
-                getApkUriFromLocalPath(context, downloadId) ?: return false
-            }
-        } catch (e: Exception) {
-            getApkUriFromLocalPath(context, downloadId) ?: return false
-        }
+        val localFile: File = resolveLocalApkFile(context, downloadId) ?: return false
 
-        val grantUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            try {
-                context.grantUriPermission(
-                    context.packageName,
-                    apkUri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION
-                )
-                true
-            } catch (e: Exception) {
-                false
-            }
-        } else true
+        val apkUri: Uri = try {
+            FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                localFile
+            )
+        } catch (e: Exception) {
+            return false
+        }
 
         val intent = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(apkUri, "application/vnd.android.package-archive")
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
+
         return try {
             context.startActivity(intent)
             true
         } catch (e: Exception) {
             false
         }
+    }
+
+    /**
+     * 解析已下载的 APK 本地文件路径。
+     * 优先级：先查 COLUMN_LOCAL_FILENAME，再查自定义目标目录，再查 Downloads 公共目录。
+     */
+    private fun resolveLocalApkFile(context: Context, downloadId: Long): File? {
+        val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+        val localFilename: String? = try {
+            dm.query(DownloadManager.Query().setFilterById(downloadId)).use { cursor ->
+                if (cursor != null && cursor.moveToFirst()) {
+                    val idx = cursor.getColumnIndex(DownloadManager.COLUMN_LOCAL_FILENAME)
+                    if (idx >= 0) cursor.getString(idx) else null
+                } else null
+            }
+        } catch (e: Exception) {
+            null
+        }
+        if (!localFilename.isNullOrBlank()) {
+            val f = File(localFilename)
+            if (f.exists() && f.length() > 0) return f
+        }
+        return findApkInTargetDirs(context)
+    }
+
+    /**
+     * 在预设下载目录中查找最新的 quiddity .apk 文件
+     * （防止 DownloadManager 路径解析异常时找不到 APK）。
+     */
+    private fun findApkInTargetDirs(context: Context): File? {
+        val candidates = mutableListOf<File>()
+        try {
+            context.getExternalFilesDir(null)?.let { base ->
+                candidates += base.listFiles { f -> f.isFile && f.name.startsWith("quiddity-", true) && f.name.endsWith(".apk", true) }?.toList() ?: emptyList()
+            }
+            val cacheDir = context.cacheDir
+            candidates += cacheDir.listFiles { f -> f.isFile && f.name.startsWith("quiddity-", true) && f.name.endsWith(".apk", true) }?.toList() ?: emptyList()
+            val publicDl = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            if (publicDl.exists()) {
+                candidates += publicDl.listFiles { f -> f.isFile && f.name.startsWith("quiddity-", true) && f.name.endsWith(".apk", true) }?.toList() ?: emptyList()
+            }
+        } catch (_: Exception) {
+            // 静默
+        }
+        return candidates
+            .filter { it.length() > 0 }
+            .maxByOrNull { it.lastModified() }
     }
 
     /**
@@ -498,28 +594,6 @@ object UpdateChecker {
             dm.remove(downloadId)
         } catch (_: Exception) {
             // 静默失败
-        }
-    }
-
-    private fun getApkUriFromLocalPath(context: Context, downloadId: Long): Uri? {
-        val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-        val column = DownloadManager.COLUMN_LOCAL_FILENAME
-        return try {
-            dm.query(DownloadManager.Query().setFilterById(downloadId)).use { cursor ->
-                if (cursor == null || !cursor.moveToFirst()) return null
-                val idx = cursor.getColumnIndex(column)
-                if (idx < 0) return null
-                val path = cursor.getString(idx) ?: return null
-                val file = File(path)
-                if (!file.exists()) return null
-                FileProvider.getUriForFile(
-                    context,
-                    "${context.packageName}.fileprovider",
-                    file
-                )
-            }
-        } catch (e: Exception) {
-            null
         }
     }
 
