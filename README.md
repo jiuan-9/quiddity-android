@@ -4,7 +4,7 @@
 >
 > 知所不尽，往复不止 — Know no bounds, repeat no end.
 
-[![Release](https://img.shields.io/badge/release-v1.0.1-blue)](#下载)
+[![Release](https://img.shields.io/badge/release-v1.1.1-blue)](#下载)
 [![Android](https://img.shields.io/badge/Android-8.0%2B-green)](#系统要求)
 [![License](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.0.21-purple)](#技术栈)
@@ -29,9 +29,9 @@ Quiddity Android 是 Quiddity 移动端的独立产品（与 Quiddity-Chat、Qui
 
 ## 下载
 
-前往官网 [https://quiddity-3by.pages.dev/](https://quiddity-3by.pages.dev/) 下载最新版本（v1.1.0，约 2.77 MB）。
+前往官网 [https://quiddity-3by.pages.dev/](https://quiddity-3by.pages.dev/) 下载最新版本（v1.1.1，约 2.77 MB）。
 
-或直接下载：[`quiddity-1.1.0.apk`](https://github.com/jiuan-9/Quiddity-website/releases/download/v1.1.0/quiddity-1.1.0.apk)
+或直接下载：[`quiddity-1.1.1.apk`](https://github.com/jiuan-9/Quiddity-website/releases/download/v1.1.1/quiddity-1.1.1.apk)
 
 ## 系统要求
 
@@ -248,6 +248,7 @@ keyPassword=xxx
 - [x] 1.0.2：版本号递增（versionCode 2 → 3），重新签名发布
 - [x] 1.0.3：版本号递增（versionCode 3 → 4），重写 UpdateChecker（DownloadManager + FileProvider），修复应用内更新下载
 - [x] 1.1.0：联网搜索（RAG），版本号递增（versionCode 4 → 5），AI 可实时联网检索 + 来源列表 + 手动/自动模式 + 搜索范围控制 + 缓存去重
+- [x] 1.1.1：修复部分手机检测更新失败 / 启动下载失败，版本号递增（versionCode 5 → 6），UpdateChecker 多源 fallback + installApk 改用 FileProvider + downloadApk 路径修正
 - [ ] 1.2.0：语音输入 / TTS 输出
 - [ ] 1.3.0：图片生成（多模态输出）
 - [ ] 1.4.0：插件系统

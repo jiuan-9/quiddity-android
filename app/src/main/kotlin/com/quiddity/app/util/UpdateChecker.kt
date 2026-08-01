@@ -101,8 +101,8 @@ object UpdateChecker {
      * 当 version.json 中的 downloadUrl 不可用时的最终兜底）。
      */
     private val APK_FALLBACK_URLS: List<String> = listOf(
-        "https://quiddity-3by.pages.dev/downloads/quiddity-1.1.0.apk",
-        "https://github.com/jiuan-9/Quiddity-website/releases/download/v1.1.0/quiddity-1.1.0.apk"
+        "https://quiddity-3by.pages.dev/downloads/quiddity-1.1.1.apk",
+        "https://github.com/jiuan-9/Quiddity-website/releases/download/v1.1.1/quiddity-1.1.1.apk"
     )
 
     /**
