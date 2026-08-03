@@ -347,6 +347,8 @@ fun WallpaperPanel(
                     }
                 }
                 onWallpaperChanged(null)
+                // 同步重置持久化的暗化值，避免下次换壁纸时滑块显示与实际渲染不一致
+                onDarkenChanged(0f)
                 localDarken = 0f
                 showClearConfirm = false
             },

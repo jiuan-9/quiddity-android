@@ -63,22 +63,6 @@ object CrashLogger {
         runCatching { writeCrash(context, throwable, prefix = "nonfatal_") }
     }
 
-    /** 获取最近一条崩溃日志内容，若无则返回 null。 */
-    fun latestCrash(context: Context): String? {
-        val dir = File(context.filesDir, "crash_logs")
-        val file = dir.listFiles()
-            ?.filter { it.isFile && it.name.endsWith(".txt") }
-            ?.maxByOrNull { it.lastModified() }
-        return file?.readText()
-    }
-
-    /** 获取所有崩溃日志文件。 */
-    fun listCrashes(context: Context): List<File> {
-        val dir = File(context.filesDir, "crash_logs")
-        return dir.listFiles()?.filter { it.isFile && it.name.endsWith(".txt") }
-            ?.sortedByDescending { it.lastModified() } ?: emptyList()
-    }
-
     private fun writeCrash(context: Context, throwable: Throwable, prefix: String = "crash_") {
         val dir = File(context.filesDir, "crash_logs").apply { mkdirs() }
         val timestamp = dateFormat.format(Date())

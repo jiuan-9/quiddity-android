@@ -6,6 +6,11 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.quiddity.app.data.model.ApiCatalogEntry
 import com.quiddity.app.data.model.AppSettings
+import com.quiddity.app.data.model.Character
+import com.quiddity.app.data.model.ConversationBundle
+import com.quiddity.app.data.model.ExportPayload
+import com.quiddity.app.data.model.ImportMode
+import com.quiddity.app.data.repo.CharacterRepository
 import com.quiddity.app.data.repo.ConversationRepository
 import com.quiddity.app.data.repo.SettingsRepository
 import com.quiddity.app.domain.ApiCatalogManager
@@ -45,7 +50,8 @@ import kotlinx.coroutines.launch
 class SettingsViewModel(
     private val settingsRepository: SettingsRepository,
     private val conversationRepository: ConversationRepository,
-    private val apiCatalogManager: ApiCatalogManager
+    private val apiCatalogManager: ApiCatalogManager,
+    private val characterRepository: CharacterRepository
 ) : ViewModel() {
 
     val settings: StateFlow<AppSettings> = settingsRepository.observeSettings()
@@ -139,6 +145,14 @@ class SettingsViewModel(
         settingsRepository.setFollowSystemFont(enabled)
     }
 
+    /**
+     * 主动消息总设置开关（对应算法文档 2.1）。
+     * 仅持久化"已了解该功能"标记；实际生效需在具体会话中单独开启。
+     */
+    fun setProactiveMessageEnabled(enabled: Boolean) = viewModelScope.launch {
+        settingsRepository.setProactiveMessageEnabled(enabled)
+    }
+
     fun setFontScale(value: Float) = viewModelScope.launch {
         settingsRepository.setFontScale(value)
     }
@@ -161,14 +175,25 @@ class SettingsViewModel(
         apiModel: String,
         apiKey: String
     ) = viewModelScope.launch {
-        val entry = apiCatalogManager.buildEntry(
-            id = id,
-            name = name,
-            providerId = providerId,
-            apiUrl = apiUrl,
-            apiModel = apiModel,
-            apiKey = apiKey
-        )
+        // 编辑时未重新输入密钥（表单明文未持久化，进程回收后为空）：保留原密文
+        val existing = id?.let { settingsRepository.getCatalogEntry(it) }
+        val entry = if (apiKey.isBlank() && existing != null) {
+            existing.copy(
+                name = name,
+                providerId = providerId,
+                apiUrl = apiUrl,
+                apiModel = apiModel
+            )
+        } else {
+            apiCatalogManager.buildEntry(
+                id = id,
+                name = name,
+                providerId = providerId,
+                apiUrl = apiUrl,
+                apiModel = apiModel,
+                apiKey = apiKey
+            )
+        }
         settingsRepository.upsertCatalog(entry)
     }
 
@@ -191,18 +216,36 @@ class SettingsViewModel(
     ): Result<String> = apiCatalogManager.testConnection(apiUrl, apiKey, model)
 
     // ===== 数据导出 / 导入 =====
-    suspend fun exportAllPayload(): com.quiddity.app.data.model.ExportPayload {
+    /**
+     * 全量导出（schema v2，2.0.0 数据契约）。
+     *
+     * - 角色库主档：CharacterRepository 当前列表（1.3.0 尚无角色库 UI，通常为空）
+     * - 私聊：Conversation + messages 组装为 privateChats；会话保留 persona 缓存副本，characterId 按现状透传
+     * - 群聊：groupChats 为空（1.3.0 不加入群聊实体）
+     * - 资产节由 DataPorter 导出时读取 Base64 内嵌
+     */
+    suspend fun exportAllPayloadV2(): ExportPayload {
         val s = settingsRepository.currentSnapshot()
         val convs = conversationRepository.exportAllConversations()
-        // 过滤 isNotice 提示气泡：不导出（UI 专用，非对话内容）
         val msgs = conversationRepository.exportAllMessages()
             .mapValues { (_, list) -> list.filterNot { it.isNotice } }
-        return com.quiddity.app.data.model.ExportPayload(
-            schemaVersion = 1,
+        val characters = characterRepository.listCharacters()
+        val privateChats = convs.map { conv ->
+            ConversationBundle(
+                conversation = conv,
+                messages = msgs[conv.id].orEmpty()
+            )
+        }
+        return ExportPayload(
+            schemaVersion = ExportPayload.SCHEMA_VERSION_2,
             exportedAt = System.currentTimeMillis(),
+            appVersion = com.quiddity.app.BuildConfig.VERSION_NAME,
             settings = s,
-            conversations = convs,
-            messages = msgs
+            conversations = emptyList(),
+            messages = emptyMap(),
+            characters = characters,
+            privateChats = privateChats,
+            groupChats = emptyList()
         )
     }
 
@@ -210,23 +253,68 @@ class SettingsViewModel(
      * 导入完整备份数据。
      *
      * @param payload 解析后的导出数据
-     * @param replace true=替换现有数据（删除旧会话后写入），false=合并（按 id 去重追加）
+     * @param mode 导入模式（3.1）：REPLACE=替换 / MERGE=合并 / CHARACTERS_ONLY=仅导入角色库
      */
     suspend fun importAllPayload(
         payload: com.quiddity.app.data.model.ExportPayload,
-        replace: Boolean = false
+        mode: ImportMode = ImportMode.MERGE
     ) {
-        val sanitizedSettings = if (payload.listWallpaper == null) {
+        val hasWallpaperAsset = payload.listWallpaper != null || payload.assets?.listWallpaper != null
+        val sanitizedSettings = if (!hasWallpaperAsset) {
             payload.settings.copy(listWallpaperUri = null)
         } else {
             payload.settings
         }
-        settingsRepository.update { _ -> sanitizedSettings }
-        if (replace) {
-            conversationRepository.replaceAll(payload.conversations, payload.messages)
-        } else {
-            conversationRepository.importAll(payload.conversations, payload.messages)
+        when (mode) {
+            ImportMode.REPLACE -> {
+                settingsRepository.update { _ -> sanitizedSettings }
+            }
+            ImportMode.MERGE -> {
+                // 合并模式：保留本机 UI 偏好（暗色/字体/延迟等），只合并模型配置与缺失的媒体资源，
+                // 避免"合并导入"把用户本机设置整个覆盖掉
+                settingsRepository.update { local ->
+                    mergeSettings(local, sanitizedSettings, hasWallpaperAsset)
+                }
+            }
+            ImportMode.CHARACTERS_ONLY -> Unit
         }
+        conversationRepository.importV2Snapshot(
+            characters = payload.characters,
+            conversations = payload.privateChats.map { it.conversation },
+            messages = payload.privateChats.associate { it.conversation.id to it.messages },
+            mode = mode
+        )
+    }
+
+    /**
+     * 合并导入时的设置合并规则：
+     * - UI 偏好（darkMode / 字体 / 延迟 / 开关）全部保留本机值；
+     * - 模型配置按 id 合并（导入条目优先，与会话合并语义一致）；
+     * - 激活配置：本机已有则保留，否则用导入值；
+     * - 头像 / 列表壁纸：仅当导入文件带对应资产时补入本机缺失项，否则保持本机现状。
+     */
+    private fun mergeSettings(
+        local: AppSettings,
+        incoming: AppSettings,
+        hasWallpaperAsset: Boolean
+    ): AppSettings {
+        val incomingIds = incoming.catalog.map { it.id }.toSet()
+        val mergedCatalog = incoming.catalog + local.catalog.filterNot { it.id in incomingIds }
+        return local.copy(
+            catalog = mergedCatalog,
+            activeCatalogId = local.activeCatalogId ?: incoming.activeCatalogId,
+            userAvatarUri = local.userAvatarUri ?: incoming.userAvatarUri,
+            listWallpaperUri = if (hasWallpaperAsset) {
+                local.listWallpaperUri ?: incoming.listWallpaperUri
+            } else {
+                local.listWallpaperUri
+            },
+            listWallpaperDarken = if (hasWallpaperAsset) {
+                if (local.listWallpaperUri == null) incoming.listWallpaperDarken else local.listWallpaperDarken
+            } else {
+                local.listWallpaperDarken
+            }
+        )
     }
 
     /**
@@ -238,10 +326,16 @@ class SettingsViewModel(
 class SettingsViewModelFactory(
     private val settingsRepository: SettingsRepository,
     private val conversationRepository: ConversationRepository,
-    private val apiCatalogManager: ApiCatalogManager
+    private val apiCatalogManager: ApiCatalogManager,
+    private val characterRepository: CharacterRepository
 ) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
-        return SettingsViewModel(settingsRepository, conversationRepository, apiCatalogManager) as T
+        return SettingsViewModel(
+            settingsRepository,
+            conversationRepository,
+            apiCatalogManager,
+            characterRepository
+        ) as T
     }
 }

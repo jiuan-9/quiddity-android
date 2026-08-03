@@ -2,12 +2,16 @@ package com.quiddity.app.di
 
 import android.annotation.SuppressLint
 import android.content.Context
+import com.quiddity.app.active.AlarmScheduler
+import com.quiddity.app.data.local.CharacterStore
 import com.quiddity.app.data.local.ConversationStore
 import com.quiddity.app.data.local.SettingsStore
 import com.quiddity.app.data.remote.ChatApi
 import com.quiddity.app.data.repo.ChatRepository
+import com.quiddity.app.data.repo.CharacterRepository
 import com.quiddity.app.data.repo.ConversationRepository
 import com.quiddity.app.data.repo.SettingsRepository
+import com.quiddity.app.data.repo.TimeLibraryRepository
 import com.quiddity.app.domain.ApiCatalogManager
 import com.quiddity.app.domain.DocsProvider
 import kotlinx.coroutines.CoroutineScope
@@ -61,14 +65,30 @@ object ServiceLocator {
         private set
     lateinit var conversationStore: ConversationStore
         private set
+    lateinit var characterStore: CharacterStore
+        private set
     lateinit var chatApi: ChatApi
         private set
 
     lateinit var settingsRepository: SettingsRepository
         private set
+    lateinit var characterRepository: CharacterRepository
+        private set
     lateinit var conversationRepository: ConversationRepository
         private set
     lateinit var chatRepository: ChatRepository
+        private set
+
+    /**
+     * 主动消息闹钟调度器（AlarmManager 封装）。
+     */
+    lateinit var alarmScheduler: AlarmScheduler
+        private set
+
+    /**
+     * 主动消息（时间库）协调器：串联生成 / 触发 / 补偿 / 重试 / 重置 / 注销流程。
+     */
+    lateinit var timeLibraryRepository: TimeLibraryRepository
         private set
 
     /**
@@ -88,24 +108,40 @@ object ServiceLocator {
         appContext = context.applicationContext
         settingsStore = SettingsStore(appContext)
         conversationStore = ConversationStore(appContext)
+        characterStore = CharacterStore(appContext)
         chatApi = ChatApi()
 
         settingsRepository = SettingsRepository(settingsStore)
         apiCatalogManager = ApiCatalogManager(chatApi)
+        characterRepository = CharacterRepository(characterStore)
         // 用于新会话创建时按模型分级初始化 contextLimit，以及预填默认 AI 人设身份。
         conversationRepository = ConversationRepository(
             store = conversationStore,
             settingsRepository = settingsRepository,
-            apiCatalogManager = apiCatalogManager
+            apiCatalogManager = apiCatalogManager,
+            characterRepository = characterRepository
         )
         docsProvider = DocsProvider(apiCatalogManager)
         chatRepository = ChatRepository(chatApi, conversationRepository, settingsRepository)
+        alarmScheduler = AlarmScheduler(appContext)
+        timeLibraryRepository = TimeLibraryRepository(
+            conversationRepository = conversationRepository,
+            settingsRepository = settingsRepository,
+            chatRepository = chatRepository,
+            alarmScheduler = alarmScheduler,
+            context = appContext
+        )
 
         // 启动时加载会话
         appScope.launch {
+            // 预加载设置，确保冷启动时 currentSnapshot() 返回磁盘真实值而非默认值
+            settingsRepository.ensureInitialized()
             conversationRepository.loadAll()
+            characterRepository.loadAll()
             // 详见 ConversationStore.migrateDeduplicateMessageIds
             conversationRepository.migrateDeduplicateMessageIds()
+            // 主动消息：每日首次启动重置 done → pending，并重注册闹钟
+            timeLibraryRepository.onAppStart()
         }
     }
 }

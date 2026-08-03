@@ -80,6 +80,8 @@ sealed class ApiAccess {
             NO_CATALOG,
             /** 当前会话和全局都没有选中模型配置，且 catalog 列表为空 */
             CATALOG_EMPTY,
+            /** 条目接口地址为空（自定义服务商未填 URL） */
+            URL_NOT_CONFIGURED,
             /** 接口密钥字段未填写 */
             KEY_NOT_CONFIGURED,
             /** Key 数据格式损坏 */
@@ -120,7 +122,16 @@ sealed class ApiAccess {
                         Failure.Reason.CATALOG_EMPTY
                     else
                         Failure.Reason.NO_CATALOG,
-                    userMessage = "未配置模型配置，请在设置中添加"
+                    userMessage = if (settings.catalog.isEmpty())
+                        "未配置模型配置，请在设置中添加"
+                    else
+                        "当前选中的模型配置不存在，请在设置中选择有效的配置"
+                )
+            }
+            if (entry.apiUrl.isBlank()) {
+                return Failure(
+                    reason = Failure.Reason.URL_NOT_CONFIGURED,
+                    userMessage = "接口地址未配置，请在模型配置中填写"
                 )
             }
 

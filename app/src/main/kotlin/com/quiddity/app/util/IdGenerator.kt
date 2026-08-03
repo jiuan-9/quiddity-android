@@ -57,8 +57,8 @@ object IdGenerator {
         CATALOG_ENTRY("cat_"),
         /** 头像裁剪临时文件 ID（前缀 `avatar_`）。 */
         AVATAR_TEMP("avatar_"),
-        /** 数据导出文件 ID（前缀 `export_`）。 */
-        EXPORT_FILE("export_")
+        /** 角色库角色 ID（前缀 `chr_`，2.0.0 schema v2 新增）。 */
+        CHARACTER("chr_")
     }
 
     private val secureRandom = SecureRandom()

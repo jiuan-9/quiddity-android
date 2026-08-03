@@ -13,6 +13,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
@@ -90,8 +91,8 @@ class MainActivity : ComponentActivity() {
             WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightNavigationBars = !settings.darkMode
             // 窗口背景色跟随主题，避免黑夜模式过渡动画时露出奶白色窗口背景
             window.decorView.setBackgroundColor(
-                if (settings.darkMode) android.graphics.Color.parseColor("#1A1A1A")
-                else android.graphics.Color.parseColor("#FAF9F6")
+                if (settings.darkMode) ContextCompat.getColor(this, R.color.dark_bg)
+                else ContextCompat.getColor(this, R.color.cream_bg)
             )
             // ===== 字体缩放 =====
             // QuiddityApp 已在 Configuration 层锁定 fontScale=1.0（整体强制默认字体，不受系统字号影响）。

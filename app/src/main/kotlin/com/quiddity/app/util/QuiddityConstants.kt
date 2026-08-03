@@ -77,6 +77,26 @@ object QuiddityConstants {
     /** 记忆压缩采样温度：低温保证忠实提取，抑制发挥与臆造。 */
     const val COMPRESSION_TEMPERATURE = 0.3
 
+    // ===== 记忆调用式（2.0.0 预留；1.3.0 仅接口与字段） =====
+    /** 记忆策略：强制随身带（每轮把两份记忆全文塞进系统提示词）。 */
+    const val MEMORY_STRATEGY_CARRY = "CARRY"
+    /** 记忆策略：强制工具模式（小抄 + read_memory 抽屉按需读取）。 */
+    const val MEMORY_STRATEGY_TOOL = "TOOL"
+    /** 小抄索引行最大长度（字符，6.5.1）。 */
+    const val MEMORY_INDEX_MAX_CHARS = 60
+    /** 索引回退长度：无 memoryIndex 时用压缩摘要前 80 字临时顶替（6.5.2 回退规则）。 */
+    const val MEMORY_INDEX_FALLBACK_CHARS = 80
+    /** 抽屉内容回填预算上限（token，对齐压缩上限，6.6.4）。 */
+    const val MEMORY_DRAWER_BUDGET_TOKENS = 2_000
+    /** 群聊小本本压缩触发阈值（条数；群聊「轮」= 一条消息，6.7）。 */
+    const val GROUP_MEMORY_THRESHOLD = 40
+    /** 群聊小本本体积上限（token，6.7）。 */
+    const val GROUP_MEMORY_MAX_TOKENS = 1_000
+    /** 群聊快速判断 max_tokens 上限（5.2：只输出「0 / 要说的内容」）。 */
+    const val GROUP_DECIDE_MAX_TOKENS = 16
+    /** v1 群聊人数上限建议（5.2）。 */
+    const val GROUP_MEMBER_LIMIT = 4
+
     // ===== 快速设定 =====
     /** 快速设定的 max_tokens 上限（全面档 5000 汉字，按 ~1.6 token/字 预留余量）。 */
     const val QUICK_SETUP_MAX_TOKENS = 8_000
@@ -153,4 +173,22 @@ object QuiddityConstants {
     const val MIN_FONT_SCALE = 0.8f
     /** 应用内字体缩放上界（大字号）。 */
     const val MAX_FONT_SCALE = 1.4f
+
+    // ===== 主动消息（时间库） =====
+    /** 时间库最多时间点数。 */
+    const val ACTIVE_MESSAGE_MAX_POINTS = 5
+    /** 触发延迟补偿宽容窗口（分钟）：差值 ≤ 5 分钟补发，> 5 分钟放弃。 */
+    const val ACTIVE_MESSAGE_LATE_WINDOW_MINUTES = 5
+    /** 网络/API 异常时重试 1 次的延迟（毫秒）。 */
+    const val ACTIVE_MESSAGE_RETRY_DELAY_MS = 5_000L
+    /** App 启动/开机后批量补齐时间库前的延迟（毫秒）：等待网络就绪，避免启动即失败。 */
+    const val ACTIVE_MESSAGE_STARTUP_DELAY_MS = 8_000L
+    /** 时间库生成 max_tokens 上限（仅时间列表，输出紧凑）。 */
+    const val ACTIVE_MESSAGE_GENERATE_MAX_TOKENS = 800
+    /** 发送决策 max_tokens 上限（决策输出为实际消息内容，需足够长）。 */
+    const val ACTIVE_MESSAGE_DECIDE_MAX_TOKENS = 1_000
+    /** 时间库生成采样温度：偏高鼓励 LLM 自主把握时间点。 */
+    const val ACTIVE_MESSAGE_GENERATE_TEMPERATURE = 0.7
+    /** 发送决策采样温度。 */
+    const val ACTIVE_MESSAGE_DECIDE_TEMPERATURE = 0.8
 }

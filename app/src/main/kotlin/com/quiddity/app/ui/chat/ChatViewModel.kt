@@ -12,8 +12,11 @@ import com.quiddity.app.data.model.UserPersona
 import com.quiddity.app.data.repo.ChatRepository
 import com.quiddity.app.data.repo.ConversationRepository
 import com.quiddity.app.data.repo.SettingsRepository
+import com.quiddity.app.data.repo.TimeLibraryRepository.GenerationOutcome
+import com.quiddity.app.di.ServiceLocator
 import com.quiddity.app.domain.ApiCatalogManager
 import com.quiddity.app.domain.ChatError
+import com.quiddity.app.domain.TimeLibraryEngine
 import com.quiddity.app.util.IdGenerator
 import com.quiddity.app.util.QuiddityConstants
 import kotlinx.coroutines.Job
@@ -69,7 +72,12 @@ class ChatViewModel(
     private val chatRepository: ChatRepository,
     private val settingsRepository: SettingsRepository,
     private val apiCatalogManager: ApiCatalogManager,
-    private val conversationId: String
+    private val conversationId: String,
+    /**
+     * 任务全部完结（流式 / 压缩 / 发送延迟均空闲）时的回调。
+     * 由 [ChatViewModelHost] 注入，用于"退出会话后等任务完结再释放"。
+     */
+    private val onIdle: ((String) -> Unit)? = null
 ) : ViewModel() {
 
     val conversation: StateFlow<Conversation?> = conversationRepository.conversations
@@ -225,7 +233,11 @@ class ChatViewModel(
             _isGenerating.value = true
             try {
                 val history = _messages.value
-                chatRepository.streamAssistantReply(conv, history) { event ->
+                chatRepository.streamAssistantReply(
+                    conv,
+                    history,
+                    effectiveMemoryStrategy(conv)
+                ) { event ->
                     if (event is ChatRepository.Event.Error) {
                         streamError = event.throwable
                         _errorEvent.value = event.throwable.message ?: "未知错误"
@@ -243,12 +255,25 @@ class ChatViewModel(
                 _chatError.value = chatRepository.classify(t)
             } finally {
                 _isGenerating.value = false
+                notifyIdleIfNoWork()
             }
             // ===== 压缩阶段：仅当流式正常结束时触发 =====
             if (streamError == null) {
                 awaitCompressionIfNeeded(conv)
             }
+            notifyIdleIfNoWork()
         }
+    }
+
+    /** 是否有未完结的任务（流式 / 压缩 / 发送延迟）。供宿主判断退出后能否立即释放。 */
+    fun hasActiveWork(): Boolean =
+        _isGenerating.value ||
+            _compressionState.value is CompressionState.Compressing ||
+            (sendDelayJob?.isActive == true)
+
+    /** 无未完结任务时通知宿主（仅当宿主已请求释放才生效）。 */
+    private fun notifyIdleIfNoWork() {
+        if (!hasActiveWork()) onIdle?.invoke(conversationId)
     }
 
     /**
@@ -270,14 +295,21 @@ class ChatViewModel(
 
         _compressionState.value = CompressionState.Compressing
         try {
-            val compressed = chatRepository.compressConversationMemory(conv, messages)
-            conversationRepository.updateConversation(
-                conv.copy(
-                    compressedMemory = compressed,
-                    lastCompressedAtRound = userRounds
+            val result = chatRepository.compressConversationMemory(conv, messages)
+            if (result.success) {
+                // 6.5.2：摘要写入 compressedMemory，索引写入 memoryIndex（含程序补全的覆盖范围）
+                conversationRepository.updateConversation(
+                    conv.copy(
+                        compressedMemory = result.summary,
+                        memoryIndex = result.index,
+                        lastCompressedAtRound = userRounds
+                    )
                 )
-            )
-            _compressionState.value = CompressionState.Success
+                _compressionState.value = CompressionState.Success
+            } else {
+                // 摘要段为空 → 本次压缩失败，两字段都保持旧值（6.5.2）
+                _compressionState.value = CompressionState.Failed
+            }
         } catch (c: kotlinx.coroutines.CancellationException) {
             _compressionState.value = CompressionState.Idle
             throw c
@@ -296,6 +328,7 @@ class ChatViewModel(
             _compressionState.value is CompressionState.Failed
         ) {
             _compressionState.value = CompressionState.Idle
+            notifyIdleIfNoWork()
         }
     }
 
@@ -307,7 +340,7 @@ class ChatViewModel(
         val sceneAtStart = conv.scene
 
         runStream {
-            chatRepository.letAiStart(conv) { event ->
+            chatRepository.letAiStart(conv, effectiveMemoryStrategy(conv)) { event ->
                 handleStreamEvent(event)
                 if (event is ChatRepository.Event.CompleteMessage) {
                     markSceneInjectedIfUnchanged(sceneAtStart)
@@ -359,7 +392,11 @@ class ChatViewModel(
             // 1. 移除当前轮次的所有 AI 消息（原子替换整张表）
             conversationRepository.replaceMessages(conversationId, newHistory)
             // 2. 用删除后的 history 重新触发 AI 回复
-            chatRepository.streamAssistantReply(conv, newHistory) { event ->
+            chatRepository.streamAssistantReply(
+                conv,
+                newHistory,
+                effectiveMemoryStrategy(conv)
+            ) { event ->
                 handleStreamEvent(event)
                 if (event is ChatRepository.Event.CompleteMessage) {
                     markSceneInjectedIfUnchanged(sceneAtStart)
@@ -398,7 +435,11 @@ class ChatViewModel(
             // 不追加用户消息——直接用现有历史触发流式回复。
             // 模型看到结尾是 assistant 的消息序列，自然生成新的 AI 回复。
             val newHistory = _messages.value
-            chatRepository.streamAssistantReply(conv, newHistory) { event ->
+            chatRepository.streamAssistantReply(
+                conv,
+                newHistory,
+                effectiveMemoryStrategy(conv)
+            ) { event ->
                 handleStreamEvent(event)
                 if (event is ChatRepository.Event.CompleteMessage) {
                     markSceneInjectedIfUnchanged(sceneAtStart)
@@ -428,6 +469,7 @@ class ChatViewModel(
                 _chatError.value = chatRepository.classify(t)
             } finally {
                 _isGenerating.value = false
+                notifyIdleIfNoWork()
             }
         }
     }
@@ -456,13 +498,13 @@ class ChatViewModel(
     private suspend fun handleStreamEvent(event: ChatRepository.Event) {
         when (event) {
             is ChatRepository.Event.NewMessage -> {
-                conversationRepository.appendMessage(event.message)
+                if (!conversationRepository.appendMessage(event.message)) raiseStorageError()
             }
             is ChatRepository.Event.UpdateMessage -> {
-                conversationRepository.updateMessage(event.message)
+                if (!conversationRepository.updateMessage(event.message)) raiseStorageError()
             }
             is ChatRepository.Event.CompleteMessage -> {
-                conversationRepository.updateMessage(event.message)
+                if (!conversationRepository.updateMessage(event.message)) raiseStorageError()
                 // AI 消息完成时累加 token 用量
                 accumulateTokenUsage(event.message.tokenCount)
             }
@@ -472,6 +514,15 @@ class ChatViewModel(
                 _chatError.value = chatRepository.classify(event.throwable)
             }
         }
+    }
+
+    /** 存储写盘失败时上报，避免"显示已发送但实际未落盘"被静默吞掉。 */
+    private fun raiseStorageError() {
+        _errorEvent.value = "存储写入失败，消息可能未保存"
+        _chatError.value = ChatError.Unknown(
+            userMessage = "存储写入失败，消息可能未保存",
+            cause = null
+        )
     }
 
     /**
@@ -494,6 +545,7 @@ class ChatViewModel(
         streamJob = null
         cancelPendingSend() // 同时取消 pending 的发送延迟
         _isGenerating.value = false
+        notifyIdleIfNoWork()
     }
 
     fun consumeError() {
@@ -618,6 +670,23 @@ class ChatViewModel(
             ?: settings.catalog.firstOrNull()
             ?: return ApiCatalogManager.ModelTier.FULL
         return apiCatalogManager.getModelTier(entry.apiModel, entry.providerId)
+    }
+
+    /**
+     * 计算当前会话的默认记忆策略：
+     * - 会话级显式覆盖（[Conversation.memoryStrategy]）优先；
+     * - 完整级模型且已有压缩记忆 → 工具模式（read_memory 按需检索，不再每轮重读压缩摘要）；
+     * - 其余 → 随身带。
+     */
+    private fun effectiveMemoryStrategy(conv: Conversation): String? {
+        conv.memoryStrategy?.let { return it }
+        return if (conv.compressedMemory.isNotBlank() &&
+            resolveCurrentTier() == ApiCatalogManager.ModelTier.FULL
+        ) {
+            QuiddityConstants.MEMORY_STRATEGY_TOOL
+        } else {
+            QuiddityConstants.MEMORY_STRATEGY_CARRY
+        }
     }
 
     fun updateUserPersona(userPersona: UserPersona) {
@@ -863,7 +932,7 @@ class ChatViewModel(
      *
      * 行为：
      * - 替换当前会话的消息列表为空列表
-     * - 重置 compressedMemory 与 lastCompressedAtRound，下次对话重新开始
+     * - 重置 compressedMemory / memoryIndex 与 lastCompressedAtRound，下次对话重新开始
      * - 保留 AI 人设、用户人设、场景、记忆、壁纸、API 配置等所有会话级设置
      *
      * 不可恢复，需在 UI 层做二次确认。
@@ -876,6 +945,7 @@ class ChatViewModel(
             conversationRepository.updateConversation(
                 conv.copy(
                     compressedMemory = "",
+                    memoryIndex = "",
                     lastCompressedAtRound = 0
                 )
             )
@@ -1081,41 +1151,7 @@ class ChatViewModel(
             .firstOrNull { it.id == conv.apiCatalogId }
             ?: settings.catalog.firstOrNull { it.id == settings.activeCatalogId }
             ?: return
-
-        val currentModel = entry.apiModel
-        val currentApiId = entry.id
-        val tier = apiCatalogManager.getModelTier(currentModel, entry.providerId)
-        val tierDefaultContext = apiCatalogManager.defaultContextLimitForTier(tier)
-
-        val apiChanged = conv.tokenCountApiId != null && conv.tokenCountApiId != currentApiId
-        val modelChanged = conv.lastUsedModel != null && conv.lastUsedModel != currentModel
-
-        if (apiChanged || modelChanged || conv.tokenCountApiId == null) {
-            // API 或模型已切换（或首次使用）：重置 token 计数 + 更新上下文默认值
-            val newContextLimit = if (modelChanged || conv.lastUsedModel == null) {
-                tierDefaultContext
-            } else {
-                conv.contextLimit
-            }
-            // 模型切换时压缩轮数跟随上下文记忆轮数同步，满足"压缩轮数随模型变化"需求
-            val syncRounds = if (conv.memoryBankEnabled && (modelChanged || conv.lastUsedModel == null)) {
-                newContextLimit.coerceIn(
-                    QuiddityConstants.MIN_MEMORY_BANK_ROUNDS,
-                    QuiddityConstants.MAX_MEMORY_BANK_ROUNDS
-                )
-            } else {
-                conv.memoryBankRounds
-            }
-            conversationRepository.updateConversation(
-                conv.copy(
-                    sessionTokenUsed = 0,
-                    tokenCountApiId = currentApiId,
-                    lastUsedModel = currentModel,
-                    contextLimit = newContextLimit,
-                    memoryBankRounds = syncRounds
-                )
-            )
-        }
+        applyEntrySelection(conv, entry, explicit = false)
     }
 
     /**
@@ -1279,29 +1315,132 @@ class ChatViewModel(
         val conv = conversation.value ?: return
         val settings = settingsRepository.currentSnapshot()
         val entry = settings.catalog.firstOrNull { it.id == catalogId } ?: return
+        viewModelScope.launch {
+            applyEntrySelection(conv, entry, explicit = true)
+        }
+    }
+
+    /**
+     * 统一"切换 API/模型后的会话重置"规则（发送前自动检测与用户显式切换共用）：
+     * - token 用量统计：任何切换（或首次使用）都清零并记录新 API id；
+     * - 上下文记忆轮数：用户显式切换，或模型发生变更（含首次使用）→ 重置为模型分级默认值；
+     *   仅 API 条目变更但模型相同 → 保留用户手动调整过的轮数；
+     * - 记忆库压缩轮数：开启记忆库时随上下文记忆轮数同步。
+     *
+     * @param explicit true = 用户在会话内显式选择模型配置（无条件重置上下文轮数）
+     */
+    private suspend fun applyEntrySelection(
+        conv: Conversation,
+        entry: com.quiddity.app.data.model.ApiCatalogEntry,
+        explicit: Boolean
+    ) {
         val tier = apiCatalogManager.getModelTier(entry.apiModel, entry.providerId)
-        val defaultContext = apiCatalogManager.defaultContextLimitForTier(tier)
-        // 切换 API 时压缩轮数跟随上下文记忆轮数同步
-        val syncRounds = if (conv.memoryBankEnabled) {
-            defaultContext.coerceIn(
+        val tierDefaultContext = apiCatalogManager.defaultContextLimitForTier(tier)
+        val modelChanged = conv.lastUsedModel != null && conv.lastUsedModel != entry.apiModel
+        val apiChanged = conv.tokenCountApiId != null && conv.tokenCountApiId != entry.id
+
+        if (!explicit && !apiChanged && !modelChanged && conv.tokenCountApiId != null) return
+
+        val shouldResetContext = explicit || modelChanged || conv.lastUsedModel == null
+        val newContextLimit = if (shouldResetContext) tierDefaultContext else conv.contextLimit
+        val syncRounds = if (conv.memoryBankEnabled && shouldResetContext) {
+            newContextLimit.coerceIn(
                 QuiddityConstants.MIN_MEMORY_BANK_ROUNDS,
                 QuiddityConstants.MAX_MEMORY_BANK_ROUNDS
             )
         } else {
             conv.memoryBankRounds
         }
-        viewModelScope.launch {
-            conversationRepository.updateConversation(
-                conv.copy(
-                    apiCatalogId = catalogId,
-                    contextLimit = defaultContext,
-                    memoryBankRounds = syncRounds,
-                    sessionTokenUsed = 0,
-                    tokenCountApiId = catalogId,
-                    lastUsedModel = entry.apiModel
-                )
+        conversationRepository.updateConversation(
+            conv.copy(
+                apiCatalogId = if (explicit) entry.id else conv.apiCatalogId,
+                sessionTokenUsed = 0,
+                tokenCountApiId = entry.id,
+                lastUsedModel = entry.apiModel,
+                contextLimit = newContextLimit,
+                memoryBankRounds = syncRounds
             )
+        )
+    }
+
+    // ===== 主动消息（时间库） =====
+
+    /**
+     * 会话级"时间库主动消息"开关（对应算法文档 2.2）。
+     * - 开启：立即触发第一次时间库生成（或当天已生成过则直接注册闹钟）
+     * - 关闭：注销该会话所有定时闹钟
+     */
+    fun setActiveMessageEnabled(enabled: Boolean) {
+        val conv = conversation.value ?: return
+        if (enabled) {
+            _timeLibraryHint.value = "正在生成今日时间库…"
         }
+        viewModelScope.launch {
+            val outcome = ServiceLocator.timeLibraryRepository.setConversationEnabled(conv, enabled)
+            if (enabled) {
+                val times = conversation.value?.timeLibrary.orEmpty()
+                _timeLibraryHint.value = when (outcome) {
+                    GenerationOutcome.Triggered ->
+                        "时间库已生成：${times.joinToString("、") { it.time }}"
+                    GenerationOutcome.TriggeredSilent ->
+                        "时间库为空：AI 判断今天不需要主动发消息"
+                    GenerationOutcome.Failed ->
+                        "时间库生成失败：请检查模型接口配置后重试"
+                    GenerationOutcome.UpToDate ->
+                        "今日时间库已就绪"
+                    GenerationOutcome.Generating ->
+                        "时间库生成中，请稍候"
+                    GenerationOutcome.NotEnabled -> ""
+                }
+            }
+        }
+    }
+
+    /** 用户成功输入时间库查看密码后调用：记住已解锁，之后输密码弹窗直接显示密码。 */
+    fun markTimeLibraryUnlocked() {
+        val conv = conversation.value ?: return
+        viewModelScope.launch {
+            if (!conv.timeLibraryPasswordUnlocked) {
+                conversationRepository.updateConversation(conv.copy(timeLibraryPasswordUnlocked = true))
+            }
+        }
+    }
+
+    /**
+     * 界面整理提示（对应算法文档 3.1"正在整理前一天的记忆！"）。
+     * 由 ChatScreen 在会话首次打开时消费后清空。
+     */
+    private val _timeLibraryHint = MutableStateFlow<String?>(null)
+    val timeLibraryHint: StateFlow<String?> = _timeLibraryHint.asStateFlow()
+
+    /**
+     * 会话首次打开时调用（对应算法文档 3.1 生成时机）：
+     * 若会话级开关已开启且当天尚未生成，先给出"正在整理前一天的记忆！"提示，
+     * 再委托协调器生成时间库并注册闹钟。当天已生成 / 开关未开启时静默返回。
+     */
+    fun ensureTimeLibraryGenerated() {
+        val conv = conversation.value ?: return
+        if (!conv.activeMessageEnabled) return
+        val today = java.time.LocalDate.now().toString()
+        if (!TimeLibraryEngine.shouldGenerate(true, conv.timeLibraryGeneratedDate, today)) return
+        _timeLibraryHint.value = "正在整理前一天的记忆！"
+        viewModelScope.launch {
+            val outcome = ServiceLocator.timeLibraryRepository.ensureLibraryGeneratedToday(conv.id)
+            val times = conversation.value?.timeLibrary.orEmpty()
+            _timeLibraryHint.value = when (outcome) {
+                GenerationOutcome.Triggered ->
+                    "时间库已生成：${times.joinToString("、") { it.time }}"
+                GenerationOutcome.TriggeredSilent ->
+                    "时间库为空：AI 判断今天不需要主动发消息"
+                GenerationOutcome.Failed ->
+                    "时间库生成失败：请检查模型接口配置后重试"
+                else -> null
+            }
+        }
+    }
+
+    fun consumeTimeLibraryHint() {
+        _timeLibraryHint.value = null
     }
 }
 

@@ -55,6 +55,7 @@ import coil.compose.AsyncImage
 import com.quiddity.app.data.model.Message
 import com.quiddity.app.data.model.Role
 import com.quiddity.app.ui.theme.Motion
+import com.quiddity.app.util.DateUtils
 import com.quiddity.app.util.MarkdownParser
 /*
  * ============================================================================
@@ -114,6 +115,8 @@ fun MessageBubble(
     // 点击"改写"按钮时触发，进入改写界面
     onRewrite: (() -> Unit)? = null,
     isRewriting: Boolean = false,
+    // 查找聊天记录跳转高亮：命中消息气泡短暂变色
+    isHighlighted: Boolean = false,
     // 打字机效果：UI 层逐字渲染（仅对 streaming AI 消息生效）
     typingDelayEnabled: Boolean = false,
     typingDelayMsPerChar: Int = 0,
@@ -128,16 +131,18 @@ fun MessageBubble(
     val isAiNotStreaming = !isUser && !isStreaming
 
     val colorScheme = MaterialTheme.colorScheme
-    val bubbleColor = remember(isUser, isError, colorScheme) {
+    val bubbleColor = remember(isUser, isError, isHighlighted, colorScheme) {
         when {
             isError -> colorScheme.errorContainer
+            isHighlighted -> colorScheme.primaryContainer
             isUser -> colorScheme.secondary
             else -> colorScheme.surfaceVariant
         }
     }
-    val textColor = remember(isUser, isError, colorScheme) {
+    val textColor = remember(isUser, isError, isHighlighted, colorScheme) {
         when {
             isError -> colorScheme.onErrorContainer
+            isHighlighted -> colorScheme.onPrimaryContainer
             isUser -> colorScheme.onSecondary
             else -> colorScheme.onSurfaceVariant
         }
@@ -145,7 +150,7 @@ fun MessageBubble(
     val grayColor = remember(textColor) { textColor.copy(alpha = 0.55f) }
 
     val avatarUri = if (isUser) userAvatarUri else aiAvatarUri
-    val avatarIcon = if (isUser) Icons.Filled.Person else Icons.Filled.Person
+    val avatarIcon = Icons.Filled.Person
 
     // ===== 打字机效果：UI 层逐字渲染 =====
     val fullContent = message.content
@@ -339,10 +344,11 @@ fun MessageBubble(
                                         )
                                     }
                                     aiBubbleClick != null -> {
-                                        mod.clickable(
+                                        mod.combinedClickable(
                                             interactionSource = bubbleInteractionSource,
                                             indication = null,
-                                            onClick = aiBubbleClick
+                                            onClick = aiBubbleClick,
+                                            onLongClick = onLongClick
                                         )
                                     }
                                     else -> mod
@@ -423,10 +429,11 @@ fun MessageBubble(
                                         )
                                     }
                                     aiBubbleClick != null -> {
-                                        mod.clickable(
+                                        mod.combinedClickable(
                                             interactionSource = bubbleInteractionSource,
                                             indication = null,
-                                            onClick = aiBubbleClick
+                                            onClick = aiBubbleClick,
+                                            onLongClick = onLongClick
                                         )
                                     }
                                     else -> mod
@@ -459,6 +466,46 @@ fun MessageBubble(
                 }
             }
 
+            // ===== 发送时间（24 小时制小字，显示在气泡旁） =====
+            Spacer(modifier = Modifier.size(6.dp))
+            Text(
+                text = DateUtils.formatTime(message.timestamp),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                modifier = Modifier.align(Alignment.Bottom)
+            )
+
+            // ===== 改写按钮（AI 消息）：与"撤回"对称，位于气泡另一端（AI 头像对侧） =====
+            if (!isUser && onRewrite != null && !multiSelectMode) {
+                AnimatedVisibility(
+                    visible = isRewriting,
+                    enter = fadeIn(
+                        animationSpec = tween(Motion.DurationShort, easing = Motion.EasingEmphasizedDecelerate)
+                    ) + slideInHorizontally(
+                        initialOffsetX = { -it / 4 },
+                        animationSpec = tween(Motion.DurationShort, easing = Motion.EasingEmphasizedDecelerate)
+                    ),
+                    exit = fadeOut(
+                        animationSpec = tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate)
+                    ) + slideOutHorizontally(
+                        targetOffsetX = { -it / 4 },
+                        animationSpec = tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate)
+                    )
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.Top)
+                            .padding(start = 8.dp)
+                    ) {
+                        BubbleActionChip(
+                            icon = Icons.Filled.Edit,
+                            label = "改写",
+                            onClick = onRewrite
+                        )
+                    }
+                }
+            }
+
             if (isUser) {
                 Spacer(modifier = Modifier.size(8.dp))
                 AvatarSlot(avatarUri, avatarIcon)
@@ -476,38 +523,15 @@ fun MessageBubble(
             }
         }
 
-        // AI 消息（非 streaming）的"继续说 / 重说 / 改写"操作栏（多选模式下隐藏）
-        if (!multiSelectMode && isAiNotStreaming && (onRegenerate != null || onContinue != null || onRewrite != null)) {
+        // AI 消息（非 streaming）的"继续说 / 重说"操作栏（多选模式下隐藏）；
+        // "改写"按钮已移至气泡另一端，与"撤回"对称
+        if (!multiSelectMode && isAiNotStreaming && (onRegenerate != null || onContinue != null)) {
             Row(
                 modifier = Modifier
                     .padding(start = 48.dp, top = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // 改写按钮（淡出动画，类似撤回按钮的浮现效果）
-                if (onRewrite != null) {
-                    AnimatedVisibility(
-                        visible = isRewriting,
-                        enter = fadeIn(
-                            animationSpec = tween(Motion.DurationShort, easing = Motion.EasingEmphasizedDecelerate)
-                        ) + slideInHorizontally(
-                            initialOffsetX = { -it / 4 },
-                            animationSpec = tween(Motion.DurationShort, easing = Motion.EasingEmphasizedDecelerate)
-                        ),
-                        exit = fadeOut(
-                            animationSpec = tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate)
-                        ) + slideOutHorizontally(
-                            targetOffsetX = { -it / 4 },
-                            animationSpec = tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate)
-                        )
-                    ) {
-                        BubbleActionChip(
-                            icon = Icons.Filled.Edit,
-                            label = "改写",
-                            onClick = onRewrite
-                        )
-                    }
-                }
                 if (onRegenerate != null) {
                     BubbleActionChip(
                         icon = Icons.Filled.Refresh,
@@ -666,7 +690,8 @@ private fun SelectionCircle(isSelected: Boolean) {
  * - 气泡字体统一 18sp（项目硬约束），跨设备/系统字号设置下视觉一致
  * - 长按气泡进入多选模式（由父级 combinedClickable 处理），不再触发系统文本选择
  * - 保留括号灰化（AnnotatedString 原生 color span）
- * - 短按事件冒泡给父组件（USER 气泡的 onBubbleClick 仍能触发）
+ * - 仅当存在实际回调时才挂载点击 / 长按处理：AI 消息普通模式下两者皆空，
+ *   文本不消费点击事件，单击落在气泡外框上（修复"点击气泡无反应"）
  *
  * @param text 已渲染的 AnnotatedString（含括号灰化 span）
  * @param textColor 文本主色
@@ -681,6 +706,18 @@ private fun SelectableMessageText(
     onLongClick: (() -> Unit)?,
     modifier: Modifier = Modifier
 ) {
+    // 空 onClick 的 combinedClickable 会吞掉单击事件，导致外层气泡的点击永远收不到；
+    // 所以没有可响应的回调时完全不挂载点击处理，让事件落到气泡外框上。
+    val clickModifier = if (onBubbleClick != null || onLongClick != null) {
+        Modifier.combinedClickable(
+            interactionSource = remember { MutableInteractionSource() },
+            indication = null,
+            onClick = { onBubbleClick?.invoke() },
+            onLongClick = { onLongClick?.invoke() }
+        )
+    } else {
+        Modifier
+    }
     Text(
         text = text,
         color = textColor,
@@ -688,13 +725,7 @@ private fun SelectableMessageText(
             fontSize = 18.sp,
             lineHeight = 27.sp
         ),
-        modifier = modifier
-            .combinedClickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = { onBubbleClick?.invoke() },
-                onLongClick = { onLongClick?.invoke() }
-            )
+        modifier = modifier.then(clickModifier)
     )
 }
 

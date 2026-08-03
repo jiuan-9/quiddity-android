@@ -366,6 +366,15 @@ fun UpdateDialog(
                             }
                             TextButton(
                                 onClick = {
+                                    if (!UpdateChecker.canRequestPackageInstalls(context)) {
+                                        Toast.makeText(
+                                            context,
+                                            "请先允许安装未知来源应用",
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                        UpdateChecker.openInstallUnknownAppsSettings(context)
+                                        return@TextButton
+                                    }
                                     val ok = if (p.localPath != null) {
                                         UpdateChecker.installApk(context, File(p.localPath))
                                     } else {
@@ -480,11 +489,18 @@ class UpdateController(
     }
 
     fun autoCheck() {
+        // 并发防护：同一时刻只允许一个检查在跑；弹窗已在展示时不重复触发
+        if (isChecking || updateResult != null) return
         scope.launch {
-            kotlinx.coroutines.delay(2000)
-            val result = UpdateChecker.checkForUpdates(context, forceCheck = false)
-            if (result is UpdateChecker.Result.UpdateAvailable) {
-                updateResult = result
+            isChecking = true
+            try {
+                kotlinx.coroutines.delay(2000)
+                val result = UpdateChecker.checkForUpdates(context, forceCheck = false)
+                if (result is UpdateChecker.Result.UpdateAvailable) {
+                    updateResult = result
+                }
+            } finally {
+                isChecking = false
             }
         }
     }

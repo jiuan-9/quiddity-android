@@ -1,12 +1,17 @@
 package com.quiddity.app.ui.navigation
 
+import androidx.activity.ComponentActivity
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
@@ -17,7 +22,8 @@ import com.quiddity.app.ui.components.UpdateDialog
 import com.quiddity.app.ui.components.rememberUpdateController
 import com.quiddity.app.ui.chat.ChatScreen
 import com.quiddity.app.ui.chat.ChatViewModel
-import com.quiddity.app.ui.chat.ChatViewModelFactory
+import com.quiddity.app.ui.chat.ChatViewModelHost
+import com.quiddity.app.ui.chat.ChatViewModelHostFactory
 import com.quiddity.app.ui.home.HomeScreen
 import com.quiddity.app.ui.home.HomeViewModel
 import com.quiddity.app.ui.home.HomeViewModelFactory
@@ -62,10 +68,21 @@ fun QuiddityNavHost() {
     val navController = rememberNavController()
     val settingsRepo = remember { ServiceLocator.settingsRepository }
 
-    // ===== 版本更新 =====
+    // ===== 版本更新（每次进入前台自动检查，对应算法：检查时机 = 每次 ON_RESUME） =====
     val updateController = rememberUpdateController()
-    LaunchedEffect(Unit) {
-        updateController.autoCheck()
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, updateController) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                updateController.autoCheck()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        // 组合期若已处于 RESUMED（如 Activity 重建后）则立即补一次检查
+        if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            updateController.autoCheck()
+        }
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     // ===== 三条开发规范（位于文件中间位置） =====
@@ -118,7 +135,8 @@ fun QuiddityNavHost() {
                 factory = SettingsViewModelFactory(
                     settingsRepo,
                     ServiceLocator.conversationRepository,
-                    ServiceLocator.apiCatalogManager
+                    ServiceLocator.apiCatalogManager,
+                    ServiceLocator.characterRepository
                 )
             )
             val settings by settingsVm.settings.collectAsStateWithLifecycle()
@@ -137,26 +155,49 @@ fun QuiddityNavHost() {
             arguments = QuiddityRoute.Chat.arguments
         ) { backStackEntry ->
             val convId = backStackEntry.arguments?.getString(QuiddityRoute.Chat.ARG_CONV_ID).orEmpty()
-            val chatVm: ChatViewModel = viewModel(
-                factory = ChatViewModelFactory(
-                    conversationRepository = ServiceLocator.conversationRepository,
-                    chatRepository = ServiceLocator.chatRepository,
-                    settingsRepository = settingsRepo,
-                    apiCatalogManager = ServiceLocator.apiCatalogManager,
-                    conversationId = convId
+            // 当前规则：ChatViewModel 由 Activity 作用域的宿主按会话 ID 管理。
+            // - 退出会话时：无未完结任务（流式/压缩/发送延迟）→ 立即释放；
+            // - 有未完结任务 → 等任务完结后再释放；
+            // - 未退出时 VM 常驻，流式任务照常跑完并写入存储，返回页面直接看到完整回复。
+            val chatHost: ChatViewModelHost = (LocalContext.current as? ComponentActivity)?.let { activity ->
+                viewModel(
+                    viewModelStoreOwner = activity,
+                    factory = ChatViewModelHostFactory { id, onIdle ->
+                        ChatViewModel(
+                            conversationRepository = ServiceLocator.conversationRepository,
+                            chatRepository = ServiceLocator.chatRepository,
+                            settingsRepository = settingsRepo,
+                            apiCatalogManager = ServiceLocator.apiCatalogManager,
+                            conversationId = id,
+                            onIdle = onIdle
+                        )
+                    }
                 )
-            )
+            } ?: remember {
+                ChatViewModelHost { id, _ ->
+                    ChatViewModel(
+                        conversationRepository = ServiceLocator.conversationRepository,
+                        chatRepository = ServiceLocator.chatRepository,
+                        settingsRepository = settingsRepo,
+                        apiCatalogManager = ServiceLocator.apiCatalogManager,
+                        conversationId = id
+                    )
+                }
+            }
+            val chatVm: ChatViewModel = chatHost.get(convId)
             val settingsVm: SettingsViewModel = viewModel(
                 factory = SettingsViewModelFactory(
                     settingsRepo,
                     ServiceLocator.conversationRepository,
-                    ServiceLocator.apiCatalogManager
+                    ServiceLocator.apiCatalogManager,
+                    ServiceLocator.characterRepository
                 )
             )
             ChatScreen(
                 viewModel = chatVm,
                 settingsViewModel = settingsVm,
-                onBack = { navController.popBackStack() }
+                onBack = { navController.popBackStack() },
+                onConversationExit = { chatHost.onScreenExit(convId) }
             )
         }
     }

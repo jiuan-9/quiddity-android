@@ -158,6 +158,14 @@ class SettingsRepository(private val store: SettingsStore) {
         )
     }
 
+    suspend fun setProactiveMessageEnabled(enabled: Boolean) = update {
+        it.copy(proactiveMessageEnabled = enabled)
+    }
+
+    suspend fun setProactiveMessageLastResetDate(date: String) = update {
+        it.copy(proactiveMessageLastResetDate = date)
+    }
+
     suspend fun upsertCatalog(entry: ApiCatalogEntry) = update { s ->
         val list = s.catalog.filterNot { it.id == entry.id } + entry
         s.copy(catalog = list, activeCatalogId = s.activeCatalogId ?: entry.id)

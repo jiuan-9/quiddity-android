@@ -122,7 +122,8 @@ fun ApiEditForm(
                 ?: if (initialProvider.id == "custom") "" else initialProvider.models.firstOrNull().orEmpty()
         )
     }
-    var apiKey by rememberSaveable { mutableStateOf(initial?.apiKey ?: "") }
+    // 安全规则：密钥明文仅存在于组合内存（remember），不进 rememberSaveable，避免进程回收后落盘
+    var apiKey by remember { mutableStateOf(initial?.apiKey ?: "") }
     var providerMenuExpanded by remember { mutableStateOf(false) }
     var modelMenuExpanded by remember { mutableStateOf(false) }
     // 新增时 Key 可见（鼓励用户核对），编辑时默认隐藏

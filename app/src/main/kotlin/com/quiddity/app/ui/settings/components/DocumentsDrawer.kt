@@ -14,6 +14,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -333,11 +334,13 @@ private fun DocumentNavChips(
     selectedIndex: Int,
     onSelect: (Int) -> Unit
 ) {
-    val labels = listOf("模型分配方案", "API-KEY 获取", "数据备份说明", "名词解释")
+    // 新手教程默认第一项（打开文档默认选中）；标签增多后可横向滑动
+    val labels = listOf("新手教程", "模型分配方案", "API-KEY 获取", "数据备份说明", "名词解释")
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
             .padding(horizontal = 16.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
@@ -392,20 +395,82 @@ private fun DocumentsContent(
         modifier = modifier
     ) { index ->
         when (index) {
-            0 -> ModelTierDocPage(
+            0 -> TutorialDocPage(
+                docsProvider = docsProvider,
+                searchQuery = searchQuery
+            )
+            1 -> ModelTierDocPage(
                 catalogManager = catalogManager,
                 searchQuery = searchQuery
             )
-            1 -> ApiKeyDocPage(
+            2 -> ApiKeyDocPage(
                 docsProvider = docsProvider,
                 onCopyUrl = onCopyUrl,
                 searchQuery = searchQuery
             )
-            2 -> BackupDocPage(
+            3 -> BackupDocPage(
                 docsProvider = docsProvider,
                 searchQuery = searchQuery
             )
-            3 -> GlossaryDocPage(searchQuery = searchQuery)
+            4 -> GlossaryDocPage(searchQuery = searchQuery)
+        }
+    }
+}
+
+/**
+ * 新手教程页：默认第一个打开，覆盖所有用户能看到的界面功能。
+ * 搜索时按标题与正文做包含匹配。
+ */
+@Composable
+private fun TutorialDocPage(
+    docsProvider: DocsProvider,
+    searchQuery: String
+) {
+    val matches = remember(docsProvider, searchQuery) {
+        if (searchQuery.isBlank()) true
+        else {
+            val q = searchQuery.lowercase().trim()
+            docsProvider.tutorialDocTitle.contains(q, ignoreCase = true) ||
+                docsProvider.tutorialDocBody.contains(q, ignoreCase = true)
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+    ) {
+        if (matches) {
+            SelectionContainer {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = docsProvider.tutorialDocTitle,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(modifier = Modifier.size(8.dp))
+                    Text(
+                        text = docsProvider.tutorialDocBody,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 40.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "本节未找到匹配的内容",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                )
+            }
         }
     }
 }

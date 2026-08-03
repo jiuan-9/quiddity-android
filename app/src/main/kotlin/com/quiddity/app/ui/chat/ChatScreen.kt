@@ -45,6 +45,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -121,7 +122,8 @@ import kotlinx.coroutines.launch
 fun ChatScreen(
     viewModel: ChatViewModel,
     settingsViewModel: com.quiddity.app.ui.settings.SettingsViewModel,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onConversationExit: () -> Unit = {}
 ) {
     val conversation by viewModel.conversation.collectAsStateWithLifecycle()
     val messages by viewModel.messages.collectAsStateWithLifecycle()
@@ -130,20 +132,43 @@ fun ChatScreen(
     val compressionState by viewModel.compressionState.collectAsStateWithLifecycle()
     val errorEvent by viewModel.errorEvent.collectAsStateWithLifecycle()
     val chatError by viewModel.chatError.collectAsStateWithLifecycle()
+    val timeLibraryHint by viewModel.timeLibraryHint.collectAsStateWithLifecycle()
     val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
-    var showHamburger by remember { mutableStateOf(false) }
+    var showHamburger by rememberSaveable { mutableStateOf(false) }
     val listState = rememberLazyListState()
 
-    var withdrawTargetId by remember { mutableStateOf<String?>(null) }
-    var rewriteTargetId by remember { mutableStateOf<String?>(null) }
-    var rewritingMessageId by remember { mutableStateOf<String?>(null) }
+    var withdrawTargetId by rememberSaveable { mutableStateOf<String?>(null) }
+    var rewriteTargetId by rememberSaveable { mutableStateOf<String?>(null) }
+    var rewritingMessageId by rememberSaveable { mutableStateOf<String?>(null) }
 
     // ===== 多选模式状态 =====
     // multiSelectMode=true 时：顶栏切换为多选操作栏、输入栏隐藏、手势禁用、气泡显示选择圈
-    var multiSelectMode by remember { mutableStateOf(false) }
-    var selectedMessageIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var multiSelectMode by rememberSaveable { mutableStateOf(false) }
+    val selectedIdsSaver = remember {
+        androidx.compose.runtime.saveable.Saver<Set<String>, String>(
+            save = { ids -> ids.sorted().joinToString(",") },
+            restore = { saved -> saved.split(",").filter { it.isNotEmpty() }.toSet() }
+        )
+    }
+    var selectedMessageIds by rememberSaveable(stateSaver = selectedIdsSaver) {
+        mutableStateOf<Set<String>>(emptySet())
+    }
+    // 查找聊天记录跳转高亮：记录要定位的消息 id，滚动过去并短暂高亮
+    var highlightMessageId by remember { mutableStateOf<String?>(null) }
+
+    // 退出组合（返回主页/滑出会话）时通知宿主：无未完结任务立即释放，有任务等完结再释放
+    DisposableEffect(Unit) {
+        onDispose { onConversationExit() }
+    }
+
+    LaunchedEffect(highlightMessageId) {
+        if (highlightMessageId != null) {
+            kotlinx.coroutines.delay(2_500)
+            highlightMessageId = null
+        }
+    }
 
     // ===== 多选模式：辅助函数 =====
     fun enterMultiSelect(messageId: String) {
@@ -270,6 +295,21 @@ fun ChatScreen(
                 viewModel.consumeCompressionResult()
             }
             else -> Unit
+        }
+    }
+
+    // ===== 主动消息：时间库整理提示（对应算法文档 3.1） =====
+    LaunchedEffect(timeLibraryHint) {
+        timeLibraryHint?.let { hint ->
+            Toast.makeText(context, hint, Toast.LENGTH_LONG).show()
+            viewModel.consumeTimeLibraryHint()
+        }
+    }
+
+    // ===== 主动消息：每天首次打开该会话时触发生成 =====
+    LaunchedEffect(conversation?.id) {
+        if (conversation != null) {
+            viewModel.ensureTimeLibraryGenerated()
         }
     }
 
@@ -491,6 +531,7 @@ fun ChatScreen(
                                                 typingDelayEnabled = settings.typingDelayEnabled,
                                                 typingDelayMsPerChar = settings.typingDelayMsPerChar,
                                                 isSelected = selectedMessageIds.contains(message.id),
+                                                isHighlighted = highlightMessageId == message.id,
                                                 isWithdrawing = withdrawTargetId == message.id,
                                                 isRewriting = rewriteTargetId == message.id,
                                                 viewModel = viewModel,
@@ -543,7 +584,14 @@ fun ChatScreen(
         menuAlphaState = dragController.menuAlphaState,
         viewModel = viewModel,
         settingsViewModel = settingsViewModel,
-        onDismiss = { dragController.closeMenu() }
+        onDismiss = { dragController.closeMenu() },
+        onJumpToMessage = { id ->
+            highlightMessageId = id
+            val index = messages.indexOfFirst { it.id == id }
+            if (index >= 0) {
+                scope.launch { listState.animateScrollToItem(index) }
+            }
+        }
     )
 
     // ===== 压缩进度弹窗 =====
@@ -787,6 +835,7 @@ private fun MessageBubbleItem(
     typingDelayEnabled: Boolean,
     typingDelayMsPerChar: Int,
     isSelected: Boolean,
+    isHighlighted: Boolean,
     isWithdrawing: Boolean,
     isRewriting: Boolean,
     viewModel: ChatViewModel,
@@ -858,6 +907,7 @@ private fun MessageBubbleItem(
         onRewriteTrigger = onRewriteTriggerFinal,
         onRewrite = onRewriteFinal,
         isRewriting = isRewriting,
+        isHighlighted = isHighlighted,
         multiSelectMode = inMultiSelect,
         isSelected = isSelected,
         onSelectToggle = onSelectFinal

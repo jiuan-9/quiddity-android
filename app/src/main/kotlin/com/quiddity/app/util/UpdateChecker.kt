@@ -9,6 +9,7 @@ import android.database.Cursor
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.provider.Settings
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
@@ -91,18 +92,13 @@ object UpdateChecker {
         "https://github.com/jiuan-9/Quiddity-website/releases/latest"
 
     /**
-     * GitHub Releases API 兜底 URL（解析出 APK 直链，国内可通过镜像访问）。
-     */
-    private const val GITHUB_API_LATEST =
-        "https://api.github.com/repos/jiuan-9/Quiddity-website/releases/latest"
-
-    /**
-     * APK 备用直链（直接给出的 GitHub Releases APK URL，
-     * 当 version.json 中的 downloadUrl 不可用时的最终兜底）。
+     * APK 备用直链（当 version.json 中的 downloadUrl 不可用时的最终兜底）。
+     * 每次发版后需同步更新为本版本 APK 的实际地址；解析时逐个做可达性校验，
+     * 失效链接会被自动跳过，不会因此下载到旧版或错误的文件。
      */
     private val APK_FALLBACK_URLS: List<String> = listOf(
-        "https://quiddity-3by.pages.dev/downloads/quiddity-1.1.2.apk",
-        "https://github.com/jiuan-9/Quiddity-website/releases/download/v1.1.2/quiddity-1.1.2.apk"
+        "https://quiddity-3by.pages.dev/downloads/quiddity-1.3.0.apk",
+        "https://github.com/jiuan-9/Quiddity-website/releases/download/v1.3.0/quiddity-1.3.0.apk"
     )
 
     /**
@@ -225,11 +221,18 @@ object UpdateChecker {
     }
 
     /**
-     * 多源拉取版本信息，命中任一源即返回。
-     * 关键：每次请求都附加 ?t=<timestamp> 绕过 CDN 缓存。
+     * 多源拉取版本信息，取所有可达源中版本号最高的结果。
+     *
+     * 关键设计：
+     * - 所有源都请求最新（?t=<timestamp> 绕过 CDN 缓存）；
+     * - 不用"首个成功即返回"：多个源内容可能不一致（如某源误放了桌面端
+     *   版本号、某源未同步更新），首个命中可能是过时甚至错误的版本；
+     * - 改为在所有可达源中取版本最高者，并连带使用该源的 downloadUrl /
+     *   releaseNotes，避免"检到新版本却下到旧安装包"的错配。
      */
     private fun fetchRemoteVersionInfo(): RemoteVersionInfo? {
         val ts = System.currentTimeMillis()
+        var best: RemoteVersionInfo? = null
         for (baseUrl in VERSION_CHECK_URLS) {
             try {
                 val url = "$baseUrl?t=$ts"
@@ -249,13 +252,17 @@ object UpdateChecker {
                 if (body.isNullOrBlank()) continue
                 val info = json.decodeFromString(RemoteVersionInfo.serializer(), body)
                 if (info.effectiveAndroidVersion.isNotBlank()) {
-                    return info
+                    if (best == null ||
+                        compareVersions(info.effectiveAndroidVersion, best.effectiveAndroidVersion) > 0
+                    ) {
+                        best = info
+                    }
                 }
             } catch (_: Exception) {
                 // 静默失败，继续尝试下一个源
             }
         }
-        return null
+        return best
     }
 
     fun dismissVersion(context: Context, version: String) {
@@ -294,40 +301,60 @@ object UpdateChecker {
     /**
      * 解析最终 APK 直链。
      *
-     * 规则：
-     * 1. URL 为空 / 相对路径（./ ../ /） / 官网首页 → 回退到 GitHub API 解析最新 APK 直链；
-     *    失败则用 APK_FALLBACK_URLS 中的预置链接
-     * 2. URL 已以 .apk 结尾且是合法 HTTP(S) 链接 → 原样返回
-     * 3. URL 指向 GitHub Releases 页面（HTML）→ 调用 GitHub Releases API 解析出
-     *    最新 Release 中第一个 .apk 资产的 browser_download_url
-     * 4. 其他 URL → 原样返回（不保证是 APK 链接；调用方视情况使用或兜底）
+     * 规则（按优先级）：
+     * 1. 空 / 相对路径 / 官网首页 → 跳过，直接进入兜底链；
+     * 2. URL 指向 GitHub Releases 页面（HTML）→ 先调用 GitHub Releases API 解析
+     *    最新 Release 中的第一个 .apk 资产直链（动态获取，避免版本写死）；
+     * 3. 其他合法 HTTP(S) URL → 视为候选直链；
+     * 4. 依次将 [APK_FALLBACK_URLS] 预置链接加入候选链；
+     * 5. 对候选链逐个做 HEAD 可达性校验，返回第一个可用直链。
      *
-     * 关键修复：相对路径（如 ./downloads/quiddity-1.1.1.apk）不是合法 HTTP URL，
-     * DownloadManager 无法解析，必须回退到预置绝对链接。
+     * 关键修复：
+     * - 旧实现把 GitHub API 解析写反了：命中 GitHub Releases 页面时直接返回
+     *   预置兜底 URL，GitHub API 反而从不执行，导致一旦预置 URL 过期/误放旧包
+     *   就必然下载到错误版本；现改为 GitHub API 优先、预置 URL 兜底。
+     * - 旧实现不做可达性校验，失效链接会被直接交给下载器；现逐个 HEAD 校验，
+     *   失效链接自动跳过，杜绝"检到新版本却下到旧安装包"。
      *
-     * @return APK 直链；解析失败返回 null
+     * @return APK 直链；全部候选均不可达返回 null
      */
     suspend fun resolveApkUrl(rawUrl: String): String? = withContext(Dispatchers.IO) {
         val url = rawUrl.trim()
 
-        if (url.isBlank() ||
+        val homepageLike = url.isBlank() ||
             url.startsWith("./") || url.startsWith("../") || url.startsWith("/") ||
             url.equals(WEBSITE_URL, ignoreCase = true) ||
             url.equals("https://quiddity-3by.pages.dev/", ignoreCase = true)
-        ) {
-            return@withContext APK_FALLBACK_URLS.firstOrNull()
-                ?: resolveApkFromGitHubApi()
+
+        val candidates = buildList {
+            if (!homepageLike && url.startsWith("http", ignoreCase = true)) {
+                if (isGitHubReleasesUrl(url)) {
+                    parseGitHubOwnerRepo(url)?.let { (owner, repo) ->
+                        fetchLatestApkFromGitHub(owner, repo)?.let { add(it) }
+                    }
+                } else {
+                    add(url)
+                }
+            }
+            APK_FALLBACK_URLS.forEach { add(it) }
         }
+        candidates.firstOrNull { isReachable(it) }
+    }
 
-        if (url.endsWith(".apk", ignoreCase = true) && url.startsWith("http", ignoreCase = true)) {
-            return@withContext url
+    /**
+     * 可达性校验：对候选 APK 链接发起 HEAD 请求，仅接受成功的响应。
+     * 用于跳过失效 / 误放的预置链接，保证不会把错误的 URL 交给下载器。
+     */
+    private fun isReachable(url: String): Boolean {
+        return try {
+            val request = Request.Builder()
+                .url(url)
+                .head()
+                .build()
+            httpClient.newCall(request).execute().use { it.isSuccessful }
+        } catch (_: Exception) {
+            false
         }
-
-        if (!isGitHubReleasesUrl(url)) return@withContext url
-
-        val (owner, repo) = parseGitHubOwnerRepo(url) ?: return@withContext null
-        APK_FALLBACK_URLS.firstOrNull()
-            ?: fetchLatestApkFromGitHub(owner, repo)
     }
 
     /**
@@ -350,14 +377,6 @@ object UpdateChecker {
         val repo = match.groupValues[2]
         if (owner.isBlank() || repo.isBlank()) return null
         return owner to repo
-    }
-
-    /**
-     * 通过 GitHub Releases API 拉取默认仓库最新 Release 的第一个 .apk 资产直链。
-     */
-    private fun resolveApkFromGitHubApi(): String? {
-        val (owner, repo) = parseGitHubOwnerRepo(GITHUB_RELEASES_URL) ?: return null
-        return fetchLatestApkFromGitHub(owner, repo)
     }
 
     @Serializable
@@ -440,6 +459,10 @@ object UpdateChecker {
      * - 进度回调实时准确
      * - 失败原因清晰可读
      *
+     * 关键修复：每次调用都强制全新下载。旧实现会复用已存在的同名文件并直接返回，
+     * 若旧文件来自过期来源（站点曾误放旧安装包 / 此前下载中断残留），会导致装到
+     * 旧版本；现改为启动前删除旧文件与残留 .tmp，保证安装包内容与本次 URL 一致。
+     *
      * @return Flow，发射下载进度，最终状态为 SUCCESSFUL 或 FAILED
      */
     fun downloadApkDirect(
@@ -448,21 +471,11 @@ object UpdateChecker {
         fileName: String
     ): Flow<DownloadProgress> = callbackFlow {
         val targetFile = File(context.filesDir, fileName)
+        val tempFile = File(context.filesDir, "${fileName}.tmp")
 
-        if (targetFile.exists() && targetFile.length() > 0) {
-            trySend(
-                DownloadProgress(
-                    downloadId = 0,
-                    status = DownloadStatus.SUCCESSFUL,
-                    bytesDownloaded = targetFile.length(),
-                    totalBytes = targetFile.length(),
-                    localUri = targetFile.absolutePath,
-                    reason = ""
-                )
-            )
-            close()
-            return@callbackFlow
-        }
+        // 清理陈旧文件，确保本次下载内容与请求 URL 一致
+        if (targetFile.exists()) targetFile.delete()
+        if (tempFile.exists()) tempFile.delete()
 
         try {
             val request = Request.Builder()
@@ -494,7 +507,6 @@ object UpdateChecker {
 
             val contentLength = body.contentLength()
             var downloaded = 0L
-            val tempFile = File(context.filesDir, "${fileName}.tmp")
 
             body.byteStream().use { input ->
                 tempFile.outputStream().use { output ->
@@ -664,6 +676,34 @@ object UpdateChecker {
     }
 
     /**
+     * Android 8+ 安装未知来源应用前需用户授权；返回是否已授权。
+     */
+    fun canRequestPackageInstalls(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return true
+        return context.packageManager.canRequestPackageInstalls()
+    }
+
+    /**
+     * 跳转"安装未知应用"授权页（仅 Android 8+ 需要）。
+     */
+    fun openInstallUnknownAppsSettings(context: Context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        runCatching {
+            val intent = Intent(
+                Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                Uri.parse("package:${context.packageName}")
+            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+        }.onFailure {
+            runCatching {
+                context.startActivity(
+                    Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            }
+        }
+    }
+
+    /**
      * 触发 APK 安装（通过 DownloadManager downloadId）。
      *
      * 关键修复（v1.1.1）：
@@ -731,9 +771,7 @@ object UpdateChecker {
                     f.isFile && f.name.startsWith("quiddity-", true) && f.name.endsWith(".apk", true)
                 }
                 if (candidates != null) {
-                    candidates.filter { it.length() > 0 }
-                        .maxByOrNull { it.lastModified() }
-                        ?.let { return it }
+                    bestApkFile(candidates.toList())?.let { return it }
                 }
             }
         } catch (_: Exception) {
@@ -745,7 +783,28 @@ object UpdateChecker {
     }
 
     /**
-     * 在预设下载目录中查找最新的 quiddity .apk 文件
+     * 从候选 APK 列表中选出最优文件：优先取文件名中版本号最高者，
+     * 版本相同再取修改时间最新者，避免误选旧版安装包。
+     */
+    private fun bestApkFile(files: List<File>): File? =
+        files.filter { it.length() > 0 }
+            .sortedWith(
+                Comparator { a, b ->
+                    val byVersion = compareVersions(apkVersionInName(b.name), apkVersionInName(a.name))
+                    if (byVersion != 0) byVersion else b.lastModified().compareTo(a.lastModified())
+                }
+            )
+            .firstOrNull()
+
+    /**
+     * 从 quiddity-x.y.z.apk 文件名中提取版本号；无法识别返回空串。
+     */
+    private fun apkVersionInName(name: String): String =
+        Regex("""quiddity[-_](\d+\.\d+\.\d+)\.apk""", RegexOption.IGNORE_CASE)
+            .find(name)?.groupValues?.getOrNull(1) ?: ""
+
+    /**
+     * 在预设下载目录中查找最优的 quiddity .apk 文件
      * （防止 DownloadManager 路径解析异常时找不到 APK）。
      */
     private fun findApkInTargetDirs(context: Context): File? {
@@ -763,9 +822,7 @@ object UpdateChecker {
         } catch (_: Exception) {
             // 静默
         }
-        return candidates
-            .filter { it.length() > 0 }
-            .maxByOrNull { it.lastModified() }
+        return bestApkFile(candidates)
     }
 
     /**
@@ -812,17 +869,27 @@ object UpdateChecker {
     }
 
     fun compareVersions(a: String, b: String): Int {
-        fun parse(v: String): Pair<List<Int>, String> {
-            val parts = v.split("-", limit = 2)
-            val nums = parts[0].split(".").map { s ->
-                s.trim().toIntOrNull() ?: 0
-            }
-            val pre = parts.getOrNull(1) ?: ""
-            return nums to pre
+        /**
+         * 版本比较规则（按用户约定）：
+         * - 大版本数字逐段比较：1.2.0-beta < 1.3.0（正式版高于任何前一版本的前缀版）；
+         * - 同版本号下：正式版 > 前缀版（1.3.0 > 1.3.0-beta）；
+         * - 前缀版内部按段比较，数字段按数值（beta.2 < beta.10），
+         *   数字段 < 字母段，字母段按字典序。
+         */
+        data class Parsed(val nums: List<Int>, val pre: List<String>, val preRaw: String)
+
+        fun parse(v: String): Parsed {
+            val cleaned = v.trim().trimStart('v', 'V')
+            val dashIdx = cleaned.indexOf('-')
+            val main = if (dashIdx >= 0) cleaned.substring(0, dashIdx) else cleaned
+            val preRaw = if (dashIdx >= 0) cleaned.substring(dashIdx + 1) else ""
+            val nums = main.split(".").map { it.trim().toIntOrNull() ?: 0 }
+            val pre = if (preRaw.isBlank()) emptyList() else preRaw.split(".")
+            return Parsed(nums, pre, preRaw)
         }
 
-        val (numsA, preA) = parse(a)
-        val (numsB, preB) = parse(b)
+        val (numsA, preA, preRawA) = parse(a)
+        val (numsB, preB, preRawB) = parse(b)
 
         for (i in 0 until maxOf(numsA.size, numsB.size)) {
             val na = numsA.getOrElse(i) { 0 }
@@ -831,10 +898,29 @@ object UpdateChecker {
         }
 
         return when {
-            preA.isEmpty() && preB.isEmpty() -> 0
-            preA.isEmpty() -> 1
-            preB.isEmpty() -> -1
-            else -> preA.compareTo(preB)
+            preRawA.isEmpty() && preRawB.isEmpty() -> 0
+            preRawA.isEmpty() -> 1
+            preRawB.isEmpty() -> -1
+            else -> comparePreRelease(preA, preB)
         }
+    }
+
+    /** 前缀版段比较（如 beta.2 vs beta.10）。 */
+    private fun comparePreRelease(a: List<String>, b: List<String>): Int {
+        for (i in 0 until maxOf(a.size, b.size)) {
+            val pa = a.getOrElse(i) { "" }
+            val pb = b.getOrElse(i) { "" }
+            if (pa == pb) continue
+            val na = pa.toIntOrNull()
+            val nb = pb.toIntOrNull()
+            val cmp = when {
+                na != null && nb != null -> na.compareTo(nb)
+                na != null -> -1
+                nb != null -> 1
+                else -> pa.compareTo(pb)
+            }
+            if (cmp != 0) return cmp
+        }
+        return 0
     }
 }

@@ -2,11 +2,15 @@ package com.quiddity.app.ui.settings.components
 
 import android.content.ContentValues
 import android.content.Context
+import android.content.pm.PackageManager
+import android.Manifest
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -45,6 +49,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.quiddity.app.R
@@ -211,6 +216,18 @@ private fun QrCodeCard(
         }
     }
 
+    // Android 6~9 直接写公共 Pictures 目录需要 WRITE_EXTERNAL_STORAGE 运行时权限，
+    // 未授权时先请求，授权后再保存
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            save()
+        } else {
+            Toast.makeText(context, "未授予存储权限，无法保存到相册", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
@@ -239,7 +256,18 @@ private fun QrCodeCard(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
                         onClick = {},
-                        onLongClick = { save() }
+                        onLongClick = {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                save()
+                            } else {
+                                val granted = ContextCompat.checkSelfPermission(
+                                    context,
+                                    Manifest.permission.WRITE_EXTERNAL_STORAGE
+                                ) == PackageManager.PERMISSION_GRANTED
+                                if (granted) save()
+                                else permissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                            }
+                        }
                     ),
                 contentAlignment = Alignment.Center
             ) {

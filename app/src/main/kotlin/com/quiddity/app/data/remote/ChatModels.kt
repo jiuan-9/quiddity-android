@@ -39,13 +39,61 @@ data class ChatCompletionRequest(
     val messages: List<ChatMessage>,
     val max_tokens: Int? = null,
     val temperature: Double = 0.8,
-    val stream: Boolean = true
+    val stream: Boolean = true,
+    /**
+     * 工具定义列表（6.6.2 记忆调用式 read_memory；默认不携带，向后兼容）。
+     */
+    val tools: List<ToolDefinition>? = null,
+    /**
+     * 工具调用策略（"auto" / "none" / "required"；null = 不携带该字段，兼容不支持工具调用的接口）。
+     */
+    val tool_choice: String? = null
 )
 
 @Serializable
 data class ChatMessage(
     val role: String,
-    val content: String
+    val content: String? = null,
+    /**
+     * 第二次请求回填的 assistant 工具调用（6.6.4）。
+     */
+    val tool_calls: List<AssistantToolCall>? = null,
+    /**
+     * tool 角色消息关联的调用 id（6.6.4）。
+     */
+    val tool_call_id: String? = null
+)
+
+/**
+ * 工具定义（OpenAI 兼容 function 格式）。
+ */
+@Serializable
+data class ToolDefinition(
+    val type: String = "function",
+    val function: ToolFunction
+)
+
+@Serializable
+data class ToolFunction(
+    val name: String,
+    val description: String,
+    val parameters: kotlinx.serialization.json.JsonObject = kotlinx.serialization.json.JsonObject(emptyMap())
+)
+
+/**
+ * assistant 消息中回填的完整工具调用（第二次请求）。
+ */
+@Serializable
+data class AssistantToolCall(
+    val id: String,
+    val type: String = "function",
+    val function: AssistantToolCallFunction
+)
+
+@Serializable
+data class AssistantToolCallFunction(
+    val name: String,
+    val arguments: String
 )
 
 @Serializable
@@ -62,5 +110,22 @@ data class Choice(
 @Serializable
 data class Delta(
     val content: String? = null,
-    val role: String? = null
+    val role: String? = null,
+    /**
+     * 流式工具调用增量分片（6.6.3：按 index 聚合 name 与 arguments）。
+     */
+    val tool_calls: List<DeltaToolCall> = emptyList()
+)
+
+@Serializable
+data class DeltaToolCall(
+    val index: Int = 0,
+    val id: String? = null,
+    val function: DeltaToolCallFunction? = null
+)
+
+@Serializable
+data class DeltaToolCallFunction(
+    val name: String? = null,
+    val arguments: String? = null
 )

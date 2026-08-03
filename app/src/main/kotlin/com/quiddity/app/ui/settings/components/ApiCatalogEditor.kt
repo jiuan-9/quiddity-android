@@ -109,21 +109,23 @@ fun ApiCatalogEditor(
     val apiCatalogManager = remember { ServiceLocator.apiCatalogManager }
 
     var visible by rememberSaveable { mutableStateOf(false) }
+    // 安全规则：不把解密后的 API Key 明文写入 rememberSaveable（可能落盘），
+    // 恢复编辑状态时 apiKey 置空；保存时未重输密钥则保留原密文（见 SettingsViewModel.upsertCatalog）。
     val editingStateSaver = remember {
         Saver<ApiCatalogEditFormState?, List<String>>(
             save = { state ->
                 if (state == null) emptyList()
-                else listOf(state.id, state.name, state.providerId, state.apiUrl, state.apiModel, state.apiKey)
+                else listOf(state.id, state.name, state.providerId, state.apiUrl, state.apiModel)
             },
             restore = { saved ->
-                if (saved.size < 6) null
+                if (saved.size < 5) null
                 else ApiCatalogEditFormState(
                     id = saved[0],
                     name = saved[1],
                     providerId = saved[2],
                     apiUrl = saved[3],
                     apiModel = saved[4],
-                    apiKey = saved[5]
+                    apiKey = ""
                 )
             }
         )
@@ -447,4 +449,3 @@ private fun CatalogCard(
         }
     }
 }
-

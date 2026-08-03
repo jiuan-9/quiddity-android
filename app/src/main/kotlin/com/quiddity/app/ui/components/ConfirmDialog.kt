@@ -55,7 +55,7 @@ fun ConfirmDialog(
     title: String,
     message: String,
     confirmText: String = "确认",
-    cancelText: String = "取消",
+    cancelText: String? = "取消",
     onConfirm: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -94,11 +94,13 @@ fun ConfirmDialog(
                         .padding(top = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    QuidditySecondaryButton(
-                        text = cancelText,
-                        onClick = onDismiss,
-                        modifier = Modifier.weight(1f)
-                    )
+                    if (cancelText != null) {
+                        QuidditySecondaryButton(
+                            text = cancelText,
+                            onClick = onDismiss,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
                     QuiddityPrimaryButton(
                         text = confirmText,
                         onClick = onConfirm,

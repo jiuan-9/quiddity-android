@@ -141,7 +141,15 @@ fun HomeScreen(
         }
     }
 
-    var pendingDeleteIds by remember { mutableStateOf<List<String>?>(null) }
+    val deleteIdsSaver = remember {
+        androidx.compose.runtime.saveable.Saver<List<String>?, String>(
+            save = { ids -> ids?.joinToString(",") ?: "" },
+            restore = { saved -> if (saved.isEmpty()) null else saved.split(",").filter { it.isNotEmpty() } }
+        )
+    }
+    var pendingDeleteIds by rememberSaveable(stateSaver = deleteIdsSaver) {
+        mutableStateOf<List<String>?>(null)
+    }
 
     val multiSelectSaver = remember {
         androidx.compose.runtime.saveable.Saver<Pair<Boolean, Set<String>>, String>(

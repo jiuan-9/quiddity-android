@@ -1,11 +1,15 @@
 package com.quiddity.app.ui.chat.components
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -29,18 +33,24 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Compress
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -51,6 +61,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,12 +71,16 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import coil.compose.AsyncImage
+import com.quiddity.app.data.model.Role
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.quiddity.app.data.model.Conversation
 import com.quiddity.app.data.model.ExportPayload
+import com.quiddity.app.data.model.ImportMode
 import com.quiddity.app.data.model.PersonaCard
 import com.quiddity.app.di.ServiceLocator
 import com.quiddity.app.ui.chat.ChatViewModel
@@ -78,8 +93,10 @@ import com.quiddity.app.ui.chat.components.panels.ScenePanel
 import com.quiddity.app.ui.chat.components.panels.TokenStatsPanel
 import com.quiddity.app.ui.chat.components.panels.UserPersonaPanel
 import com.quiddity.app.ui.chat.components.panels.WallpaperPanel
+import com.quiddity.app.ui.components.ActiveMessagePermissionCard
 import com.quiddity.app.ui.components.ApiCatalogEditFormState
 import com.quiddity.app.ui.components.ConfirmDialog
+import com.quiddity.app.util.DateUtils
 import com.quiddity.app.ui.components.ExpandableText
 import com.quiddity.app.ui.components.QuiddityToggleSwitch
 import com.quiddity.app.ui.settings.SettingsViewModel
@@ -129,7 +146,8 @@ fun HamburgerMenu(
     menuAlphaState: MutableFloatState,
     viewModel: ChatViewModel,
     settingsViewModel: SettingsViewModel,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onJumpToMessage: ((String) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -139,6 +157,11 @@ fun HamburgerMenu(
     val apiCatalogManager = remember { ServiceLocator.apiCatalogManager }
     val currentTier = remember(conversation) { viewModel.resolveCurrentTier() }
 
+    // Android 13+ 需要通知权限：开启主动消息时一并请求，保证到点能弹通知
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { }
+
     // 子面板导航状态
     var currentPanel by remember { mutableStateOf<HamburgerPanel?>(null) }
     var pendingClearSettings by remember { mutableStateOf(false) }
@@ -146,6 +169,12 @@ fun HamburgerMenu(
     var toastMsg by remember { mutableStateOf<String?>(null) }
     // JSON 全量导入时暂存 payload，已有数据则弹窗让用户抉择替换/合并/取消
     var pendingImportPayload by remember { mutableStateOf<ExportPayload?>(null) }
+    // 导入后需重填密钥的模型配置名称清单（3.2 解密自检失败项）
+    var pendingKeyRefill by remember { mutableStateOf<List<String>?>(null) }
+    // 查看时间库流程：0=关闭 1=输密码 2=展示内容
+    var timeLibraryViewStep by remember { mutableStateOf(0) }
+    var timeLibraryPasswordInput by remember { mutableStateOf("") }
+    var timeLibraryPasswordError by remember { mutableStateOf(false) }
 
     LaunchedEffect(visible) {
         if (!visible) {
@@ -302,13 +331,20 @@ fun HamburgerMenu(
                         // JSON 格式：交给 DataPorter 处理（含壁纸等完整数据）
                         trimmed.startsWith("{") || trimmed.startsWith("[") -> {
                             DataPorter.importFrom(context, uri)
-                                .onSuccess { payload ->
+                                .onSuccess { plan ->
+                                    if (plan.needsKeyRefill.isNotEmpty()) {
+                                        pendingKeyRefill = plan.needsKeyRefill
+                                    }
                                     // 已有数据时弹窗让用户抉择；无数据时直接合并导入
                                     if (settingsViewModel.hasExistingData()) {
-                                        pendingImportPayload = payload
+                                        pendingImportPayload = plan.payload
                                     } else {
-                                        settingsViewModel.importAllPayload(payload, replace = false)
-                                        toastMsg = "对话记录已导入（JSON）"
+                                        settingsViewModel.importAllPayload(plan.payload, mode = ImportMode.MERGE)
+                                        toastMsg = if (plan.skipItems.isEmpty()) {
+                                            "对话记录已导入（JSON）"
+                                        } else {
+                                            "对话记录已导入（${plan.skipItems.size} 项已跳过）"
+                                        }
                                     }
                                 }
                                 .onFailure { toastMsg = "导入失败：${it.message}" }
@@ -438,7 +474,21 @@ fun HamburgerMenu(
                                 viewModel.updateMemoryBankRounds(rounds)
                             },
                             onCompressionClick = { currentPanel = HamburgerPanel.Compression },
-                            onClearMessages = { pendingClearMessages = true }
+                            onClearMessages = { pendingClearMessages = true },
+                            onActiveMessageChange = { enabled ->
+                                if (enabled &&
+                                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                                    ContextCompat.checkSelfPermission(
+                                        context,
+                                        Manifest.permission.POST_NOTIFICATIONS
+                                    ) != PackageManager.PERMISSION_GRANTED
+                                ) {
+                                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                }
+                                viewModel.setActiveMessageEnabled(enabled)
+                            },
+                            onViewTimeLibrary = { timeLibraryViewStep = 1 },
+                            onOpenSearchChat = { currentPanel = HamburgerPanel.SearchChat }
                         )
                         HamburgerPanel.QuickSetup -> {
                             conversation?.let { conv ->
@@ -556,15 +606,18 @@ fun HamburgerMenu(
                                     )
                                 },
                                 onUpdateCatalog = { state ->
-                                    require(state.id.isNotBlank()) { "更新现有 API 时 id 不能为空" }
-                                    settingsViewModel.upsertCatalog(
-                                        id = state.id,
-                                        name = state.name,
-                                        providerId = state.providerId,
-                                        apiUrl = state.apiUrl,
-                                        apiModel = state.apiModel,
-                                        apiKey = state.apiKey
-                                    )
+                                    if (state.id.isBlank()) {
+                                        toastMsg = "更新失败：模型配置 id 为空"
+                                    } else {
+                                        settingsViewModel.upsertCatalog(
+                                            id = state.id,
+                                            name = state.name,
+                                            providerId = state.providerId,
+                                            apiUrl = state.apiUrl,
+                                            apiModel = state.apiModel,
+                                            apiKey = state.apiKey
+                                        )
+                                    }
                                 },
                                 onDeleteCatalog = { id -> settingsViewModel.removeCatalog(id) }
                             )
@@ -600,6 +653,17 @@ fun HamburgerMenu(
                                 )
                             }
                         }
+                        HamburgerPanel.SearchChat -> {
+                            SearchChatPanel(
+                                conversation = conversation,
+                                messages = messages,
+                                onBack = { currentPanel = null },
+                                onOpenMessage = { id ->
+                                    onJumpToMessage?.invoke(id)
+                                    onDismiss()
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -632,6 +696,62 @@ fun HamburgerMenu(
                 toastMsg = "会话记录已清空"
             },
             onDismiss = { pendingClearMessages = false }
+        )
+    }
+
+    // 导入后密钥重填提示
+    pendingKeyRefill?.let { names ->
+        ConfirmDialog(
+            title = "部分接口密钥需重新填写",
+            message = "导入的备份中以下模型配置的密钥无法解密（可能来自其他设备），" +
+                "请到「模型配置」中重新填写：\n\n" + names.joinToString("\n"),
+            confirmText = "知道了",
+            cancelText = null,
+            onConfirm = { pendingKeyRefill = null },
+            onDismiss = { pendingKeyRefill = null }
+        )
+    }
+
+    // ===== 查看时间库流程：先验密码（如有），再展示内容 =====
+    if (timeLibraryViewStep == 1) {
+        val conv = conversation
+        if (conv != null && conv.timeLibraryPassword.isNotBlank()) {
+            TimeLibraryPasswordDialog(
+                error = timeLibraryPasswordError,
+                input = timeLibraryPasswordInput,
+                revealed = conv.timeLibraryPasswordRevealed,
+                unlocked = conv.timeLibraryPasswordUnlocked,
+                password = conv.timeLibraryPassword,
+                onInputChange = { value ->
+                    timeLibraryPasswordInput = value.filter { it.isDigit() }.take(6)
+                    timeLibraryPasswordError = false
+                },
+                onConfirm = {
+                    if (conv.timeLibraryPasswordUnlocked ||
+                        timeLibraryPasswordInput == conv.timeLibraryPassword
+                    ) {
+                        viewModel.markTimeLibraryUnlocked()
+                        timeLibraryViewStep = 2
+                        timeLibraryPasswordInput = ""
+                        timeLibraryPasswordError = false
+                    } else {
+                        timeLibraryPasswordError = true
+                    }
+                },
+                onDismiss = {
+                    timeLibraryViewStep = 0
+                    timeLibraryPasswordInput = ""
+                    timeLibraryPasswordError = false
+                }
+            )
+        } else {
+            timeLibraryViewStep = 2
+        }
+    }
+    if (timeLibraryViewStep == 2) {
+        TimeLibraryDetailDialog(
+            conversation = conversation,
+            onDismiss = { timeLibraryViewStep = 0 }
         )
     }
 
@@ -714,7 +834,7 @@ fun HamburgerMenu(
                             val p = payload
                             pendingImportPayload = null
                             scope.launch {
-                                settingsViewModel.importAllPayload(p, replace = false)
+                                settingsViewModel.importAllPayload(p, mode = ImportMode.MERGE)
                                 toastMsg = "导入成功（已合并）"
                             }
                         }) { Text("合并") }
@@ -723,7 +843,16 @@ fun HamburgerMenu(
                             val p = payload
                             pendingImportPayload = null
                             scope.launch {
-                                settingsViewModel.importAllPayload(p, replace = true)
+                                settingsViewModel.importAllPayload(p, mode = ImportMode.CHARACTERS_ONLY)
+                                toastMsg = "角色库已导入"
+                            }
+                        }) { Text("仅导入角色库") }
+                        Spacer(modifier = Modifier.size(4.dp))
+                        TextButton(onClick = {
+                            val p = payload
+                            pendingImportPayload = null
+                            scope.launch {
+                                settingsViewModel.importAllPayload(p, mode = ImportMode.REPLACE)
                                 toastMsg = "导入成功（已替换）"
                             }
                         }) { Text("替换", color = MaterialTheme.colorScheme.error) }
@@ -847,9 +976,419 @@ private fun ExportFormatPickerDialog(
 }
 
 /** 子面板类型。 */
+/**
+ * 主动消息状态卡：直接展示时间库生成情况、时间点与下次触发时间，
+ * 便于用户判断"为什么还没收到主动消息"（未生成 / 空库 / 已完成 / 等待触发）。
+ */
+@Composable
+private fun TimeLibraryStatusCard(
+    conversation: Conversation?,
+    modifier: Modifier = Modifier
+) {
+    val conv = conversation ?: return
+    val today = java.time.LocalDate.now().toString()
+    val generatedToday = conv.timeLibraryGeneratedDate == today
+    val times = conv.timeLibrary
+    val pending = times.filter { it.isPending }
+    val nowMinutes = java.time.LocalTime.now().let { it.hour * 60 + it.minute }
+    val next = pending
+        .mapNotNull { tp ->
+            com.quiddity.app.domain.TimeLibraryEngine.parseMinutes(tp.time)
+                ?.let { minutes -> tp to minutes }
+        }
+        .filter { (_, minutes) -> minutes > nowMinutes }
+        .minByOrNull { (_, minutes) -> minutes }
+        ?.first
+
+    val text = when {
+        !generatedToday && times.isEmpty() ->
+            "今日尚未生成时间库：请确认已配置模型接口，重新打开本会话会再次尝试"
+        !generatedToday ->
+            "今日尚未生成新时间库（沿用旧库：${times.joinToString("、") { readableTimeText(it.time) }}）"
+        times.isEmpty() ->
+            "今日时间库为空：AI 判断今天不需要主动发消息"
+        pending.isEmpty() ->
+            "今日时间库已完成（${times.size} 个时间点均已处理）"
+        else ->
+            "今日时间库：${times.joinToString("、") { readableTimeText(it.time) }}" +
+                (next?.let { " · 下次触发：${readableTimeText(it.time)}" } ?: " · 今日时间点已过，等待明日重置")
+    }
+    val passwordHint = when {
+        conv.timeLibraryPassword.isBlank() -> ""
+        conv.timeLibraryPasswordRevealed -> "\n查看密码：${conv.timeLibraryPassword}"
+        else -> "\n本会话时间库设置了查看密码（AI 未告知）"
+    }
+
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow
+    ) {
+        Text(
+            text = text + passwordHint,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(12.dp)
+        )
+    }
+}
+
+/** 把 "13:30" 转成"下午 1:30"这种用户一看就懂的说法。 */
+private fun readableTimeText(time: String): String {
+    val parts = time.split(":")
+    val hour = parts.getOrNull(0)?.toIntOrNull() ?: return time
+    val minute = parts.getOrNull(1) ?: "00"
+    val period = when {
+        hour < 6 -> "凌晨"
+        hour < 12 -> "上午"
+        hour < 14 -> "中午"
+        hour < 18 -> "下午"
+        else -> "晚上"
+    }
+    val hour12 = when {
+        hour == 0 -> 12
+        hour > 12 -> hour - 12
+        else -> hour
+    }
+    return "$period $hour12:$minute"
+}
+
+/**
+ * 查找聊天记录面板：输入关键词在本会话历史消息中搜索，
+ * 结果按微信样式展示头像、名字、时间与内容摘录，点击跳转到对应消息。
+ */
+@Composable
+private fun SearchChatPanel(
+    conversation: Conversation?,
+    messages: List<com.quiddity.app.data.model.Message>,
+    onBack: () -> Unit,
+    onOpenMessage: (String) -> Unit
+) {
+    var query by rememberSaveable { mutableStateOf("") }
+    val searchable = remember(messages) { messages.filterNot { it.isNotice } }
+    val results = remember(query, searchable) {
+        com.quiddity.app.domain.ChatRecordSearch.searchResults(searchable, query)
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { onBack() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "返回",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            Text(
+                text = "查找聊天记录",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(modifier = Modifier.size(40.dp))
+        }
+        Spacer(modifier = Modifier.size(12.dp))
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text("输入关键词，如：旅行、预算") },
+            singleLine = true,
+            shape = RoundedCornerShape(16.dp)
+        )
+        Spacer(modifier = Modifier.size(8.dp))
+
+        when {
+            query.isBlank() -> {
+                Box(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "输入关键词，搜索本会话说过的内容",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    )
+                }
+            }
+            results.isEmpty() -> {
+                Box(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "没有找到匹配的消息",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    )
+                }
+            }
+            else -> {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(items = results, key = { it.id }) { message ->
+                        ChatSearchResultRow(
+                            message = message,
+                            conversation = conversation,
+                            onClick = { onOpenMessage(message.id) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChatSearchResultRow(
+    message: com.quiddity.app.data.model.Message,
+    conversation: Conversation?,
+    onClick: () -> Unit
+) {
+    val isUser = message.role == Role.USER
+    val name = if (isUser) {
+        "我"
+    } else {
+        conversation?.persona?.name?.ifBlank { conversation.title } ?: "AI"
+    }
+    val avatarUri = if (isUser) null else conversation?.persona?.aiAvatarUri
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick
+            ),
+        color = MaterialTheme.colorScheme.surfaceContainerLow
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center
+            ) {
+                if (avatarUri != null) {
+                    AsyncImage(
+                        model = avatarUri,
+                        contentDescription = null,
+                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize().clip(CircleShape)
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Filled.Person,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.size(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = name,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = DateUtils.formatSearchTime(message.timestamp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    )
+                }
+                Spacer(modifier = Modifier.size(4.dp))
+                Text(
+                    text = message.content.replace("\n", " ").trim().let {
+                        if (it.length > 80) it.take(80) + "…" else it
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+/** 查看时间库：输入密码弹窗。 */
+@Composable
+private fun TimeLibraryPasswordDialog(
+    error: Boolean,
+    input: String,
+    revealed: Boolean,
+    unlocked: Boolean,
+    password: String,
+    onInputChange: (String) -> Unit,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 32.dp),
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp
+        ) {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "查看时间库",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(modifier = Modifier.size(8.dp))
+                Text(
+                    text = "这个会话的时间库设置了查看密码，密码由 AI 制定。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+                if (unlocked) {
+                    // 已成功打开过一次：密码直接显示，无需再次输入
+                    Spacer(modifier = Modifier.size(8.dp))
+                    Text(
+                        text = "已解锁，查看密码：$password",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.size(12.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        TextButton(onClick = onDismiss) { Text("取消") }
+                        Spacer(modifier = Modifier.size(8.dp))
+                        TextButton(onClick = onConfirm) { Text("查看") }
+                    }
+                } else {
+                    if (!revealed) {
+                        Spacer(modifier = Modifier.size(6.dp))
+                        Text(
+                            text = "AI 决定不告知密码。你可以直接在聊天里问 AI，或等明天重新生成时间库后再查看。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error.copy(alpha = 0.8f),
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                    }
+                    Spacer(modifier = Modifier.size(12.dp))
+                    OutlinedTextField(
+                        value = input,
+                        onValueChange = onInputChange,
+                        label = { Text("数字密码") },
+                        singleLine = true,
+                        isError = error,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword)
+                    )
+                    if (error) {
+                        Spacer(modifier = Modifier.size(4.dp))
+                        Text(
+                            text = "密码不对，请重试",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 12.dp),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        TextButton(onClick = onDismiss) { Text("取消") }
+                        Spacer(modifier = Modifier.size(8.dp))
+                        TextButton(onClick = onConfirm) { Text("查看") }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 查看时间库：内容展示弹窗（用户可读的时间说法）。 */
+@Composable
+private fun TimeLibraryDetailDialog(
+    conversation: Conversation?,
+    onDismiss: () -> Unit
+) {
+    val conv = conversation ?: return
+    val today = java.time.LocalDate.now().toString()
+    val generatedToday = conv.timeLibraryGeneratedDate == today
+    val times = conv.timeLibrary
+    val body = buildString {
+        if (!generatedToday) {
+            appendLine("今天还没有生成时间库。")
+            appendLine("请确认模型接口已配置，重新打开本会话会再次尝试生成。")
+        } else if (times.isEmpty()) {
+            appendLine("今天的时间库是空的，AI 判断今天不需要主动发消息。")
+        } else {
+            times.forEach { point ->
+                val state = if (point.isPending) "待触发" else "已处理"
+                appendLine("${readableTimeText(point.time)} · $state")
+            }
+            appendLine("")
+            appendLine("说明：「下午 1:30」就是下午一点半；「待触发」表示还没到时间，「已处理」表示到点已经处理过了。")
+        }
+        if (conv.timeLibraryPassword.isNotBlank() && conv.timeLibraryPasswordRevealed) {
+            appendLine("")
+            appendLine("查看密码：${conv.timeLibraryPassword}")
+        }
+    }
+    ConfirmDialog(
+        title = "今日时间库",
+        message = body.trim(),
+        confirmText = "知道了",
+        cancelText = null,
+        onConfirm = onDismiss,
+        onDismiss = onDismiss
+    )
+}
+
 internal enum class HamburgerPanel {
     QuickSetup, Persona, UserPersona, Scene, ApiSelector, ApiEditor,
-    Wallpaper, Compression
+    Wallpaper, Compression, SearchChat
 }
 
 // ==================== 主菜单 ====================
@@ -875,7 +1414,10 @@ private fun MainMenuContent(
     onMemoryBankEnabledChange: (Boolean) -> Unit,
     onMemoryBankRoundsChange: (Int) -> Unit,
     onCompressionClick: () -> Unit,
-    onClearMessages: () -> Unit
+    onClearMessages: () -> Unit,
+    onActiveMessageChange: (Boolean) -> Unit,
+    onViewTimeLibrary: () -> Unit,
+    onOpenSearchChat: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -1005,6 +1547,39 @@ private fun MainMenuContent(
                 onResetContextLimit = onResetContextLimit
             )
 
+            // 主动消息（对应算法文档 2.2 会话级开启）
+            SectionHeader("主动消息")
+            ToggleMenuRow(
+                title = "主动消息",
+                subtitle = if (conversation?.activeMessageEnabled == true) {
+                    "已开启：AI 按时间库主动发消息"
+                } else {
+                    "开启后立即生成当日时间库"
+                },
+                checked = conversation?.activeMessageEnabled == true,
+                onCheckedChange = onActiveMessageChange,
+                hasWallpaper = hasWallpaper
+            )
+            // 系统条件引导：会话级开启后展示精确闹钟 / 电池优化状态与一键跳转
+            if (conversation?.activeMessageEnabled == true) {
+                Spacer(modifier = Modifier.size(8.dp))
+                ActiveMessagePermissionCard(
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+                Spacer(modifier = Modifier.size(8.dp))
+                TimeLibraryStatusCard(
+                    conversation = conversation,
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+                Spacer(modifier = Modifier.size(4.dp))
+                MenuRow(
+                    title = "查看时间库",
+                    subtitle = "查看本会话今日时间库（按 AI 设定可能需要密码）",
+                    onClick = onViewTimeLibrary,
+                    hasWallpaper = hasWallpaper
+                )
+            }
+
             // 数据
             SectionHeader("数据")
             MenuRow(
@@ -1033,6 +1608,13 @@ private fun MainMenuContent(
                 subtitle = "导出或导入当前会话的全部数据",
                 onExport = onExportConversation,
                 onImport = onImportConversation,
+                hasWallpaper = hasWallpaper
+            )
+            Spacer(modifier = Modifier.size(4.dp))
+            MenuRow(
+                title = "查找聊天记录",
+                subtitle = "按关键词搜索本会话的历史消息",
+                onClick = onOpenSearchChat,
                 hasWallpaper = hasWallpaper
             )
 

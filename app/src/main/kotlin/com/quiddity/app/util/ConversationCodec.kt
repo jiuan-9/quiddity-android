@@ -81,18 +81,7 @@ object ConversationCodec {
         MARKDOWN("md", "text/markdown", "Markdown（对话记录）"),
         TEXT("txt", "text/plain", "纯文本（跨应用）");
 
-        companion object {
-            /** 从文件扩展名推断格式。 */
-            fun fromExtension(ext: String): Format? {
-                val e = ext.lowercase().trimStart('.')
-                return when (e) {
-                    "json" -> JSON
-                    "md", "markdown" -> MARKDOWN
-                    "txt", "text" -> TEXT
-                    else -> null
-                }
-            }
-        }
+        companion object
     }
 
     /** Markdown 导出文件头模板。 */

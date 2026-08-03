@@ -41,6 +41,41 @@ enum class Role {
 }
 
 /**
+ * 会话类型（2.0.0 schema v2 预留字段）。
+ *
+ * - SOLO = 私聊（默认值，兼容旧数据）
+ * - GROUP = 群聊（1.3.0 仅提供接口与字段，群聊实体暂不加入）
+ */
+@Serializable
+enum class ConversationType {
+    SOLO, GROUP
+}
+
+/**
+ * 时间库时间点状态。
+ * 仅两种状态：pending（待触发）/ done（已处理）。
+ */
+@Serializable
+enum class TimePointStatus {
+    PENDING, DONE
+}
+
+/**
+ * 时间库时间点。
+ * [time] 为 24 小时制 "HH:mm" 字符串，精确到分钟。
+ */
+@Immutable
+@Serializable
+data class TimePoint(
+    val time: String,
+    val status: TimePointStatus = TimePointStatus.PENDING
+) {
+    val isPending: Boolean get() = status == TimePointStatus.PENDING
+    fun copyAsDone(): TimePoint = copy(status = TimePointStatus.DONE)
+    fun copyAsPending(): TimePoint = copy(status = TimePointStatus.PENDING)
+}
+
+/**
  * AI 人设。
  * [compiledPersona] 为人设编译后的精调结果缓存，若为空则使用原始字段拼接。
  */
@@ -178,7 +213,73 @@ data class Conversation(
      * - 用于判断何时触发下一次压缩
      * - 0 表示从未压缩
      */
-    val lastCompressedAtRound: Int = 0
+    val lastCompressedAtRound: Int = 0,
+    /**
+     * 会话级"时间库主动消息"开关（按会话独立，非全局功能）。
+     * - true = 开启：当天首次打开该会话时生成时间库，到达 pending 时间点由 LLM 自主决策是否主动发消息
+     * - false = 关闭：不生成、不注册任何定时任务，完全静默
+     * - 开启后立即触发第一次时间库生成
+     */
+    val activeMessageEnabled: Boolean = false,
+    /**
+     * 该会话的时间库（[{time, status}] 结构，24 小时制精确到分钟）。
+     * - 最多 5 个时间点，可为空
+     * - 每次生成新库时直接覆盖旧库；空结果 / 生成失败时沿用旧库
+     */
+    val timeLibrary: List<TimePoint> = emptyList(),
+    /**
+     * 时间库最近一次生成的日期（yyyy-MM-dd）。
+     * - 用于"每天仅当天首次打开该会话时触发生成"的判定
+     * - 空字符串表示从未生成过
+     */
+    val timeLibraryGeneratedDate: String = "",
+    /**
+     * 时间库查看密码（由 AI 在生成时间库时制定，纯数字）。
+     * 空字符串表示未设置密码（旧数据可直接查看）。
+     * 一旦生成即固定不变，不要求唯一。
+     */
+    val timeLibraryPassword: String = "",
+    /**
+     * AI 是否决定把查看密码告知用户。
+     * true = 在时间库状态卡上显示；false = 不显示，需向 AI 询问。
+     */
+    val timeLibraryPasswordRevealed: Boolean = false,
+    /**
+     * 用户是否成功打开过"查看时间库"。
+     * true 后，输密码弹窗会直接显示密码，无需再次输入。
+     */
+    val timeLibraryPasswordUnlocked: Boolean = false,
+    /**
+     * 会话类型：SOLO=私聊（默认）/ GROUP=群聊。
+     * 1.3.0 仅预留字段与接口，群聊实体不加入。
+     */
+    val type: ConversationType = ConversationType.SOLO,
+    /**
+     * 群聊成员会话 id 列表（仅 type=GROUP 使用；1.3.0 仅预留字段）。
+     */
+    val memberConversationIds: List<String> = emptyList(),
+    /**
+     * 角色库引用（2.0.0 新建数据填写）。
+     * 读取时 resolveCharacter(characterId) 返回角色档案，
+     * [persona] 字段作为解析后的缓存副本（代码兼容，不删除）。
+     */
+    val characterId: String? = null,
+    /**
+     * 压缩摘要的一行索引（6.5.2 两段式压缩产出，压缩时随摘要一起生成）。
+     * 空字符串表示尚未生成。
+     */
+    val memoryIndex: String = "",
+    /**
+     * 记忆策略（6.3）：
+     * - null = 跟随模型分级默认策略
+     * - [com.quiddity.app.util.QuiddityConstants.MEMORY_STRATEGY_CARRY] = 强制随身带
+     * - [com.quiddity.app.util.QuiddityConstants.MEMORY_STRATEGY_TOOL] = 强制工具模式（read_memory）
+     */
+    val memoryStrategy: String? = null,
+    /**
+     * 群聊小本本（成员视角，6.7；1.3.0 仅预留字段）。
+     */
+    val groupMemory: String = ""
 )
 
 /**
@@ -200,7 +301,13 @@ data class Message(
      * - true = 渲染为居中灰色透明气泡，不显示头像、不可撤回/改写。
      * - 不发送给 LLM、不参与压缩、不导出（各处已过滤）。
      */
-    val isNotice: Boolean = false
+    val isNotice: Boolean = false,
+    /**
+     * 发言人会话 id（2.0.0 群聊消息使用）。
+     * - 群聊消息带 senderId（指向成员私聊会话 id）
+     * - 私聊消息为 null（默认值，兼容旧数据）
+     */
+    val senderId: String? = null
 )
 
 /**
@@ -225,6 +332,11 @@ data class AppSettings(
     val globalMaxTokens: Int = QuiddityConstants.DEFAULT_MAX_TOKENS,
     val globalSingleMessageTokens: Int = QuiddityConstants.DEFAULT_SINGLE_MESSAGE_TOKENS,
     val globalContextLimit: Int = QuiddityConstants.DEFAULT_CONTEXT_LIMIT,
+    /**
+     * AI 回复多消息切分（UI 叫法"AI 回复切分"）：
+     * - true = AI 输出按句末标点 / 括号切成多条消息（像人一样分多条发送）
+     * - false = 整条回复作为单条消息
+     */
     val multilineAutoSplit: Boolean = true,
     val enterToSend: Boolean = true,
     val activeCatalogId: String? = null,
@@ -284,7 +396,20 @@ data class AppSettings(
      * - 范围 [QuiddityConstants.MIN_FONT_SCALE] - [QuiddityConstants.MAX_FONT_SCALE]
      * - 默认 [QuiddityConstants.DEFAULT_FONT_SCALE]
      */
-    val fontScale: Float = QuiddityConstants.DEFAULT_FONT_SCALE
+    val fontScale: Float = QuiddityConstants.DEFAULT_FONT_SCALE,
+    /**
+     * 主动消息总设置开关。
+     * - 仅表示用户已了解该功能（开启时弹窗提示电池优化 / 自启动建议）
+     * - 不直接启停任何会话的时间库功能；需在对应会话中单独开启"时间库主动消息"
+     */
+    val proactiveMessageEnabled: Boolean = false,
+    /**
+     * 主动消息状态重置日期（yyyy-MM-dd）。
+     * - 每日首次启动 App 时检查当前日期与上次重置日期是否不同
+     * - 若不同，将所有会话时间库的 done 重置为 pending
+     * - 空字符串表示从未重置过
+     */
+    val proactiveMessageLastResetDate: String = ""
 ) {
     companion object {
         val Default = AppSettings()
@@ -329,16 +454,47 @@ data class AvatarData(
  */
 @Serializable
 data class ExportPayload(
-    val schemaVersion: Int = 1,
+    val schemaVersion: Int = SCHEMA_VERSION_1,
     val exportedAt: Long,
+    /**
+     * 导出时应用版本号（schema v2 字段；v1 文件为空字符串）。
+     */
+    val appVersion: String = "",
     val settings: AppSettings,
     val conversations: List<Conversation>,
     val messages: Map<String, List<Message>>,
+    /**
+     * 角色库主档（schema v2）：身份类数据（persona / userPersona / 固定记忆 / 头像）。
+     */
+    val characters: List<Character> = emptyList(),
+    /**
+     * 私聊列表（schema v2）：conversation 不再内嵌人设（只保留 characterId 引用），
+     * 但 persona 字段作为解析后的缓存副本保留。
+     */
+    val privateChats: List<ConversationBundle> = emptyList(),
+    /**
+     * 群聊列表（schema v2）：memberConversationIds 引用私聊会话 id，消息带 senderId。
+     * 1.3.0 仅提供接口，群聊实体不加入。
+     */
+    val groupChats: List<ConversationBundle> = emptyList(),
     val wallpapers: Map<String, WallpaperData> = emptyMap(),
     val listWallpaper: WallpaperData? = null,
     val userAvatar: AvatarData? = null,
-    val aiAvatars: Map<String, AvatarData> = emptyMap()
-)
+    val aiAvatars: Map<String, AvatarData> = emptyMap(),
+    /**
+     * 资产节（schema v2）：壁纸 / 头像 Base64 内嵌。
+     * v1 文件为 null（资产平铺在顶层字段）。
+     */
+    val assets: ExportAssets? = null
+) {
+    companion object {
+        const val SCHEMA_VERSION_1 = 1
+        const val SCHEMA_VERSION_2 = 2
+    }
+
+    /** 是否为 schema v2 数据（读取端必须同时支持 v1 与 v2）。 */
+    val isV2: Boolean get() = schemaVersion >= SCHEMA_VERSION_2
+}
 
 /**
  * 人设卡导出（仅 Persona + UserPersona + Scene + Memory）。

@@ -1,14 +1,18 @@
 package com.quiddity.app.ui.settings
 
+import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -57,6 +61,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.automirrored.filled.Article
 import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Upload
@@ -93,6 +98,8 @@ import com.quiddity.app.util.QuiddityConstants
 import kotlin.math.roundToInt
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.quiddity.app.di.ServiceLocator
+import com.quiddity.app.data.model.ImportMode
+import com.quiddity.app.ui.components.ActiveMessagePermissionCard
 import com.quiddity.app.ui.components.ConfirmDialog
 import com.quiddity.app.ui.components.ExpandableText
 import com.quiddity.app.ui.components.QuiddityToggleSwitch
@@ -177,10 +184,14 @@ fun SettingsBottomSheet(
     var showListWallpaper by rememberSaveable { mutableStateOf(false) }
     var showLegalDocs by rememberSaveable { mutableStateOf(false) }
     var toastMsg by remember { mutableStateOf<String?>(null) }
+    // 主动消息总开关：开启后先弹"已了解该功能"提示，确认后才持久化
+    var showProactiveDialog by remember { mutableStateOf(false) }
     // 导入抉择：已有数据时暂存 payload，弹窗让用户选择替换/合并/取消
     var pendingImportPayload by remember {
         mutableStateOf<com.quiddity.app.data.model.ExportPayload?>(null)
     }
+    // 导入后需重填密钥的模型配置名称清单（3.2 解密自检失败项）
+    var pendingKeyRefill by remember { mutableStateOf<List<String>?>(null) }
     var visible by remember { mutableStateOf(false) }
     // 拖动关闭偏移：直接同步赋值，零协程。graphicsLayer 内 draw phase 读取。
     // 用 mutableFloatStateOf 持有，禁止用 by 委托在组合阶段读取——否则拖动时整个面板每帧重组。
@@ -204,7 +215,7 @@ fun SettingsBottomSheet(
     ) { uri: Uri? ->
         if (uri != null) {
             scope.launch {
-                val payload = viewModel.exportAllPayload()
+                val payload = viewModel.exportAllPayloadV2()
                 DataPorter.exportTo(context, uri, payload)
                     .onSuccess { toastMsg = "导出成功" }
                     .onFailure { toastMsg = "导出失败：${it.message}" }
@@ -224,19 +235,31 @@ fun SettingsBottomSheet(
             } catch (_: SecurityException) {}
             scope.launch {
                 DataPorter.importFrom(context, uri)
-                    .onSuccess { payload ->
+                    .onSuccess { plan ->
+                        if (plan.needsKeyRefill.isNotEmpty()) {
+                            pendingKeyRefill = plan.needsKeyRefill
+                        }
                         // 已有数据时弹窗让用户抉择导入方式；无数据时直接合并导入
                         if (viewModel.hasExistingData()) {
-                            pendingImportPayload = payload
+                            pendingImportPayload = plan.payload
                         } else {
-                            viewModel.importAllPayload(payload, replace = false)
-                            toastMsg = "导入成功"
+                            viewModel.importAllPayload(plan.payload, mode = ImportMode.MERGE)
+                            toastMsg = if (plan.skipItems.isEmpty()) {
+                                "导入成功"
+                            } else {
+                                "导入成功（${plan.skipItems.size} 项已跳过）"
+                            }
                         }
                     }
                     .onFailure { toastMsg = "导入失败：${it.message}" }
             }
         }
     }
+
+    // Android 13+ 需要通知权限：开启主动消息时请求，保证到点能弹通知
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { }
 
     toastMsg?.let { msg ->
         LaunchedEffect(msg) {
@@ -422,6 +445,40 @@ fun SettingsBottomSheet(
                                 onClick = { showListWallpaper = true }
                             )
                         }
+                        item(key = "proactive_message", contentType = { "toggle" }) {
+                            ToggleRow(
+                                icon = Icons.Filled.Notifications,
+                                title = "主动消息",
+                                subtitle = if (settings.proactiveMessageEnabled) "已开启（需在会话内单独启用）"
+                                else "AI 在指定时间主动发消息",
+                                checked = settings.proactiveMessageEnabled,
+                                onCheckedChange = { enabled ->
+                                    if (enabled) {
+                                        // Android 13+ 需要通知权限：开启时一并请求，保证到点能弹通知
+                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                                            ContextCompat.checkSelfPermission(
+                                                context,
+                                                Manifest.permission.POST_NOTIFICATIONS
+                                            ) != PackageManager.PERMISSION_GRANTED
+                                        ) {
+                                            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                        }
+                                        // 仅表知晓：先弹提示，确认后才保存总开关状态
+                                        showProactiveDialog = true
+                                    } else {
+                                        viewModel.setProactiveMessageEnabled(false)
+                                    }
+                                }
+                            )
+                        }
+                        // 系统条件引导：总开关开启后展示精确闹钟 / 电池优化状态与一键跳转
+                        if (settings.proactiveMessageEnabled) {
+                            item(key = "proactive_permission", contentType = { "card" }) {
+                                ActiveMessagePermissionCard(
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 3.dp)
+                                )
+                            }
+                        }
 
                         // ===== Section 2: 模型配置 =====
                         item(key = "section_api") {
@@ -474,8 +531,8 @@ fun SettingsBottomSheet(
                         item(key = "multiline_split", contentType = { "toggle" }) {
                             ToggleRow(
                                 icon = Icons.Filled.Layers,
-                                title = "多行文本自动切分",
-                                subtitle = "AI 像人类一样发多条消息",
+                                title = "AI 回复切分",
+                                subtitle = "AI 像人一样分多条发送",
                                 checked = settings.multilineAutoSplit,
                                 onCheckedChange = { viewModel.setMultilineSplit(it) }
                             )
@@ -582,7 +639,7 @@ fun SettingsBottomSheet(
                             ClickableRow(
                                 icon = Icons.AutoMirrored.Filled.Article,
                                 title = "文档",
-                                subtitle = "模型方案、API-KEY 获取、备份说明",
+                                subtitle = "新手教程、模型方案、API 密钥获取、备份说明",
                                 onClick = { showDocuments = true }
                             )
                         }
@@ -694,6 +751,36 @@ fun SettingsBottomSheet(
             DonateScreen(onBack = { showDonate = false })
         }
 
+        // 主动消息总开关提示弹窗（对应算法文档 2.1）：仅表知晓，确认后才保存状态
+        if (showProactiveDialog) {
+            ConfirmDialog(
+                title = "主动消息",
+                message = "为确保到点准时触发，建议同时完成：1) 将本应用的【电池优化】设为“不受限制”；" +
+                    "2) Android 12+ 在【闹钟和提醒】中允许本应用使用精确闹钟；3) 允许【自启动】。下方设置项会实时显示这几项状态并提供一键跳转。" +
+                    "总设置仅表示您已了解该功能，您需前往对应会话中单独开启该会话的时间库功能。",
+                confirmText = "我知道了",
+                cancelText = "取消",
+                onConfirm = {
+                    showProactiveDialog = false
+                    viewModel.setProactiveMessageEnabled(true)
+                },
+                onDismiss = { showProactiveDialog = false }
+            )
+        }
+
+        // 导入后密钥重填提示
+        pendingKeyRefill?.let { names ->
+            ConfirmDialog(
+                title = "部分接口密钥需重新填写",
+                message = "导入的备份中以下模型配置的密钥无法解密（可能来自其他设备），" +
+                    "请到「模型配置」中重新填写：\n\n" + names.joinToString("\n"),
+                confirmText = "知道了",
+                cancelText = null,
+                onConfirm = { pendingKeyRefill = null },
+                onDismiss = { pendingKeyRefill = null }
+            )
+        }
+
         // 导入抉择弹窗：已有数据时让用户选择替换/合并/取消
         pendingImportPayload?.let { payload ->
             Dialog(
@@ -752,7 +839,7 @@ fun SettingsBottomSheet(
                                 val p = payload
                                 pendingImportPayload = null
                                 scope.launch {
-                                    viewModel.importAllPayload(p, replace = false)
+                                    viewModel.importAllPayload(p, mode = ImportMode.MERGE)
                                     toastMsg = "导入成功（已合并）"
                                 }
                             }) { Text("合并") }
@@ -761,7 +848,16 @@ fun SettingsBottomSheet(
                                 val p = payload
                                 pendingImportPayload = null
                                 scope.launch {
-                                    viewModel.importAllPayload(p, replace = true)
+                                    viewModel.importAllPayload(p, mode = ImportMode.CHARACTERS_ONLY)
+                                    toastMsg = "角色库已导入"
+                                }
+                            }) { Text("仅导入角色库") }
+                            Spacer(modifier = Modifier.size(4.dp))
+                            TextButton(onClick = {
+                                val p = payload
+                                pendingImportPayload = null
+                                scope.launch {
+                                    viewModel.importAllPayload(p, mode = ImportMode.REPLACE)
                                     toastMsg = "导入成功（已替换）"
                                 }
                             }) { Text("替换", color = MaterialTheme.colorScheme.error) }

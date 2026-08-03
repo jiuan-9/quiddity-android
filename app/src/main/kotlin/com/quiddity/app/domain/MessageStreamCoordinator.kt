@@ -65,6 +65,15 @@ private data class Segment(
 )
 
 /**
+ * 引号栈帧：记录当前未闭合的引号，以及其内容中是否出现过句末标点。
+ * 引号内容以句末标点结束时，闭合引号应留在同一条消息内（避免闭合符被拆开）。
+ */
+private data class QuoteFrame(
+    val open: Char,
+    var containsSentenceEnder: Boolean = false
+)
+
+/**
  * 流式消息协调器默认实现。
  *
  * ## 切分策略（句末标点 + 括号）
@@ -79,10 +88,17 @@ private data class Segment(
  * 3. **括号内容另起一句**：成对括号 `()` `（）` `[]` `【】` `{}` `<>` 内的内容
  *    作为独立消息发出（含括号本身）。括号前的文本作为前一条消息结束，
  *    括号闭合即视为该段完成。示例"（伸手）你真的还好吗？"切为"（伸手）"+"你真的还好吗？"。
- * 4. **硬上限保护**：当 buffer 累计字符数达到硬上限且找不到任何切分点时
+ * 4. **引号内容不切分**：成对引号 `""` `“”` `‘’` `「」` `『』` `《》` `〈〉`
+ *    内的句末标点 / 括号不触发切分——`"你好。"` 不会再把闭合引号拆成下一条消息。
+ *    引号内容以句末标点结束时，闭合引号一到就整体切出；
+ *    否则引号连同后续文本等到下一个句末标点再切分。
+ * 5. **孤立闭合符吸收**：句末标点后紧跟的无歧义闭合引号 / 括号
+ *    （`”` `’` `」` `』` `》` `〉` `）` `]` `}` `>`）并入同一条消息，
+ *    避免模型输出悬空闭合符时产生仅含单个符号的消息。
+ * 6. **硬上限保护**：当 buffer 累计字符数达到硬上限且找不到任何切分点时
  *    （如模型输出超长无标点文本），强制在当前位置切分，防止 OOM。
  *
- * 切分开关 [splitEnabled]：关闭时（多行文本自动切分 = off）不进行任何切分，
+ * 切分开关 [splitEnabled]：关闭时（AI 回复切分 = off）不进行任何切分，
  * 整条回复作为单条消息累计输出，仅在 [finalize] 时完成。
  */
 class MessageStreamCoordinator(
@@ -90,7 +106,12 @@ class MessageStreamCoordinator(
     private val runId: String,
     private val singleMessageTokens: Int = 800,
     private val splitEnabled: Boolean = true,
-    private val startTimestamp: Long = System.currentTimeMillis()
+    private val startTimestamp: Long = System.currentTimeMillis(),
+    /**
+     * 发言人会话 id（群聊消息从创建起带发言人，2.0.0 使用）。
+     * 私聊为 null（默认值，向后兼容）。
+     */
+    private val senderId: String? = null
 ) : StreamCoordinator {
 
     private val buffer = StringBuilder()
@@ -160,12 +181,8 @@ class MessageStreamCoordinator(
 
     override fun finalize(): List<StreamCoordinator.Signal> {
         val signals = mutableListOf<StreamCoordinator.Signal>()
-        if (buffer.isEmpty() && completed.isNotEmpty()) {
-            return signals
-        }
-        if (buffer.isEmpty() && completed.isEmpty()) {
-            return signals
-        }
+        // buffer 为空说明全部内容已在 accept 阶段切分完成（或流本就无内容），无需收尾
+        if (buffer.isEmpty()) return signals
         val finalMsg = buildMessage(streaming = false)
         if (finalMsg.id in knownIds) {
             signals += StreamCoordinator.Signal.Complete(finalMsg)
@@ -196,9 +213,54 @@ class MessageStreamCoordinator(
     private fun findNextCompleteSegment(): Segment? {
         if (!splitEnabled || buffer.isBlank()) return null
         val text = buffer
+        val quoteStack = ArrayDeque<QuoteFrame>()
         var i = 0
         while (i < text.length) {
             val ch = text[i]
+            // 引号包裹状态：引号未闭合前，句末标点与括号一律不切分，
+            // 否则闭合引号（如 "你好。" 的 "）会被拆到下一条消息。
+            if (quoteStack.isNotEmpty()) {
+                when {
+                    // 栈顶引号配对闭合：优先于开引号判断（ASCII " 同时是开/闭引号）
+                    isCloseQuote(ch) && matchesQuotePair(quoteStack.last().open, ch) -> {
+                        val top = quoteStack.removeLast()
+                        if (quoteStack.isEmpty() && top.containsSentenceEnder) {
+                            val seg = text.subSequence(0, i + 1).toString().trim()
+                            val hasContent = seg.any { c ->
+                                !c.isWhitespace() && !isSentenceEnder(c)
+                            }
+                            return Segment(
+                                text = seg,
+                                consumeEnd = i + 1,
+                                emit = hasContent
+                            )
+                        }
+                        i++
+                    }
+                    isOpenQuote(ch) -> {
+                        quoteStack.addLast(QuoteFrame(ch))
+                        i++
+                    }
+                    isSentenceEnder(ch) -> {
+                        // 省略号不算句末标点：不标记引号内容以句号结尾
+                        if (ch == '.') {
+                            val runLen = countConsecutive(text, i, '.')
+                            if (runLen >= 2) {
+                                i += runLen
+                                continue
+                            }
+                        }
+                        if (ch == '…') {
+                            i++
+                            continue
+                        }
+                        quoteStack.forEach { it.containsSentenceEnder = true }
+                        i++
+                    }
+                    else -> i++
+                }
+                continue
+            }
             val openMatch = matchingClose(ch)
             if (openMatch != null) {
                 // 括号前的文本作为前一段消息（若非空）
@@ -225,6 +287,9 @@ class MessageStreamCoordinator(
                     consumeEnd = closeIdx + 1,
                     emit = hasInnerContent
                 )
+            } else if (isOpenQuote(ch)) {
+                quoteStack.addLast(QuoteFrame(ch))
+                i++
             } else if (isSentenceEnder(ch)) {
                 // 省略号处理：ASCII 连续点（≥2）与单字符 … 不切分
                 if (ch == '.') {
@@ -252,6 +317,10 @@ class MessageStreamCoordinator(
                     if (!isSentenceEnder(nc)) break
                     end++
                 }
+                // 吸收句末标点后紧跟的无歧义闭合引号 / 括号，
+                // 避免孤立闭合符被拆成下一条消息。ASCII 单双引号可能同时充当开引号，
+                // 不在此吸收，交由上方引号栈配对逻辑处理。
+                while (end < text.length && isTrailingCloser(text[end])) end++
                 val seg = text.subSequence(0, end).toString().trim()
                 // 仅含句末标点 / 空白的片段不发出（如行首"。。。"）
                 val hasContent = seg.any { c -> !c.isWhitespace() && !isSentenceEnder(c) }
@@ -304,6 +373,36 @@ class MessageStreamCoordinator(
         else -> false
     }
 
+    /** 开引号集合（ASCII `"` 与全角成对引号 / 书名号）。 */
+    private fun isOpenQuote(ch: Char): Boolean = when (ch) {
+        '"', '“', '‘', '「', '『', '《', '〈' -> true
+        else -> false
+    }
+
+    /** 闭引号集合。 */
+    private fun isCloseQuote(ch: Char): Boolean = when (ch) {
+        '"', '”', '’', '」', '』', '》', '〉' -> true
+        else -> false
+    }
+
+    /** 判断开闭引号是否成对。 */
+    private fun matchesQuotePair(open: Char, close: Char): Boolean = when (open) {
+        '"' -> close == '"'
+        '“' -> close == '”'
+        '‘' -> close == '’'
+        '「' -> close == '」'
+        '『' -> close == '』'
+        '《' -> close == '》'
+        '〈' -> close == '〉'
+        else -> false
+    }
+
+    /** 无歧义的闭合引号 / 括号：吸收进句末标点所在消息。 */
+    private fun isTrailingCloser(ch: Char): Boolean = when (ch) {
+        '”', '’', '」', '』', '》', '〉', '）', ']', '}', '>' -> true
+        else -> false
+    }
+
     /** 若为开括号，返回对应的闭括号；否则返回 null。 */
     private fun matchingClose(ch: Char): Char? = when (ch) {
         '(' -> ')'
@@ -353,7 +452,8 @@ class MessageStreamCoordinator(
         content = buffer.toString(),
         timestamp = currentStartTs,
         tokenCount = TokenEstimator.estimate(buffer.toString()),
-        isStreaming = streaming
+        isStreaming = streaming,
+        senderId = senderId
     )
 
     /**
@@ -366,7 +466,8 @@ class MessageStreamCoordinator(
         content = content,
         timestamp = currentStartTs,
         tokenCount = TokenEstimator.estimate(content),
-        isStreaming = streaming
+        isStreaming = streaming,
+        senderId = senderId
     )
 
     private companion object {

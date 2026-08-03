@@ -92,6 +92,17 @@ enum class QuickSetupTier(
         )
     }
 
+    /**
+     * 本档位实际生成内容的通俗描述（用于快速设定面板的说明文案，
+     * 让用户明确当前档位包含 / 不包含哪些字段）。
+     */
+    val summary: String
+        get() = when (this) {
+            ROUGH -> "本档位仅生成 AI 名字/身份背景/性格与用户人设、场景，不含记忆"
+            CONCRETE -> "本档位生成 AI 名字/身份背景/性格/外观/世界背景、用户人设、场景与记忆"
+            COMPREHENSIVE -> "本档位生成 AI 全部字段（含期望特质）、用户人设、场景与记忆"
+        }
+
     companion object {
         /**
          * 返回当前模型等级下可用的档位列表（按枚举顺序：ROUGH → CONCRETE → COMPREHENSIVE）。

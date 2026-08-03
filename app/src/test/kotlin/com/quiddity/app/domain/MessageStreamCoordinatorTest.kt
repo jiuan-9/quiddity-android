@@ -456,4 +456,112 @@ class MessageStreamCoordinatorTest {
             "所有已完成切分的消息 isStreaming 必须为 false"
         )
     }
+
+    // ============================================================
+    // 十、引号包裹内容：闭合引号不得被拆到下一条消息
+    // ============================================================
+
+    @Test
+    fun `quoted sentence keeps closing quote in same message`() {
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("\"你好。\"")
+        val snap = coord.snapshot()
+        assertEquals(
+            listOf("\"你好。\""),
+            snap.map { it.content },
+            "闭合引号必须与「你好。」留在同一条消息"
+        )
+    }
+
+    @Test
+    fun `quoted dialogue with multiple sentences stays intact`() {
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("他说：\"你好。我很开心。\"然后走了。")
+        val snap = coord.snapshot()
+        assertEquals(
+            listOf("他说：\"你好。我很开心。\"", "然后走了。"),
+            snap.map { it.content },
+            "引号内的句号不应触发切分，闭合引号后的句号才切分"
+        )
+    }
+
+    @Test
+    fun `fullwidth quotes keep closing quote attached`() {
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("“你好。”")
+        coord.accept("「晚安。」")
+        val snap = coord.snapshot()
+        assertEquals(
+            listOf("“你好。”", "「晚安。」"),
+            snap.map { it.content }
+        )
+    }
+
+    @Test
+    fun `closing quote arriving in later delta is not split off`() {
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("他说：\"你好。")
+        val signals = coord.accept("\"然后走了。")
+        val completed = signals.filterIsInstance<StreamCoordinator.Signal.Complete>()
+        val contents = completed.map { it.message.content }
+        assertEquals(
+            listOf("他说：\"你好。\"", "然后走了。"),
+            contents,
+            "跨 delta 的闭合引号应并入引号内容所在消息"
+        )
+    }
+
+    @Test
+    fun `english apostrophe does not suppress splitting`() {
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("He's fine. I'm good.")
+        coord.finalize()
+        val snap = coord.snapshot()
+        assertEquals(
+            listOf("He's fine.", "I'm good."),
+            snap.map { it.content },
+            "英文撇号不应被误判为引号而抑制切分"
+        )
+    }
+
+    @Test
+    fun `stray closing bracket after sentence ender is absorbed`() {
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("你好。」然后呢？")
+        val snap = coord.snapshot()
+        assertEquals(
+            listOf("你好。」", "然后呢？"),
+            snap.map { it.content },
+            "句末标点后的孤立闭合符应并入前一条消息"
+        )
+    }
+
+    @Test
+    fun `senderId is threaded into created messages`() {
+        val coord = MessageStreamCoordinator(
+            "conv1",
+            "run1",
+            singleMessageTokens = 1000,
+            senderId = "conv_member_a"
+        )
+        coord.accept("第一条。")
+        coord.finalize()
+        val snap = coord.snapshot()
+        assertEquals(1, snap.size, "句末标点切分后应立即完成该条消息")
+        assertTrue(
+            snap.all { it.senderId == "conv_member_a" },
+            "群聊消息应从创建起带 senderId：${snap.map { it.senderId }}"
+        )
+    }
+
+    @Test
+    fun `default senderId is null for solo chat`() {
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("你好。")
+        coord.finalize()
+        assertTrue(
+            coord.snapshot().all { it.senderId == null },
+            "私聊消息 senderId 默认应为 null（兼容旧数据）"
+        )
+    }
 }

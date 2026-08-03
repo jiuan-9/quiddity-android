@@ -119,13 +119,6 @@ object MarkdownParser {
         return blocks
     }
 
-    /**
-     * 判断内容是否包含围栏代码块。
-     * 用于 UI 决定是否需要"围栏"渲染模式。
-     */
-    fun hasCodeBlocks(content: String): Boolean {
-        return content.contains("```")
-    }
-
-    private val FENCE_PATTERN = Regex("^```(\\w*)\\s*$")
+    // 支持前导空格（缩进围栏）与 c++/c# 等带 +/# 的语言名
+    private val FENCE_PATTERN = Regex("^\\s*```([\\w+#\\-]*)\\s*$")
 }

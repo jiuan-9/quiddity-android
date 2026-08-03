@@ -60,27 +60,43 @@ class ChatApi {
         .writeTimeout(QuiddityConstants.WRITE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .build()
 
-    private val parser = ChatStreamParser()
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
+        explicitNulls = false
     }
 
     private val mediaType = "application/json; charset=utf-8".toMediaType()
 
     /**
+     * 单次流式响应事件。
+     */
+    sealed class StreamEvent {
+        /** 内容片段（可能为空串，调用方自行忽略）。 */
+        data class Content(val text: String) : StreamEvent()
+        /** 流结束（[DONE] 或连接关闭）时聚合出的完整工具调用列表，无工具调用时为空列表。 */
+        data class ToolCalls(val calls: List<ChatStreamParser.AggregatedToolCall>) : StreamEvent()
+    }
+
+    /**
      * 发起流式对话请求。
+     *
+     * - 每次调用使用独立的 [ChatStreamParser]，避免多路流并行时工具调用聚合状态互相污染；
+     * - 工具调用增量按 index 聚合，在流结束（[DONE] / 连接关闭）时以 [StreamEvent.ToolCalls] 一次性下发；
+     * - Flow 正常完成表示流结束。
      *
      * @param apiUrl 完整 chat/completions URL
      * @param apiKey 明文 API Key
      * @param request 请求体
-     * @return Flow<String>，每个元素为内容片段；Flow 完成表示流结束
+     * @return [Flow] of [StreamEvent]；Flow 完成表示流结束
      */
     fun streamChat(
         apiUrl: String,
         apiKey: String,
         request: ChatCompletionRequest
-    ): Flow<String> = callbackFlow {
+    ): Flow<StreamEvent> = callbackFlow {
+        // 每次流独立 parser：工具调用累积器不复用，杜绝并行流串扰
+        val parser = ChatStreamParser()
         val body = json.encodeToString(ChatCompletionRequest.serializer(), request)
             .toRequestBody(mediaType)
 
@@ -106,20 +122,24 @@ class ChatApi {
         val eventSourceListener = object : EventSourceListener() {
             override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
                 if (closed.get()) return
-                val delta = parser.parseDelta(data)
-                if (delta == null) {
-                    // [DONE] —— 结束流
+                val parsed = parser.acceptChunk(data)
+                if (parsed == null) {
+                    // [DONE] —— 结束流：先下发聚合完成的工具调用
+                    trySend(StreamEvent.ToolCalls(parser.takeToolCalls()))
                     safeClose()
                     return
                 }
-                if (delta.isNotEmpty()) {
+                val content = parsed.content
+                if (!content.isNullOrEmpty()) {
                     // trySend 在 channel 满时返回失败；SSE 是高吞吐流，
                     // 消费者慢时丢弃部分片段是可接受的（不等同丢消息）。
-                    trySend(delta)
+                    trySend(StreamEvent.Content(content))
                 }
             }
 
             override fun onClosed(eventSource: EventSource) {
+                // 服务端未发 [DONE] 直接关闭：仍把已聚合的工具调用下发，避免丢失
+                trySend(StreamEvent.ToolCalls(parser.takeToolCalls()))
                 safeClose()
             }
 

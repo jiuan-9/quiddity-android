@@ -1,7 +1,10 @@
 package com.quiddity.app.data.repo
 
 import com.quiddity.app.data.local.ConversationStore
+import com.quiddity.app.data.model.Character
 import com.quiddity.app.data.model.Conversation
+import com.quiddity.app.data.model.ConversationType
+import com.quiddity.app.data.model.ImportMode
 import com.quiddity.app.data.model.Message
 import com.quiddity.app.data.model.Persona
 import com.quiddity.app.domain.ApiCatalogManager
@@ -48,7 +51,8 @@ import kotlinx.coroutines.flow.map
 class ConversationRepository(
     private val store: ConversationStore,
     private val settingsRepository: SettingsRepository? = null,
-    private val apiCatalogManager: ApiCatalogManager? = null
+    private val apiCatalogManager: ApiCatalogManager? = null,
+    private val characterRepository: CharacterRepository? = null
 ) {
 
     val conversations: StateFlow<List<Conversation>> = store.conversations
@@ -140,24 +144,22 @@ class ConversationRepository(
     /**
      * 批量删除多个会话（多选用）。
      *
-     * 实现：逐个调用 [store.deleteConversation]；由于该方法本身持锁（mutex + AtomicFile
-     + 缓存清理），跨会话的串行调用天然安全——避免一次性 in-memory 过滤后写大文件
-     造成的卡顿，也避免并发删除同一会话的死锁风险。
+     * 实现：由 [ConversationStore.deleteConversations] 单次过滤 + 单次写盘完成，
+     * 避免 N 个会话触发 N 次整文件重写。
      *
      * @param convIds 要删除的会话 ID 列表
      */
     suspend fun deleteConversations(convIds: List<String>) {
         if (convIds.isEmpty()) return
-        convIds.forEach { convId ->
-            store.deleteConversation(convId)
-        }
+        store.deleteConversations(convIds)
     }
 
-    suspend fun appendMessage(message: Message) = store.appendMessage(message)
+    suspend fun appendMessage(message: Message): Boolean = store.appendMessage(message)
 
-    suspend fun updateMessage(message: Message) = store.updateMessage(message)
+    suspend fun updateMessage(message: Message): Boolean = store.updateMessage(message)
 
-    suspend fun replaceMessages(convId: String, messages: List<Message>) = store.replaceMessages(convId, messages)
+    suspend fun replaceMessages(convId: String, messages: List<Message>): Boolean =
+        store.replaceMessages(convId, messages)
 
     fun getConversation(convId: String): Conversation? =
         store.conversations.value.firstOrNull { it.id == convId }
@@ -193,6 +195,39 @@ class ConversationRepository(
         conversations: List<Conversation>,
         messages: Map<String, List<Message>>
     ) = store.replaceAll(conversations, messages)
+
+    /**
+     * v2 快照导入（4.1：replaceAll 扩展支持角色库，或新增 importV2Snapshot）。
+     *
+     * 写盘顺序（3.4）：角色库 → 会话 → 消息；群聊（[groupChats]）1.3.0 不导入，
+     * 由 DataPorter 在解析阶段计入跳过清单。
+     *
+     * @param characters 角色库主档
+     * @param conversations 私聊会话
+     * @param messages 会话消息
+     * @param mode 导入模式（替换 / 合并 / 仅导入角色库）
+     */
+    suspend fun importV2Snapshot(
+        characters: List<Character>,
+        conversations: List<Conversation>,
+        messages: Map<String, List<Message>>,
+        mode: ImportMode
+    ) {
+        when (mode) {
+            ImportMode.REPLACE -> {
+                characterRepository?.replaceCharacters(characters)
+                store.replaceAll(conversations, messages)
+            }
+            ImportMode.MERGE -> {
+                characterRepository?.mergeCharacters(characters)
+                store.importAll(conversations, messages)
+            }
+            ImportMode.CHARACTERS_ONLY -> {
+                // 只登记 characters，其余不动（3.1）
+                characterRepository?.mergeCharacters(characters)
+            }
+        }
+    }
 
     /**
      * 当前是否有会话数据（用于导入时判断是否需要弹窗让用户抉择）。

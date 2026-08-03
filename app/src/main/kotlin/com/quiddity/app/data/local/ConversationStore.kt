@@ -3,6 +3,7 @@ package com.quiddity.app.data.local
 import android.content.Context
 import android.util.AtomicFile
 import com.quiddity.app.data.model.Conversation
+import com.quiddity.app.data.model.ConversationType
 import com.quiddity.app.data.model.Message
 import com.quiddity.app.util.QuiddityConstants
 import kotlinx.coroutines.Dispatchers
@@ -139,12 +140,28 @@ class ConversationStore(private val context: Context) {
             else json.decodeFromString(ListSerializer(Conversation.serializer()), text)
         }.getOrElse {
             android.util.Log.w("ConversationStore", "读取 conversations.json 失败", it)
+            backupCorruptFile(conversationsFile)
             emptyList()
         }
     }
 
-    private fun writeConversationsAtomic(list: List<Conversation>) {
+    /**
+     * 损坏文件备份：解码失败时把原文件改名保留（.corrupt-<时间戳>），
+     * 避免用户数据被静默当作"无记录"永久丢失。
+     */
+    private fun backupCorruptFile(file: File) {
+        runCatching {
+            if (file.exists()) {
+                val bak = File(file.parentFile, "${file.name}.corrupt-${System.currentTimeMillis()}")
+                file.renameTo(bak)
+            }
+        }
+    }
+
+    /** @return 是否写盘成功（失败仅记录日志，调用方按需上报 UI） */
+    private fun writeConversationsAtomic(list: List<Conversation>): Boolean {
         val text = json.encodeToString(ListSerializer(Conversation.serializer()), list)
+        var success = true
         runCatching {
             var stream = conversationsAtomicFile.startWrite()
             try {
@@ -153,9 +170,11 @@ class ConversationStore(private val context: Context) {
                 conversationsAtomicFile.finishWrite(stream)
             } catch (t: Throwable) {
                 conversationsAtomicFile.failWrite(stream)
+                success = false
                 throw t
             }
         }.onFailure { android.util.Log.e("ConversationStore", "写入 conversations.json 失败", it) }
+        return success
     }
 
     suspend fun observeMessages(convId: String): StateFlow<List<Message>> {
@@ -183,13 +202,16 @@ class ConversationStore(private val context: Context) {
             else json.decodeFromString(ListSerializer(Message.serializer()), text)
         }.getOrElse {
             android.util.Log.w("ConversationStore", "读取 messages_$convId.json 失败", it)
+            backupCorruptFile(file)
             emptyList()
         }
     }
 
-    private fun writeMessagesAtomic(convId: String, messages: List<Message>) {
+    /** @return 是否写盘成功（失败仅记录日志，调用方按需上报 UI） */
+    private fun writeMessagesAtomic(convId: String, messages: List<Message>): Boolean {
         val af = atomicMessagesFile(convId)
         val text = json.encodeToString(ListSerializer(Message.serializer()), messages)
+        var success = true
         runCatching {
             var stream = af.startWrite()
             try {
@@ -198,9 +220,11 @@ class ConversationStore(private val context: Context) {
                 af.finishWrite(stream)
             } catch (t: Throwable) {
                 af.failWrite(stream)
+                success = false
                 throw t
             }
         }.onFailure { android.util.Log.e("ConversationStore", "写入 messages_$convId.json 失败", it) }
+        return success
     }
 
     suspend fun createConversation(conv: Conversation) = withContext(Dispatchers.IO) {
@@ -227,7 +251,27 @@ class ConversationStore(private val context: Context) {
         }
     }
 
-    suspend fun appendMessage(message: Message) = withContext(Dispatchers.IO) {
+    /**
+     * 批量删除多个会话：单次内存过滤 + 单次写盘，避免 N 个会话触发 N 次整文件重写。
+     */
+    suspend fun deleteConversations(convIds: List<String>) = withContext(Dispatchers.IO) {
+        if (convIds.isEmpty()) return@withContext
+        val target = convIds.toSet()
+        val newList = _conversations.value.filterNot { it.id in target }
+        writeConversationsAtomic(newList)
+        _conversations.value = newList
+        convIds.forEach { convId ->
+            runCatching { messagesFile(convId).delete() }
+                .onFailure { android.util.Log.w("ConversationStore", "删除 messages_$convId.json 失败", it) }
+            getMessageLock(convId).withLock {
+                messagesCache.remove(convId)
+                messagesFlows.remove(convId)?.value = emptyList()
+            }
+        }
+    }
+
+    /** @return 是否写盘成功 */
+    suspend fun appendMessage(message: Message): Boolean = withContext(Dispatchers.IO) {
         val convId = message.conversationId
 
         if (!messagesCache.containsKey(convId)) {
@@ -250,7 +294,7 @@ class ConversationStore(private val context: Context) {
             }
             val snapshot = cache.toList()
             messagesFlows[convId]?.value = snapshot
-            writeMessagesAtomic(convId, snapshot)
+            if (!writeMessagesAtomic(convId, snapshot)) return@withContext false
         }
 
         val preview = message.content
@@ -262,20 +306,26 @@ class ConversationStore(private val context: Context) {
                 else it
             }
         val now = System.currentTimeMillis()
-        val newList = _conversations.value.map { conv ->
-            if (conv.id == convId) conv.copy(lastMessagePreview = preview, updatedAt = now)
-            else conv
+        // 流式中的 AI 消息尚未定型：不更新会话预览与 updatedAt，
+        // 避免每个 token 都重写 conversations.json（预览内容也是中间态）
+        if (!message.isStreaming) {
+            val newList = _conversations.value.map { conv ->
+                if (conv.id == convId) conv.copy(lastMessagePreview = preview, updatedAt = now)
+                else conv
+            }
+            if (!writeConversationsAtomic(newList)) return@withContext false
+            _conversations.value = newList
         }
-        writeConversationsAtomic(newList)
-        _conversations.value = newList
+        true
     }
 
-    suspend fun updateMessage(message: Message) = withContext(Dispatchers.IO) {
+    /** @return 是否写盘成功 */
+    suspend fun updateMessage(message: Message): Boolean = withContext(Dispatchers.IO) {
         val convId = message.conversationId
         getMessageLock(convId).withLock {
-            val cache = messagesCache[convId] ?: return@withLock
+            val cache = messagesCache[convId] ?: return@withLock false
             val idx = cache.indexOfFirst { it.id == message.id }
-            if (idx < 0) return@withLock
+            if (idx < 0) return@withLock false
             cache[idx] = message
             val snapshot = cache.toList()
             messagesFlows[convId]?.value = snapshot
@@ -283,24 +333,30 @@ class ConversationStore(private val context: Context) {
         }
     }
 
-    suspend fun replaceMessages(convId: String, messages: List<Message>) = withContext(Dispatchers.IO) {
+    /** @return 是否写盘成功 */
+    suspend fun replaceMessages(convId: String, messages: List<Message>): Boolean = withContext(Dispatchers.IO) {
         getMessageLock(convId).withLock {
             messagesCache[convId] = messages.toMutableList()
             messagesFlows[convId]?.value = messages
-            writeMessagesAtomic(convId, messages)
+            if (!writeMessagesAtomic(convId, messages)) return@withContext false
         }
         val preview = messages.lastOrNull()?.content
             ?.replace("\n", " ")
             ?.trim()
-            ?.let { if (it.length > 60) it.take(60) + "…" else it }
+            ?.let {
+                if (it.length > QuiddityConstants.MESSAGE_PREVIEW_MAX_CHARS)
+                    it.take(QuiddityConstants.MESSAGE_PREVIEW_MAX_CHARS) + "…"
+                else it
+            }
             .orEmpty()
         val now = System.currentTimeMillis()
         val newList = _conversations.value.map { conv ->
             if (conv.id == convId) conv.copy(lastMessagePreview = preview, updatedAt = now)
             else conv
         }
-        writeConversationsAtomic(newList)
+        if (!writeConversationsAtomic(newList)) return@withContext false
         _conversations.value = newList
+        true
     }
 
     suspend fun exportAll(): Map<String, List<Message>> = withContext(Dispatchers.IO) {
@@ -333,32 +389,79 @@ class ConversationStore(private val context: Context) {
      * 替换式导入：删除全部现有会话与消息，写入导入数据。
      *
      * 与 [importAll]（合并模式）互补：用户选择"替换现有数据"时调用。
-     * 先清理旧会话的消息文件与缓存，再写入新数据，避免残留。
+     *
+     * 3.4 原子性要求：替换模式**先备份再替换**——先把本机数据文件改名 `.bak`，
+     * 新数据写盘成功后再删备份；失败则回滚 `.bak`，保证替换中途崩溃不丢本机数据。
      */
     suspend fun replaceAll(
         conversations: List<Conversation>,
         messages: Map<String, List<Message>>
     ) = withContext(Dispatchers.IO) {
-        // 清理旧会话的消息文件与内存缓存
-        _conversations.value.forEach { conv ->
-            getMessageLock(conv.id).withLock {
-                messagesFile(conv.id).delete()
-                messagesCache.remove(conv.id)
-                messagesFlows.remove(conv.id)?.value = emptyList()
+        val backedUpFiles = mutableListOf<Pair<File, File>>()
+        try {
+            // 1. 备份：本机数据文件改名 .bak（conversations.json + 各 messages_<id>.json）
+            val convFile = conversationsFile
+            if (convFile.exists()) {
+                val bak = File(dataDir, "conversations.json.bak")
+                if (convFile.renameTo(bak)) {
+                    backedUpFiles += convFile to bak
+                }
             }
-        }
-        // 写入新会话列表
-        val sorted = conversations
-            .sortedWith(compareByDescending<Conversation> { it.pinned }.thenByDescending { it.updatedAt })
-        writeConversationsAtomic(sorted)
-        _conversations.value = sorted
-        // 写入新消息
-        messages.forEach { (convId, msgs) ->
-            getMessageLock(convId).withLock {
-                messagesCache[convId] = msgs.toMutableList()
-                messagesFlows[convId]?.value = msgs
-                writeMessagesAtomic(convId, msgs)
+            _conversations.value.forEach { conv ->
+                getMessageLock(conv.id).withLock {
+                    val file = messagesFile(conv.id)
+                    if (file.exists()) {
+                        val bak = File(dataDir, "messages_${conv.id}.json.bak")
+                        if (file.renameTo(bak)) {
+                            backedUpFiles += file to bak
+                        }
+                    }
+                    messagesCache.remove(conv.id)
+                    messagesFlows.remove(conv.id)?.value = emptyList()
+                }
             }
+
+            // 2. 写入新会话列表
+            val sorted = conversations
+                .sortedWith(compareByDescending<Conversation> { it.pinned }.thenByDescending { it.updatedAt })
+            writeConversationsAtomic(sorted)
+            _conversations.value = sorted
+
+            // 3. 写入新消息
+            messages.forEach { (convId, msgs) ->
+                getMessageLock(convId).withLock {
+                    messagesCache[convId] = msgs.toMutableList()
+                    messagesFlows[convId]?.value = msgs
+                    writeMessagesAtomic(convId, msgs)
+                }
+            }
+
+            // 4. 成功：删除备份
+            backedUpFiles.forEach { (_, bak) ->
+                runCatching { bak.delete() }
+            }
+        } catch (t: Throwable) {
+            // 5. 失败：回滚 .bak，恢复本机数据
+            backedUpFiles.forEach { (orig, bak) ->
+                runCatching {
+                    if (bak.exists()) {
+                        orig.delete()
+                        bak.renameTo(orig)
+                    }
+                }
+            }
+            _conversations.value = readConversations()
+            messagesCache.clear()
+            messagesFlows.values.forEach { it.value = emptyList() }
+            // 回滚后重新从磁盘加载消息，恢复内存态与磁盘一致，避免 UI 显示空聊天直到重启
+            _conversations.value.forEach { conv ->
+                getMessageLock(conv.id).withLock {
+                    val restored = loadMessagesFromDisk(conv.id)
+                    messagesCache[conv.id] = restored.toMutableList()
+                    messagesFlows.getOrPut(conv.id) { MutableStateFlow(restored) }.value = restored
+                }
+            }
+            throw t
         }
     }
 }

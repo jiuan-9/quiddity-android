@@ -49,7 +49,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.quiddity.app.domain.AiPersonaField
 import com.quiddity.app.domain.ApiCatalogManager
+import com.quiddity.app.domain.QuickSetupPrompt
 import com.quiddity.app.domain.QuickSetupTier
 import com.quiddity.app.ui.components.ConfirmDialog
 import com.quiddity.app.ui.components.QuiddityTextField
@@ -89,7 +91,7 @@ import kotlinx.coroutines.launch
  * 1. 顶部档位指示器（粗略/具体/全面，与模型等级锁定，仅当前档可用）；
  * 2. 用户填写人设描述 → 点击「设定」；
  * 3. 加载弹窗（失败提示「生成失败，请重试 / API 未配置」）；
- * 4. 结果预览弹窗（可编辑全部返回内容）→「填入」覆盖各设置项 /「取消」退出。
+ * 4. 结果预览弹窗（按 AI 人设 / 用户人设 / 场景 / 记忆分区编辑，仅展示当前档位支持的字段）→「填入」覆盖各设置项 /「取消」退出。
  *
  * 填入前若检测到已有 persona/userPersona/scene/memory 内容，弹确认框二次确认。
  */
@@ -224,7 +226,7 @@ fun QuickSetupPanel(
         )
         Spacer(modifier = Modifier.size(4.dp))
         Text(
-            text = "可以很模糊，AI 会基于你的描述生成完整的 AI 人设、用户人设、场景设置与记忆设置。",
+            text = "可以很模糊，AI 会在不曲解你原意的范围内自然填充，字数是上限而非必须达到。${selectedTier.summary}。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
         )
@@ -376,7 +378,7 @@ private fun TierIndicator(
                     )
                     Spacer(modifier = Modifier.size(2.dp))
                     Text(
-                        text = "${tier.maxChars}字内",
+                        text = "≤${tier.maxChars}字",
                         style = MaterialTheme.typography.labelSmall,
                         color = when {
                             !isAvailable -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f)
@@ -399,7 +401,50 @@ private fun QuickSetupResultDialog(
     onFillIn: (String) -> Unit,
     onCancel: () -> Unit
 ) {
-    var editedText by rememberSaveable(initialText) { mutableStateOf(initialText) }
+    val parsed = remember(initialText) { QuickSetupPrompt.parseQuickSetupResult(initialText, tier) }
+    val aiFields = tier.aiPersonaFields()
+
+    var aiName by rememberSaveable(parsed.persona.name) { mutableStateOf(parsed.persona.name) }
+    var aiPersona by rememberSaveable(parsed.persona.persona) { mutableStateOf(parsed.persona.persona) }
+    var aiCharacter by rememberSaveable(parsed.persona.character) { mutableStateOf(parsed.persona.character) }
+    var aiAppearance by rememberSaveable(parsed.persona.appearance) { mutableStateOf(parsed.persona.appearance) }
+    var aiWorld by rememberSaveable(parsed.persona.worldBackground) { mutableStateOf(parsed.persona.worldBackground) }
+    var aiDesired by rememberSaveable(parsed.persona.desired) { mutableStateOf(parsed.persona.desired) }
+    var userName by rememberSaveable(parsed.userPersona.name) { mutableStateOf(parsed.userPersona.name) }
+    var userIdentity by rememberSaveable(parsed.userPersona.identity) { mutableStateOf(parsed.userPersona.identity) }
+    var userGender by rememberSaveable(parsed.userPersona.gender) { mutableStateOf(parsed.userPersona.gender) }
+    var userAge by rememberSaveable(parsed.userPersona.age) { mutableStateOf(parsed.userPersona.age) }
+    var userAppearance by rememberSaveable(parsed.userPersona.appearance) { mutableStateOf(parsed.userPersona.appearance) }
+    var scene by rememberSaveable(parsed.scene) { mutableStateOf(parsed.scene) }
+    var memory by rememberSaveable(parsed.memory) { mutableStateOf(parsed.memory) }
+
+    // 仅按当前档位支持的字段重建结构化文本，供 applyQuickSetupResult 二次解析落盘
+    fun buildText(): String {
+        val sb = StringBuilder()
+        sb.append("【AI人设】\n")
+        sb.append("[名字]").append(aiName).append("\n")
+        sb.append("[身份背景]").append(aiPersona).append("\n")
+        sb.append("[性格]").append(aiCharacter).append("\n")
+        if (AiPersonaField.APPEARANCE in aiFields) sb.append("[外观]").append(aiAppearance).append("\n")
+        if (AiPersonaField.WORLD_BACKGROUND in aiFields) sb.append("[世界背景]").append(aiWorld).append("\n")
+        if (AiPersonaField.DESIRED in aiFields) sb.append("[期望特质]").append(aiDesired).append("\n")
+        sb.append("\n")
+        sb.append("【用户人设】\n")
+        sb.append("[名字]").append(userName).append("\n")
+        sb.append("[身份]").append(userIdentity).append("\n")
+        sb.append("[性别]").append(userGender).append("\n")
+        sb.append("[年龄]").append(userAge).append("\n")
+        sb.append("[外观]").append(userAppearance).append("\n")
+        sb.append("\n")
+        sb.append("【场景设置】\n")
+        sb.append("[当前场景]").append(scene).append("\n")
+        if (tier.includesMemory) {
+            sb.append("\n")
+            sb.append("【记忆设置】\n")
+            sb.append("[需要记住的事]").append(memory).append("\n")
+        }
+        return sb.toString()
+    }
 
     Dialog(
         onDismissRequest = onCancel,
@@ -422,31 +467,101 @@ private fun QuickSetupResultDialog(
                 )
                 Spacer(modifier = Modifier.size(4.dp))
                 Text(
-                    text = "档位：${tier.chineseName} · 直接编辑后点击「填入」将覆盖各设置项",
+                    text = "档位：${tier.chineseName} · 仅展示本档位支持的字段，编辑后点击「填入」将覆盖各设置项",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                 )
                 Spacer(modifier = Modifier.size(12.dp))
-                OutlinedTextField(
-                    value = editedText,
-                    onValueChange = { editedText = it },
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(min = 200.dp, max = 420.dp),
-                    textStyle = MaterialTheme.typography.bodySmall,
-                    placeholder = { Text("生成内容为空") }
-                )
+                        .heightIn(max = 480.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    SectionHeader(title = "AI 人设")
+                    SectionField(label = "名字", value = aiName, onValueChange = { aiName = it }, singleLine = true)
+                    SectionField(label = "身份背景", value = aiPersona, onValueChange = { aiPersona = it })
+                    SectionField(label = "性格", value = aiCharacter, onValueChange = { aiCharacter = it })
+                    if (AiPersonaField.APPEARANCE in aiFields) {
+                        SectionField(label = "外观", value = aiAppearance, onValueChange = { aiAppearance = it })
+                    }
+                    if (AiPersonaField.WORLD_BACKGROUND in aiFields) {
+                        SectionField(label = "世界背景", value = aiWorld, onValueChange = { aiWorld = it })
+                    }
+                    if (AiPersonaField.DESIRED in aiFields) {
+                        SectionField(label = "期望特质", value = aiDesired, onValueChange = { aiDesired = it })
+                    }
+
+                    SectionHeader(title = "用户人设")
+                    SectionField(label = "名字", value = userName, onValueChange = { userName = it }, singleLine = true)
+                    SectionField(label = "身份", value = userIdentity, onValueChange = { userIdentity = it })
+                    SectionField(label = "性别", value = userGender, onValueChange = { userGender = it }, singleLine = true)
+                    SectionField(label = "年龄", value = userAge, onValueChange = { userAge = it }, singleLine = true)
+                    SectionField(label = "外观", value = userAppearance, onValueChange = { userAppearance = it })
+
+                    SectionHeader(title = "场景设置")
+                    SectionField(label = "当前场景", value = scene, onValueChange = { scene = it })
+
+                    if (tier.includesMemory) {
+                        SectionHeader(title = "记忆设置")
+                        SectionField(label = "需要记住的事", value = memory, onValueChange = { memory = it })
+                    }
+                }
                 Spacer(modifier = Modifier.size(16.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
                 ) {
                     TextButton(onClick = onCancel) { Text("取消") }
-                    TextButton(onClick = { onFillIn(editedText) }) {
+                    TextButton(onClick = { onFillIn(buildText()) }) {
                         Text("填入", fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
         }
     }
+}
+
+/**
+ * 分区标题（纯文本，不加栏目框，避免与字段编辑框视觉混淆）。
+ */
+@Composable
+private fun SectionHeader(title: String) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.titleSmall,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(top = 8.dp, bottom = 6.dp)
+    )
+}
+
+/**
+ * 单个可编辑字段：标签 + 输入框（非档位支持字段不渲染）。
+ */
+@Composable
+private fun SectionField(
+    label: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    singleLine: Boolean = false
+) {
+    Text(
+        text = label,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    Spacer(modifier = Modifier.size(4.dp))
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = if (singleLine) 52.dp else 76.dp),
+        textStyle = MaterialTheme.typography.bodySmall,
+        singleLine = singleLine,
+        minLines = if (singleLine) 1 else 2,
+        maxLines = if (singleLine) 1 else 6
+    )
+    Spacer(modifier = Modifier.size(8.dp))
 }
