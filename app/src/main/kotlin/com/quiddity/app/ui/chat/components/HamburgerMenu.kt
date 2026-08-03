@@ -58,6 +58,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableFloatState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -172,7 +173,7 @@ fun HamburgerMenu(
     // 导入后需重填密钥的模型配置名称清单（3.2 解密自检失败项）
     var pendingKeyRefill by remember { mutableStateOf<List<String>?>(null) }
     // 查看时间库流程：0=关闭 1=输密码 2=展示内容
-    var timeLibraryViewStep by remember { mutableStateOf(0) }
+    var timeLibraryViewStep by remember { mutableIntStateOf(0) }
     var timeLibraryPasswordInput by remember { mutableStateOf("") }
     var timeLibraryPasswordError by remember { mutableStateOf(false) }
 
@@ -487,7 +488,10 @@ fun HamburgerMenu(
                                 }
                                 viewModel.setActiveMessageEnabled(enabled)
                             },
-                            onViewTimeLibrary = { timeLibraryViewStep = 1 },
+                            onViewTimeLibrary = {
+                                timeLibraryViewStep =
+                                    if (conversation?.timeLibraryPasswordUnlocked == true) 2 else 1
+                            },
                             onOpenSearchChat = { currentPanel = HamburgerPanel.SearchChat }
                         )
                         HamburgerPanel.QuickSetup -> {
@@ -720,16 +724,13 @@ fun HamburgerMenu(
                 error = timeLibraryPasswordError,
                 input = timeLibraryPasswordInput,
                 revealed = conv.timeLibraryPasswordRevealed,
-                unlocked = conv.timeLibraryPasswordUnlocked,
                 password = conv.timeLibraryPassword,
                 onInputChange = { value ->
                     timeLibraryPasswordInput = value.filter { it.isDigit() }.take(6)
                     timeLibraryPasswordError = false
                 },
                 onConfirm = {
-                    if (conv.timeLibraryPasswordUnlocked ||
-                        timeLibraryPasswordInput == conv.timeLibraryPassword
-                    ) {
+                    if (timeLibraryPasswordInput == conv.timeLibraryPassword) {
                         viewModel.markTimeLibraryUnlocked()
                         timeLibraryViewStep = 2
                         timeLibraryPasswordInput = ""
@@ -975,64 +976,6 @@ private fun ExportFormatPickerDialog(
     }
 }
 
-/** 子面板类型。 */
-/**
- * 主动消息状态卡：直接展示时间库生成情况、时间点与下次触发时间，
- * 便于用户判断"为什么还没收到主动消息"（未生成 / 空库 / 已完成 / 等待触发）。
- */
-@Composable
-private fun TimeLibraryStatusCard(
-    conversation: Conversation?,
-    modifier: Modifier = Modifier
-) {
-    val conv = conversation ?: return
-    val today = java.time.LocalDate.now().toString()
-    val generatedToday = conv.timeLibraryGeneratedDate == today
-    val times = conv.timeLibrary
-    val pending = times.filter { it.isPending }
-    val nowMinutes = java.time.LocalTime.now().let { it.hour * 60 + it.minute }
-    val next = pending
-        .mapNotNull { tp ->
-            com.quiddity.app.domain.TimeLibraryEngine.parseMinutes(tp.time)
-                ?.let { minutes -> tp to minutes }
-        }
-        .filter { (_, minutes) -> minutes > nowMinutes }
-        .minByOrNull { (_, minutes) -> minutes }
-        ?.first
-
-    val text = when {
-        !generatedToday && times.isEmpty() ->
-            "今日尚未生成时间库：请确认已配置模型接口，重新打开本会话会再次尝试"
-        !generatedToday ->
-            "今日尚未生成新时间库（沿用旧库：${times.joinToString("、") { readableTimeText(it.time) }}）"
-        times.isEmpty() ->
-            "今日时间库为空：AI 判断今天不需要主动发消息"
-        pending.isEmpty() ->
-            "今日时间库已完成（${times.size} 个时间点均已处理）"
-        else ->
-            "今日时间库：${times.joinToString("、") { readableTimeText(it.time) }}" +
-                (next?.let { " · 下次触发：${readableTimeText(it.time)}" } ?: " · 今日时间点已过，等待明日重置")
-    }
-    val passwordHint = when {
-        conv.timeLibraryPassword.isBlank() -> ""
-        conv.timeLibraryPasswordRevealed -> "\n查看密码：${conv.timeLibraryPassword}"
-        else -> "\n本会话时间库设置了查看密码（AI 未告知）"
-    }
-
-    Surface(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow
-    ) {
-        Text(
-            text = text + passwordHint,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(12.dp)
-        )
-    }
-}
-
 /** 把 "13:30" 转成"下午 1:30"这种用户一看就懂的说法。 */
 private fun readableTimeText(time: String): String {
     val parts = time.split(":")
@@ -1251,7 +1194,6 @@ private fun TimeLibraryPasswordDialog(
     error: Boolean,
     input: String,
     revealed: Boolean,
-    unlocked: Boolean,
     password: String,
     onInputChange: (String) -> Unit,
     onConfirm: () -> Unit,
@@ -1286,61 +1228,41 @@ private fun TimeLibraryPasswordDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center
                 )
-                if (unlocked) {
-                    // 已成功打开过一次：密码直接显示，无需再次输入
-                    Spacer(modifier = Modifier.size(8.dp))
+                if (!revealed) {
+                    Spacer(modifier = Modifier.size(6.dp))
                     Text(
-                        text = "已解锁，查看密码：$password",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.primary
+                        text = "AI 决定不告知密码。你可以直接在聊天里问 AI，或等明天重新生成时间库后再查看。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error.copy(alpha = 0.8f),
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
                     )
-                    Spacer(modifier = Modifier.size(12.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End
-                    ) {
-                        TextButton(onClick = onDismiss) { Text("取消") }
-                        Spacer(modifier = Modifier.size(8.dp))
-                        TextButton(onClick = onConfirm) { Text("查看") }
-                    }
-                } else {
-                    if (!revealed) {
-                        Spacer(modifier = Modifier.size(6.dp))
-                        Text(
-                            text = "AI 决定不告知密码。你可以直接在聊天里问 AI，或等明天重新生成时间库后再查看。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error.copy(alpha = 0.8f),
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                        )
-                    }
-                    Spacer(modifier = Modifier.size(12.dp))
-                    OutlinedTextField(
-                        value = input,
-                        onValueChange = onInputChange,
-                        label = { Text("数字密码") },
-                        singleLine = true,
-                        isError = error,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword)
+                }
+                Spacer(modifier = Modifier.size(12.dp))
+                OutlinedTextField(
+                    value = input,
+                    onValueChange = onInputChange,
+                    label = { Text("数字密码") },
+                    singleLine = true,
+                    isError = error,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword)
+                )
+                if (error) {
+                    Spacer(modifier = Modifier.size(4.dp))
+                    Text(
+                        text = "密码不对，请重试",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
                     )
-                    if (error) {
-                        Spacer(modifier = Modifier.size(4.dp))
-                        Text(
-                            text = "密码不对，请重试",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error
-                        )
-                    }
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 12.dp),
-                        horizontalArrangement = Arrangement.End
-                    ) {
-                        TextButton(onClick = onDismiss) { Text("取消") }
-                        Spacer(modifier = Modifier.size(8.dp))
-                        TextButton(onClick = onConfirm) { Text("查看") }
-                    }
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 12.dp),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = onDismiss) { Text("取消") }
+                    Spacer(modifier = Modifier.size(8.dp))
+                    TextButton(onClick = onConfirm) { Text("查看") }
                 }
             }
         }
@@ -1564,11 +1486,6 @@ private fun MainMenuContent(
             if (conversation?.activeMessageEnabled == true) {
                 Spacer(modifier = Modifier.size(8.dp))
                 ActiveMessagePermissionCard(
-                    modifier = Modifier.padding(horizontal = 16.dp)
-                )
-                Spacer(modifier = Modifier.size(8.dp))
-                TimeLibraryStatusCard(
-                    conversation = conversation,
                     modifier = Modifier.padding(horizontal = 16.dp)
                 )
                 Spacer(modifier = Modifier.size(4.dp))

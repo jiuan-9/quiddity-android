@@ -466,15 +466,6 @@ fun MessageBubble(
                 }
             }
 
-            // ===== 发送时间（24 小时制小字，显示在气泡旁） =====
-            Spacer(modifier = Modifier.size(6.dp))
-            Text(
-                text = DateUtils.formatTime(message.timestamp),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                modifier = Modifier.align(Alignment.Bottom)
-            )
-
             // ===== 改写按钮（AI 消息）：与"撤回"对称，位于气泡另一端（AI 头像对侧） =====
             if (!isUser && onRewrite != null && !multiSelectMode) {
                 AnimatedVisibility(
@@ -521,6 +512,23 @@ fun MessageBubble(
             if (!isUser) {
                 Spacer(modifier = Modifier.size(48.dp))
             }
+        }
+
+        // ===== 发送时间（24 小时制小字，显示在气泡下方） =====
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+        ) {
+            Text(
+                text = DateUtils.formatTime(message.timestamp),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                modifier = Modifier.padding(
+                    start = if (isUser) 0.dp else 48.dp,
+                    end = if (isUser) 48.dp else 0.dp,
+                    top = 2.dp
+                )
+            )
         }
 
         // AI 消息（非 streaming）的"继续说 / 重说"操作栏（多选模式下隐藏）；
