@@ -184,7 +184,9 @@ class ConversationStore(private val context: Context) {
 
         return getLoadLock(convId).withLock {
             messagesFlows[convId]?.let { return@withLock it }
-            val messages = loadMessagesFromDisk(convId)
+            // 性能：首次进入会话时消息文件读取 + JSON 解码移到 IO 线程，
+            // 避免在主线程阻塞导致进入页面卡死
+            val messages = withContext(Dispatchers.IO) { loadMessagesFromDisk(convId) }
             messagesCache.getOrPut(convId) { messages.toMutableList() }
             messagesFlows.getOrPut(convId) { MutableStateFlow(messages) }
         }

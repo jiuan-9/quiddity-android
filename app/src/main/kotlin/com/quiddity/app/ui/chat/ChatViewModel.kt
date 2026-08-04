@@ -165,6 +165,18 @@ class ChatViewModel(
     private var replyRunStart = 0L
     private var replyRunChars = 0
 
+    /**
+     * 全量会话的成员名字 / 头像映射（预计算一次，消息气泡直接查表，
+     * 避免每条消息渲染时重复扫描仓库并在组合中订阅 conversations 状态）。
+     */
+    val senderNameMap: StateFlow<Map<String, String>> = conversationRepository.conversations
+        .map { list -> list.associate { it.id to it.persona.name } }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
+
+    val senderAvatarMap: StateFlow<Map<String, String?>> = conversationRepository.conversations
+        .map { list -> list.associate { it.id to it.persona.aiAvatarUri } }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
+
     // ===== 群聊点名回复队列（方案四：1 个回复 + 2 个排队） =====
     private val groupQueueEngine = GroupReplyQueue()
     private val _groupQueue = MutableStateFlow<List<GroupReplyQueue.Item>>(emptyList())

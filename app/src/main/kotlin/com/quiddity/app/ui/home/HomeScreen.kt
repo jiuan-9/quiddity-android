@@ -383,18 +383,9 @@ fun HomeScreen(
                                 if (pagerState.currentPage == 0) {
                                     viewModel.createConversation()
                                 } else {
-                                    // 群聊：与私聊一致先创建会话，进入后经设置-成员管理添加成员
-                                    viewModel.createGroupConversation { result ->
-                                        result.onSuccess { groupId ->
-                                            onOpenConversation(groupId)
-                                        }.onFailure { e ->
-                                            android.widget.Toast.makeText(
-                                                context,
-                                                e.message ?: "创建群聊失败",
-                                                android.widget.Toast.LENGTH_SHORT
-                                            ).show()
-                                        }
-                                    }
+                                    // 群聊：与私聊一致只创建列表项（新群聊 N），不直接进入；
+                                    // 进入后经设置-成员管理添加成员
+                                    viewModel.createGroupConversation()
                                 }
                             },
                             hasListWallpaper = hasListWallpaper

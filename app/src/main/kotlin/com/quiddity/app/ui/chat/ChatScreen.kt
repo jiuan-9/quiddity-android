@@ -152,6 +152,8 @@ fun ChatScreen(
     val chatError by viewModel.chatError.collectAsStateWithLifecycle()
     val timeLibraryHint by viewModel.timeLibraryHint.collectAsStateWithLifecycle()
     val groupQueue by viewModel.groupQueue.collectAsStateWithLifecycle()
+    val senderNameMap by viewModel.senderNameMap.collectAsStateWithLifecycle()
+    val senderAvatarMap by viewModel.senderAvatarMap.collectAsStateWithLifecycle()
     val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
@@ -241,7 +243,7 @@ fun ChatScreen(
             val role = when {
                 isGroupChat && msg.role == Role.USER -> "我"
                 isGroupChat -> msg.senderId?.let {
-                    viewModel.memberName(it).takeIf { name -> name.isNotBlank() }
+                    senderNameMap[it]?.takeIf { name -> name.isNotBlank() }
                 } ?: "未知成员"
                 msg.role == Role.USER -> "我"
                 else -> "AI"
@@ -416,7 +418,7 @@ fun ChatScreen(
             selected.mapNotNull { it.senderId }
                 .distinct()
                 .associateWith { id ->
-                    viewModel.memberName(id).takeIf { name -> name.isNotBlank() } ?: "未知成员"
+                    senderNameMap[id]?.takeIf { name -> name.isNotBlank() } ?: "未知成员"
                 }
         } else {
             emptyMap()
@@ -770,14 +772,14 @@ fun ChatScreen(
                                                 } else {
                                                     if (isGroupChat) {
                                                         message.senderId?.let {
-                                                            viewModel.memberName(it)
-                                                                .takeIf { name -> name.isNotBlank() }
+                                                            senderNameMap[it]
+                                                                ?.takeIf { name -> name.isNotBlank() }
                                                                 ?: "未知成员"
                                                         }
                                                     } else null
                                                 },
                                                 senderAvatarUri = if (isGroupChat) {
-                                                    message.senderId?.let { viewModel.memberAvatar(it) }
+                                                    message.senderId?.let { senderAvatarMap[it] }
                                                 } else null,
                                                 bracketGrayEnabled = settings.bracketGrayEnabled,
                                                 typingDelayEnabled = settings.typingDelayEnabled,

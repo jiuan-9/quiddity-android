@@ -89,12 +89,12 @@ class HomeViewModel(
     }
 
     /**
-     * 创建群聊（需求：与创建私聊一致，先创建会话，成员随后在会话设置-成员管理中添加）。
+     * 创建群聊（需求：与创建私聊一致，只创建列表项，不直接进入；
+     * 成员随后在会话设置-成员管理中添加）。
      */
-    fun createGroupConversation(onDone: (Result<String>) -> Unit) {
+    fun createGroupConversation() {
         viewModelScope.launch {
-            val group = conversationRepository.createGroupConversation(emptyList(), null)
-            onDone(Result.success(group.id))
+            conversationRepository.createGroupConversation(emptyList(), null)
         }
     }
 
