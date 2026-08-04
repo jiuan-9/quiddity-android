@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.quiddity.app.data.model.Conversation
+import com.quiddity.app.data.model.ConversationType
 import com.quiddity.app.data.model.Message
 import com.quiddity.app.data.model.Persona
 import com.quiddity.app.data.model.PersonaCard
@@ -16,6 +17,7 @@ import com.quiddity.app.data.repo.TimeLibraryRepository.GenerationOutcome
 import com.quiddity.app.di.ServiceLocator
 import com.quiddity.app.domain.ApiCatalogManager
 import com.quiddity.app.domain.ChatError
+import com.quiddity.app.domain.GroupReplyQueue
 import com.quiddity.app.domain.TimeLibraryEngine
 import com.quiddity.app.util.IdGenerator
 import com.quiddity.app.util.QuiddityConstants
@@ -156,6 +158,132 @@ class ChatViewModel(
     /** 当前流式会话的根 Job，用于 stopGeneration 整体取消。 */
     private var streamJob: Job? = null
 
+    // ===== 群聊点名回复队列（方案四：1 个回复 + 2 个排队） =====
+    private val groupQueueEngine = GroupReplyQueue()
+    private val _groupQueue = MutableStateFlow<List<GroupReplyQueue.Item>>(emptyList())
+    val groupQueue: StateFlow<List<GroupReplyQueue.Item>> = _groupQueue.asStateFlow()
+    private var groupStreamJob: Job? = null
+
+    fun isGroup(): Boolean = conversation.value?.type == ConversationType.GROUP
+
+    /** 群聊成员会话列表（按加入顺序）。 */
+    fun groupMembers(): List<Conversation> =
+        conversation.value?.memberConversationIds.orEmpty()
+            .mapNotNull { conversationRepository.getConversation(it) }
+
+    /** 成员 AI 名字（消息气泡显示用）。 */
+    fun memberName(convId: String): String =
+        conversationRepository.getConversation(convId)?.persona?.name.orEmpty()
+
+    /** 成员 AI 头像（消息气泡显示用）。 */
+    fun memberAvatar(convId: String): String? =
+        conversationRepository.getConversation(convId)?.persona?.aiAvatarUri
+
+    /**
+     * 群聊成员点名回复（方案三：头像点击发送；方案四.8 上下文在点击那一刻定格）。
+     */
+    fun enqueueGroupMember(memberId: String) {
+        if (!isGroup()) return
+        val group = conversation.value ?: return
+        if (memberId !in group.memberConversationIds) return
+        if (groupStreamJob?.isActive == true && groupQueueEngine.isFull) return
+        if (groupQueueEngine.contains(memberId)) return
+        val frozen = _messages.value
+        if (!groupQueueEngine.enqueue(memberId, frozen)) return
+        syncGroupQueue()
+        if (groupStreamJob?.isActive != true) startGroupQueueProcessor()
+    }
+
+    private fun syncGroupQueue() {
+        _groupQueue.value = groupQueueEngine.snapshot()
+    }
+
+    /** 队列中某成员的排队序号（0=正在回复，1/2=排队）；不在队返回 -1。 */
+    fun queuePosition(memberId: String): Int = groupQueueEngine.positionOf(memberId)
+
+    fun isQueueFull(): Boolean = groupQueueEngine.isFull
+
+    /**
+     * 群聊队列处理器：串行消费队列，每个成员失败重试 5 次并逐次通知；
+     * 任一成员 5 次失败后整个队列取消、所有头像恢复（方案十三）。
+     */
+    private fun startGroupQueueProcessor() {
+        groupStreamJob = viewModelScope.launch {
+            _isGenerating.value = true
+            try {
+                while (groupQueueEngine.isNotEmpty) {
+                    val item = groupQueueEngine.snapshot().firstOrNull()
+                        ?: break
+                    val ok = runGroupMemberReplyWithRetry(item)
+                    groupQueueEngine.dequeue()
+                    syncGroupQueue()
+                    if (!ok) {
+                        groupQueueEngine.clear()
+                        syncGroupQueue()
+                        _errorEvent.value = "群聊回复失败，队列已取消"
+                        break
+                    }
+                }
+            } finally {
+                _isGenerating.value = false
+                notifyIdleIfNoWork()
+            }
+            awaitGroupMemoryCompressionIfNeeded()
+            notifyIdleIfNoWork()
+        }
+    }
+
+    /**
+     * 单成员回复（含 5 次重试）。返回是否最终成功。
+     */
+    private suspend fun runGroupMemberReplyWithRetry(item: GroupReplyQueue.Item): Boolean {
+        val group = conversation.value ?: return false
+        val member = conversationRepository.getConversation(item.memberId) ?: return false
+        var attempt = 0
+        while (attempt < QuiddityConstants.GROUP_RETRY_COUNT) {
+            attempt++
+            var failed = false
+            chatRepository.streamGroupMemberReply(
+                member = member,
+                group = group,
+                transcript = item.frozenMessages,
+                senderId = item.memberId
+            ) { event ->
+                when (event) {
+                    is ChatRepository.Event.Error -> {
+                        failed = true
+                        if (attempt < QuiddityConstants.GROUP_RETRY_COUNT) {
+                            _errorEvent.value = "网络错误，重试中 $attempt/${QuiddityConstants.GROUP_RETRY_COUNT}"
+                        } else {
+                            _errorEvent.value =
+                                "成员 ${member.persona.name.ifBlank { "AI" }} 回复失败"
+                        }
+                    }
+                    else -> handleStreamEvent(event)
+                }
+            }
+            if (!failed) return true
+        }
+        return false
+    }
+
+    /**
+     * 群聊小本本（方案六.2/十六.3）：队列全部回完后，若群聊消息数达到阈值
+     * 则压缩群聊记录写入 groupMemory；失败静默不打断用户。
+     */
+    private suspend fun awaitGroupMemoryCompressionIfNeeded() {
+        val group = conversation.value ?: return
+        if (!isGroup()) return
+        val messages = _messages.value.filterNot { it.isNotice }
+        if (messages.size < QuiddityConstants.GROUP_MEMORY_THRESHOLD) return
+        val summary = runCatching {
+            chatRepository.compressGroupMemory(group, messages)
+        }.getOrElse { group.groupMemory }
+        if (summary.isNotBlank() && summary != group.groupMemory) {
+            conversationRepository.updateConversation(group.copy(groupMemory = summary))
+        }
+    }
+
     /**
      * 发送用户消息并触发 AI 流式回复。
      *
@@ -168,9 +296,16 @@ class ChatViewModel(
      */
     fun sendMessage(text: String) {
         if (text.isBlank()) return
+        // 群聊只走头像点名回复（enqueueGroupMember），不走私聊自动回复
+        if (isGroup()) return
         // 仅在 API 调用 / 压缩期间阻止发送；发送延迟期间允许继续发送
         if (_isGenerating.value || _compressionState.value is CompressionState.Compressing) return
         val conv = conversation.value ?: return
+        // 方案九.4/6：私聊必须设置用户名才能发送消息
+        if (conv.userPersona.name.isBlank()) {
+            _errorEvent.value = "请先设置用户名"
+            return
+        }
 
         // 取消已 pending 的发送延迟（用户在延迟期间又发了一条消息 → 重置计时器）
         sendDelayJob?.cancel()
@@ -269,7 +404,8 @@ class ChatViewModel(
     fun hasActiveWork(): Boolean =
         _isGenerating.value ||
             _compressionState.value is CompressionState.Compressing ||
-            (sendDelayJob?.isActive == true)
+            (sendDelayJob?.isActive == true) ||
+            (groupStreamJob?.isActive == true)
 
     /** 无未完结任务时通知宿主（仅当宿主已请求释放才生效）。 */
     private fun notifyIdleIfNoWork() {
@@ -334,6 +470,7 @@ class ChatViewModel(
 
     /** 让 AI 主动发消息（空对话开场）。 */
     fun letAiStart() {
+        if (isGroup()) return
         if (_isGenerating.value) return
         cancelPendingSend() // 取消 pending 的发送延迟
         val conv = conversation.value ?: return
@@ -367,6 +504,7 @@ class ChatViewModel(
      * - 最后一条是 USER 时忽略（无 AI 回复可重说）。
      */
     fun regenerate() {
+        if (isGroup()) return
         if (_isGenerating.value) return
         cancelPendingSend() // 取消 pending 的发送延迟
         val conv = conversation.value ?: return
@@ -420,6 +558,7 @@ class ChatViewModel(
      * - 历史为空时忽略（无上下文可继续）。
      */
     fun continueGeneration() {
+        if (isGroup()) return
         if (_isGenerating.value) return
         cancelPendingSend() // 取消 pending 的发送延迟
         val conv = conversation.value ?: return
@@ -445,6 +584,43 @@ class ChatViewModel(
                     markSceneInjectedIfUnchanged(sceneAtStart)
                 }
             }
+        }
+    }
+
+    /**
+     * 群聊单条成员消息重新生成（方案十二.5-6：操作只作用于该条消息，不打断当前队列）。
+     *
+     * 语义：定位该成员消息，删除它及其后的所有消息，再用删除后的群聊历史
+     * 以该成员身份重新流式生成一条回复。
+     */
+    fun regenerateGroupMemberMessage(messageId: String) {
+        if (!isGroup()) return
+        if (_isGenerating.value) return
+        val group = conversation.value ?: return
+        val current = _messages.value
+        val targetIndex = current.indexOfFirst { it.id == messageId }
+        if (targetIndex < 0) return
+        val senderId = current[targetIndex].senderId ?: return
+        val member = conversationRepository.getConversation(senderId) ?: return
+        val newHistory = current.subList(0, targetIndex).toList()
+        groupStreamJob?.cancel()
+        groupStreamJob = viewModelScope.launch {
+            _isGenerating.value = true
+            try {
+                conversationRepository.replaceMessages(conversationId, newHistory)
+                chatRepository.streamGroupMemberReply(
+                    member = member,
+                    group = group,
+                    transcript = newHistory,
+                    senderId = senderId
+                ) { event ->
+                    handleStreamEvent(event)
+                }
+            } finally {
+                _isGenerating.value = false
+                notifyIdleIfNoWork()
+            }
+            notifyIdleIfNoWork()
         }
     }
 
@@ -541,6 +717,21 @@ class ChatViewModel(
 
     /** 停止当前生成（取消协程）。 */
     fun stopGeneration() {
+        // 群聊停止：模式 A 只停当前成员，排队的顺位递补；模式 B 清空整个队列（方案四.7）
+        if (isGroup()) {
+            groupStreamJob?.cancel()
+            groupStreamJob = null
+            val mode = conversation.value?.stopMode ?: QuiddityConstants.GROUP_DEFAULT_STOP_MODE
+            if (mode == QuiddityConstants.GROUP_STOP_MODE_B) {
+                groupQueueEngine.clear()
+            } else {
+                groupQueueEngine.removeReplying()
+            }
+            syncGroupQueue()
+            _isGenerating.value = false
+            notifyIdleIfNoWork()
+            return
+        }
         streamJob?.cancel()
         streamJob = null
         cancelPendingSend() // 同时取消 pending 的发送延迟
@@ -1194,6 +1385,80 @@ class ChatViewModel(
                 conv.copy(contextLimit = clamped)
             }
             conversationRepository.updateConversation(newConv)
+        }
+    }
+
+    // ===== 群聊设置（方案十：群名称 / 上下文条数 N / 成员管理 / 停止模式） =====
+
+    /** 设置群聊上下文条数 N（范围 1～200）。 */
+    fun updateGroupContextLimit(limit: Int) {
+        val group = conversation.value ?: return
+        if (!isGroup()) return
+        val clamped = limit.coerceIn(
+            QuiddityConstants.GROUP_MIN_CONTEXT_LIMIT,
+            QuiddityConstants.GROUP_MAX_CONTEXT_LIMIT
+        )
+        viewModelScope.launch {
+            conversationRepository.updateConversation(group.copy(groupContextLimit = clamped))
+        }
+    }
+
+    /** 切换群聊停止模式（A=只停当前 / B=清空队列）。 */
+    fun updateGroupStopMode(mode: String) {
+        val group = conversation.value ?: return
+        if (!isGroup()) return
+        viewModelScope.launch {
+            conversationRepository.updateConversation(group.copy(stopMode = mode))
+        }
+    }
+
+    /**
+     * 添加群聊成员（方案十.5）：逐个校验（用户名 / AI 名 / API 测试），
+     * 通过的角色加入，未通过的返回通知可重试；最多 3 个。
+     */
+    fun addGroupMembers(ids: List<String>, onDone: (Result<Unit>) -> Unit) {
+        val group = conversation.value ?: return
+        if (!isGroup()) return
+        viewModelScope.launch {
+            val current = group.memberConversationIds
+            val target = (current + ids).distinct()
+            if (target.size > QuiddityConstants.GROUP_MAX_MEMBERS) {
+                onDone(Result.failure(
+                    IllegalStateException("群聊成员最多 ${QuiddityConstants.GROUP_MAX_MEMBERS} 个")
+                ))
+                return@launch
+            }
+            val newIds = ids.filter { it !in current }
+            val failures = mutableListOf<String>()
+            for (id in newIds) {
+                val member = conversationRepository.getConversation(id) ?: continue
+                val result = conversationRepository.validateGroupMember(member)
+                if (result.isFailure) {
+                    val name = member.persona.name.ifBlank { member.title }
+                    failures += "$name：${result.exceptionOrNull()?.message}"
+                }
+            }
+            if (failures.isNotEmpty()) {
+                onDone(Result.failure(IllegalStateException(failures.joinToString("\n"))))
+                return@launch
+            }
+            conversationRepository.updateConversation(group.copy(memberConversationIds = target))
+            onDone(Result.success(Unit))
+        }
+    }
+
+    /** 移除群聊成员（踢出，方案十.4：最少 1 个；历史消息气泡保留）。 */
+    fun removeGroupMember(memberId: String) {
+        val group = conversation.value ?: return
+        if (!isGroup()) return
+        if (group.memberConversationIds.size <= 1) {
+            _errorEvent.value = "群聊至少保留 1 个成员"
+            return
+        }
+        viewModelScope.launch {
+            conversationRepository.updateConversation(
+                group.copy(memberConversationIds = group.memberConversationIds - memberId)
+            )
         }
     }
 

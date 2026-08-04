@@ -45,10 +45,13 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SelectAll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -72,17 +75,22 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import com.quiddity.app.data.model.ConversationType
 import com.quiddity.app.data.model.Message
 import com.quiddity.app.data.model.Role
+import com.quiddity.app.data.model.UserPersona
 import com.quiddity.app.domain.ChatRecordSearch
 import com.quiddity.app.ui.chat.components.ChatInputBar
 import com.quiddity.app.ui.chat.components.CompressionProgressDialog
+import com.quiddity.app.ui.chat.components.GroupAvatarBar
 import com.quiddity.app.ui.chat.components.HamburgerMenu
 import com.quiddity.app.ui.chat.components.MessageBubble
 import com.quiddity.app.ui.chat.components.NoticeBubble
@@ -93,6 +101,7 @@ import com.quiddity.app.ui.chat.gesture.detectNativeHorizontalSwipe
 import com.quiddity.app.ui.theme.Motion
 import com.quiddity.app.util.ChatImageExporter
 import com.quiddity.app.util.DateUtils
+import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 /*
  * ============================================================================
@@ -142,11 +151,39 @@ fun ChatScreen(
     val errorEvent by viewModel.errorEvent.collectAsStateWithLifecycle()
     val chatError by viewModel.chatError.collectAsStateWithLifecycle()
     val timeLibraryHint by viewModel.timeLibraryHint.collectAsStateWithLifecycle()
+    val groupQueue by viewModel.groupQueue.collectAsStateWithLifecycle()
     val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     var showHamburger by rememberSaveable { mutableStateOf(false) }
     val listState = rememberLazyListState()
+
+    // ===== 群聊信息（方案十二：消息按发送者显示头像与名字） =====
+    val isGroupChat = conversation?.type == ConversationType.GROUP
+    val groupMembers = remember(conversation?.id) {
+        viewModel.groupMembers()
+    }
+    val senderNameMap = remember(conversation?.id) {
+        conversation?.memberConversationIds.orEmpty().associateWith { id ->
+            viewModel.memberName(id)
+        }
+    }
+    val senderAvatarMap = remember(conversation?.id) {
+        conversation?.memberConversationIds.orEmpty().associateWith { id ->
+            viewModel.memberAvatar(id)
+        }
+    }
+
+    // ===== 私聊用户名强制（方案九.4/6：未设置用户名不能发送，进入会话先弹窗） =====
+    var showUserNameDialog by rememberSaveable { mutableStateOf(false) }
+    var userNameInput by rememberSaveable { mutableStateOf("") }
+    LaunchedEffect(conversation?.id) {
+        val conv = conversation
+        if (conv != null && conv.type != ConversationType.GROUP && conv.userPersona.name.isBlank()) {
+            userNameInput = ""
+            showUserNameDialog = true
+        }
+    }
 
     var withdrawTargetId by rememberSaveable { mutableStateOf<String?>(null) }
     var rewriteTargetId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -211,7 +248,14 @@ fun ChatScreen(
         if (selectedMessageIds.isEmpty()) return
         val selected = messages.filter { it.id in selectedMessageIds }
         val text = selected.joinToString("\n\n") { msg ->
-            val role = if (msg.role == Role.USER) "我" else "AI"
+            val role = when {
+                isGroupChat && msg.role == Role.USER -> "我"
+                isGroupChat -> msg.senderId?.let {
+                    senderNameMap[it]?.takeIf { name -> name.isNotBlank() }
+                } ?: "未知成员"
+                msg.role == Role.USER -> "我"
+                else -> "AI"
+            }
             "$role: ${msg.content}"
         }
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -230,9 +274,14 @@ fun ChatScreen(
     // ===== 键盘感知：IME 弹起时滚动到底部 =====
     val density = LocalDensity.current
     val imeBottom = WindowInsets.ime.getBottom(density)
+    // 仅在 IME 由隐藏变为可见时触发一次，避免 IME 收起动画期间反复把列表拉回底部，
+    // 覆盖搜索结果的跳转定位（“还没划上去就又回到最底下”的根因）。
+    var wasImeVisible by remember { mutableStateOf(false) }
     LaunchedEffect(imeBottom) {
+        val opened = imeBottom > 0 && !wasImeVisible
+        wasImeVisible = imeBottom > 0
         // 当前规则：仅有 isNotice 提示气泡时不滚动（LazyColumn 未渲染）
-        if (imeBottom > 0 && messages.any { !it.isNotice }) {
+        if (opened && messages.any { !it.isNotice }) {
             listState.scrollToItem(messages.size - 1)
             kotlinx.coroutines.delay(300)
             listState.animateScrollToItem(messages.size - 1)
@@ -344,6 +393,23 @@ fun ChatScreen(
 
     val wallpaperUri = conversation?.wallpaperUri
     val wallpaperDarken = conversation?.wallpaperDarken ?: 0f
+    val colorScheme = MaterialTheme.colorScheme
+    // 导出长图样式：跟随当前主题（浅色/深色），背景与气泡配色与聊天界面一致
+    val exportStyle = remember(colorScheme) {
+        ChatImageExporter.ExportStyle(
+            background = colorScheme.background.toArgbInt(),
+            headerTitle = colorScheme.onSurface.toArgbInt(),
+            headerSub = colorScheme.onSurfaceVariant.toArgbInt(),
+            headerDivider = colorScheme.outlineVariant.toArgbInt(),
+            aiBubble = colorScheme.surfaceVariant.toArgbInt(),
+            aiText = colorScheme.onSurfaceVariant.toArgbInt(),
+            aiAvatar = colorScheme.surfaceVariant.toArgbInt(),
+            userBubble = colorScheme.secondary.toArgbInt(),
+            userText = colorScheme.onSecondary.toArgbInt(),
+            time = colorScheme.onSurfaceVariant.copy(alpha = 0.5f).toArgbInt(),
+            footer = colorScheme.onSurfaceVariant.toArgbInt()
+        )
+    }
 
     // ===== 手势配置 =====
     val configuration = LocalConfiguration.current
@@ -363,7 +429,10 @@ fun ChatScreen(
                     context = context,
                     messages = selected,
                     aiName = conv.persona.name,
-                    conversationTitle = conv.title
+                    conversationTitle = conv.title,
+                    style = exportStyle,
+                    wallpaperUri = conv.wallpaperUri,
+                    wallpaperDarken = conv.wallpaperDarken
                 )
                 ChatImageExporter.share(context, file)
             }
@@ -564,6 +633,27 @@ fun ChatScreen(
                 )
             }
 
+            // ===== 群聊 0 成员横幅（方案十.7：不能点名回复，点击跳成员管理） =====
+            if (isGroupChat && groupMembers.isEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { showHamburger = true }
+                        .background(MaterialTheme.colorScheme.errorContainer)
+                        .padding(vertical = 10.dp),
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Text(
+                        text = "请添加成员",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                }
+            }
+
             // ===== 消息列表区域（手势已挪到外层 Box，整屏生效） =====
             Box(
                 modifier = Modifier
@@ -601,6 +691,7 @@ fun ChatScreen(
                                 items(searchResults, key = { it.id }) { msg ->
                                     ChatSearchResultRow(
                                         message = msg,
+                                        query = searchQuery,
                                         onClick = {
                                             searchActive = false
                                             searchQuery = ""
@@ -616,11 +707,25 @@ fun ChatScreen(
                     messages.none { !it.isNotice } -> Box(
                         modifier = Modifier.fillMaxSize()
                     ) {
-                        EmptyChatState(
-                            personaName = conversation?.persona?.name.orEmpty(),
-                            onLetAiStart = { viewModel.letAiStart() },
-                            isGenerating = isGenerating
-                        )
+                        if (isGroupChat) {
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "暂无消息\n发送后点击下方成员头像，让 TA 回复",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        } else {
+                            EmptyChatState(
+                                personaName = conversation?.persona?.name.orEmpty(),
+                                onLetAiStart = { viewModel.letAiStart() },
+                                isGenerating = isGenerating
+                            )
+                        }
                         // 提示气泡显示在顶部，不遮挡居中的"让AI先说"按钮
                         Column(modifier = Modifier.fillMaxWidth()) {
                             messages.filter { it.isNotice }.forEach { msg ->
@@ -663,10 +768,25 @@ fun ChatScreen(
                                                 message = message,
                                                 isLastAi = message.role == Role.ASSISTANT &&
                                                     messages.lastOrNull { !it.isNotice }?.id == message.id,
+                                                isGroupChat = isGroupChat,
                                                 inMultiSelect = multiSelectMode,
                                                 isGenerating = isGenerating,
                                                 userAvatarUri = settings.userAvatarUri,
                                                 aiAvatarUri = conversation?.persona?.aiAvatarUri,
+                                                senderName = if (message.role == Role.USER) {
+                                                    if (isGroupChat) "我" else null
+                                                } else {
+                                                    if (isGroupChat) {
+                                                        message.senderId?.let {
+                                                            senderNameMap[it]
+                                                                ?.takeIf { name -> name.isNotBlank() }
+                                                                ?: "未知成员"
+                                                        }
+                                                    } else null
+                                                },
+                                                senderAvatarUri = if (isGroupChat) {
+                                                    message.senderId?.let { senderAvatarMap[it] }
+                                                } else null,
                                                 bracketGrayEnabled = settings.bracketGrayEnabled,
                                                 typingDelayEnabled = settings.typingDelayEnabled,
                                                 typingDelayMsPerChar = settings.typingDelayMsPerChar,
@@ -701,6 +821,15 @@ fun ChatScreen(
 
             // 输入栏（多选模式 / 会话内搜索时隐藏）
             if (!multiSelectMode && !searchActive) {
+                // 群聊成员头像栏（方案十一：输入框上方、向右靠齐、随键盘一起动）
+                if (isGroupChat) {
+                    GroupAvatarBar(
+                        members = groupMembers,
+                        queue = groupQueue,
+                        onTap = { memberId -> viewModel.enqueueGroupMember(memberId) },
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)
+                    )
+                }
                 ChatInputBar(
                     enterToSend = settings.enterToSend,
                     isGenerating = isGenerating,
@@ -726,16 +855,51 @@ fun ChatScreen(
         settingsViewModel = settingsViewModel,
         onDismiss = { dragController.closeMenu() },
         onJumpToMessage = { id ->
-            highlightMessageId = id
-            val index = messages.indexOfFirst { it.id == id }
-            if (index >= 0) {
-                scope.launch { listState.animateScrollToItem(index) }
-            }
+            // 走统一的 pendingJumpMessageId 定位机制（自动滚动协程消费），
+            // 避免与 IME 收起/菜单关闭动画竞争导致跳转被拉回底部
+            pendingJumpMessageId = id
         }
     )
 
     // ===== 压缩进度弹窗 =====
     CompressionProgressDialog(visible = isCompressing)
+
+    // ===== 私聊用户名强制弹窗（方案九.6） =====
+    if (showUserNameDialog) {
+        AlertDialog(
+            onDismissRequest = { showUserNameDialog = false },
+            title = { Text("设置用户名") },
+            text = {
+                OutlinedTextField(
+                    value = userNameInput,
+                    onValueChange = { userNameInput = it },
+                    label = { Text("用户名（未填写不能发送消息）") },
+                    singleLine = true
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = userNameInput.isNotBlank(),
+                    onClick = {
+                        val conv = conversation
+                        if (conv != null) {
+                            viewModel.updateUserPersona(
+                                conv.userPersona.copy(name = userNameInput.trim())
+                            )
+                        }
+                        showUserNameDialog = false
+                    }
+                ) {
+                    Text("确定")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showUserNameDialog = false }) {
+                    Text("暂不设置")
+                }
+            }
+        )
+    }
 
     // ===== 消息改写底部弹出框 =====
     rewritingMessageId?.let { msgId ->
@@ -754,6 +918,15 @@ fun ChatScreen(
         }
     }
 }
+
+/**
+ * 将 Compose Color 转换为 ARGB Int（导出长图样式使用）。
+ */
+private fun androidx.compose.ui.graphics.Color.toArgbInt(): Int =
+    (alpha * 255f).roundToInt() shl 24 or
+        ((red * 255f).roundToInt() shl 16) or
+        ((green * 255f).roundToInt() shl 8) or
+        (blue * 255f).roundToInt()
 
 // ===== 三条开发规范（位于文件中间位置） =====
 // 1. 问题修复规范：所有代码问题修复必须采用系统性解决方案，严禁使用临时性补丁或 hack 手段。
@@ -987,10 +1160,13 @@ private fun MultiSelectTopBar(
 private fun MessageBubbleItem(
     message: Message,
     isLastAi: Boolean,
+    isGroupChat: Boolean,
     inMultiSelect: Boolean,
     isGenerating: Boolean,
     userAvatarUri: String?,
     aiAvatarUri: String?,
+    senderName: String?,
+    senderAvatarUri: String?,
     bracketGrayEnabled: Boolean,
     typingDelayEnabled: Boolean,
     typingDelayMsPerChar: Int,
@@ -1009,7 +1185,13 @@ private fun MessageBubbleItem(
     val isUserMsg = message.role == Role.USER
 
     // ===== 缓存 viewModel 直接回调（稳定来源：viewModel）=====
-    val regen = remember(viewModel) { { viewModel.regenerate() } }
+    val regen = remember(viewModel, mid, isGroupChat) {
+        if (isGroupChat) {
+            { viewModel.regenerateGroupMemberMessage(mid) }
+        } else {
+            { viewModel.regenerate() }
+        }
+    }
     val cont = remember(viewModel) { { viewModel.continueGeneration() } }
     val withdraw = remember(viewModel, mid) {
         {
@@ -1021,10 +1203,11 @@ private fun MessageBubbleItem(
     // ===== 缓存依赖状态的回调（key 用稳定的状态枚举）=====
     // lambda body 用 { ... } 包裹成 () -> Unit 表达式，避免 Kotlin 把单语句函数调用当成 Unit 返回值
     // （推断出 Unit 而非 () -> Unit，类型不匹配）。
-    val onRegenFinal: (() -> Unit)? = if (!inMultiSelect && isLastAi && !isGenerating) {
+    val onRegenFinal: (() -> Unit)? = if (!inMultiSelect && !isGenerating &&
+        (isGroupChat && !isUserMsg || (!isGroupChat && isLastAi))) {
         remember<() -> Unit>(inMultiSelect, isLastAi, isGenerating, regen) { { regen() } }
     } else null
-    val onContFinal: (() -> Unit)? = if (!inMultiSelect && isLastAi && !isGenerating) {
+    val onContFinal: (() -> Unit)? = if (!inMultiSelect && isLastAi && !isGenerating && !isGroupChat) {
         remember<() -> Unit>(inMultiSelect, isLastAi, isGenerating, cont) { { cont() } }
     } else null
     val onWithdrawFinal: (() -> Unit)? = if (!inMultiSelect && isUserMsg && !isGenerating) {
@@ -1054,6 +1237,8 @@ private fun MessageBubbleItem(
         message = message,
         userAvatarUri = userAvatarUri,
         aiAvatarUri = aiAvatarUri,
+        senderName = senderName,
+        senderAvatarUri = senderAvatarUri,
         bracketGrayEnabled = bracketGrayEnabled,
         typingDelayEnabled = typingDelayEnabled,
         typingDelayMsPerChar = typingDelayMsPerChar,
@@ -1158,13 +1343,35 @@ private fun ChatSearchBar(
 @Composable
 private fun ChatSearchResultRow(
     message: Message,
+    query: String,
     onClick: () -> Unit
 ) {
     val roleLabel = if (message.role == Role.USER) "我" else "AI"
-    val excerpt = message.content
-        .replace("\n", " ")
-        .trim()
-        .let { if (it.length > 80) it.take(80) + "…" else it }
+    val colorScheme = MaterialTheme.colorScheme
+    val excerpt = remember(message.content, query) {
+        ChatRecordSearch.buildExcerpt(message.content, query)
+    }
+    val displayText = remember(excerpt, message.content, roleLabel, colorScheme) {
+        val fallback = message.content.replace("\n", " ").trim()
+            .let { if (it.length > 80) it.take(80) + "…" else it }
+        val prefix = "$roleLabel："
+        buildAnnotatedString {
+            append(prefix)
+            append(excerpt?.text ?: fallback)
+            if (excerpt != null) {
+                excerpt.highlights.forEach { range ->
+                    addStyle(
+                        SpanStyle(
+                            background = colorScheme.primary.copy(alpha = 0.15f),
+                            fontWeight = FontWeight.SemiBold
+                        ),
+                        start = prefix.length + range.first,
+                        end = prefix.length + range.last + 1
+                    )
+                }
+            }
+        }
+    }
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -1185,7 +1392,7 @@ private fun ChatSearchResultRow(
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text(
-                text = "$roleLabel：$excerpt",
+                text = displayText,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 2,

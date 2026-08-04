@@ -16,18 +16,22 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
@@ -48,6 +52,8 @@ import androidx.compose.material.icons.filled.Compress
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -71,12 +77,15 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
+import com.quiddity.app.data.model.ConversationType
 import com.quiddity.app.data.model.Role
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.quiddity.app.data.model.Conversation
@@ -100,6 +109,7 @@ import com.quiddity.app.ui.components.ConfirmDialog
 import com.quiddity.app.util.DateUtils
 import com.quiddity.app.ui.components.ExpandableText
 import com.quiddity.app.ui.components.QuiddityToggleSwitch
+import com.quiddity.app.util.QuiddityConstants
 import com.quiddity.app.ui.settings.SettingsViewModel
 import com.quiddity.app.ui.theme.Motion
 import com.quiddity.app.util.ConversationCodec
@@ -438,62 +448,82 @@ fun HamburgerMenu(
                         .windowInsetsPadding(WindowInsets.statusBars)
                 ) { panel ->
                     when (panel) {
-                        null -> MainMenuContent(
-                            conversation = conversation,
-                            messages = messages,
-                            currentTier = currentTier,
-                            settings = settings,
-                            hasWallpaper = hasWallpaper,
-                            onPanelSelected = { currentPanel = it },
-                            onDismiss = onDismiss,
-                            darkMode = settings.darkMode,
-                            onDarkModeChange = { settingsViewModel.setDarkMode(it) },
-                            onClearSettings = { pendingClearSettings = true },
-                            onExportPersona = { personaExportLauncher.launch("quiddity-persona-${IdGenerator.newUuid()}.json") },
-                            onImportPersona = { personaImportLauncher.launch(arrayOf("application/json")) },
-                            onExportConversation = { pendingExportFormat = ExportFormatPicker() },
-                            onImportConversation = {
-                                conversationImportLauncher.launch(
-                                    arrayOf(
-                                        "application/json",
-                                        "text/markdown",
-                                        "text/plain",
-                                        "application/octet-stream"
-                                    )
+                        null -> {
+                            if (conversation?.type == ConversationType.GROUP) {
+                                GroupMenuContent(
+                                    conversation = conversation,
+                                    onDismiss = onDismiss,
+                                    onRename = {
+                                        currentPanel = HamburgerPanel.GroupName
+                                    },
+                                    onContextLimit = {
+                                        currentPanel = HamburgerPanel.GroupContextLimit
+                                    },
+                                    onStopModeChange = { mode ->
+                                        viewModel.updateGroupStopMode(mode)
+                                    },
+                                    onManageMembers = {
+                                        currentPanel = HamburgerPanel.GroupMembers
+                                    }
                                 )
-                            },
-                            onContextLimitChange = { limit ->
-                                viewModel.updateContextLimit(limit)
-                            },
-                            onResetContextLimit = {
-                                viewModel.resetContextLimitToTierDefault()
-                            },
-                            onMemoryBankEnabledChange = { enabled ->
-                                viewModel.updateMemoryBankEnabled(enabled)
-                            },
-                            onMemoryBankRoundsChange = { rounds ->
-                                viewModel.updateMemoryBankRounds(rounds)
-                            },
-                            onCompressionClick = { currentPanel = HamburgerPanel.Compression },
-                            onClearMessages = { pendingClearMessages = true },
-                            onActiveMessageChange = { enabled ->
-                                if (enabled &&
-                                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                                    ContextCompat.checkSelfPermission(
-                                        context,
-                                        Manifest.permission.POST_NOTIFICATIONS
-                                    ) != PackageManager.PERMISSION_GRANTED
-                                ) {
-                                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                                }
-                                viewModel.setActiveMessageEnabled(enabled)
-                            },
-                            onViewTimeLibrary = {
-                                timeLibraryViewStep =
-                                    if (conversation?.timeLibraryPasswordUnlocked == true) 2 else 1
-                            },
-                            onOpenSearchChat = { currentPanel = HamburgerPanel.SearchChat }
-                        )
+                            } else {
+                                MainMenuContent(
+                                    conversation = conversation,
+                                    messages = messages,
+                                    currentTier = currentTier,
+                                    settings = settings,
+                                    onPanelSelected = { currentPanel = it },
+                                    onDismiss = onDismiss,
+                                    darkMode = settings.darkMode,
+                                    onDarkModeChange = { settingsViewModel.setDarkMode(it) },
+                                    onClearSettings = { pendingClearSettings = true },
+                                    onExportPersona = { personaExportLauncher.launch("quiddity-persona-${IdGenerator.newUuid()}.json") },
+                                    onImportPersona = { personaImportLauncher.launch(arrayOf("application/json")) },
+                                    onExportConversation = { pendingExportFormat = ExportFormatPicker() },
+                                    onImportConversation = {
+                                        conversationImportLauncher.launch(
+                                            arrayOf(
+                                                "application/json",
+                                                "text/markdown",
+                                                "text/plain",
+                                                "application/octet-stream"
+                                            )
+                                        )
+                                    },
+                                    onContextLimitChange = { limit ->
+                                        viewModel.updateContextLimit(limit)
+                                    },
+                                    onResetContextLimit = {
+                                        viewModel.resetContextLimitToTierDefault()
+                                    },
+                                    onMemoryBankEnabledChange = { enabled ->
+                                        viewModel.updateMemoryBankEnabled(enabled)
+                                    },
+                                    onMemoryBankRoundsChange = { rounds ->
+                                        viewModel.updateMemoryBankRounds(rounds)
+                                    },
+                                    onCompressionClick = { currentPanel = HamburgerPanel.Compression },
+                                    onClearMessages = { pendingClearMessages = true },
+                                    onActiveMessageChange = { enabled ->
+                                        if (enabled &&
+                                            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                                            ContextCompat.checkSelfPermission(
+                                                context,
+                                                Manifest.permission.POST_NOTIFICATIONS
+                                            ) != PackageManager.PERMISSION_GRANTED
+                                        ) {
+                                            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                        }
+                                        viewModel.setActiveMessageEnabled(enabled)
+                                    },
+                                    onViewTimeLibrary = {
+                                        timeLibraryViewStep =
+                                            if (conversation?.timeLibraryPasswordUnlocked == true) 2 else 1
+                                    },
+                                    onOpenSearchChat = { currentPanel = HamburgerPanel.SearchChat }
+                                )
+                            }
+                        }
                         HamburgerPanel.QuickSetup -> {
                             conversation?.let { conv ->
                                 val tier = viewModel.resolveCurrentTier()
@@ -667,6 +697,40 @@ fun HamburgerMenu(
                                     onDismiss()
                                 }
                             )
+                        }
+                        HamburgerPanel.GroupName -> {
+                            conversation?.let { conv ->
+                                GroupNamePanel(
+                                    currentName = conv.title,
+                                    onBack = { currentPanel = null },
+                                    onSave = { name ->
+                                        viewModel.renameConversation(name)
+                                        currentPanel = null
+                                    }
+                                )
+                            }
+                        }
+                        HamburgerPanel.GroupContextLimit -> {
+                            conversation?.let { conv ->
+                                GroupContextLimitPanel(
+                                    currentLimit = conv.groupContextLimit,
+                                    onBack = { currentPanel = null },
+                                    onSave = { limit ->
+                                        viewModel.updateGroupContextLimit(limit)
+                                        currentPanel = null
+                                    }
+                                )
+                            }
+                        }
+                        HamburgerPanel.GroupMembers -> {
+                            conversation?.let { conv ->
+                                GroupMemberManagePanel(
+                                    group = conv,
+                                    viewModel = viewModel,
+                                    settings = settings,
+                                    onBack = { currentPanel = null }
+                                )
+                            }
                         }
                     }
                 }
@@ -1093,6 +1157,7 @@ private fun SearchChatPanel(
                         ChatSearchResultRow(
                             message = message,
                             conversation = conversation,
+                            query = query,
                             onClick = { onOpenMessage(message.id) }
                         )
                     }
@@ -1106,6 +1171,7 @@ private fun SearchChatPanel(
 private fun ChatSearchResultRow(
     message: com.quiddity.app.data.model.Message,
     conversation: Conversation?,
+    query: String,
     onClick: () -> Unit
 ) {
     val isUser = message.role == Role.USER
@@ -1115,6 +1181,31 @@ private fun ChatSearchResultRow(
         conversation?.persona?.name?.ifBlank { conversation.title } ?: "AI"
     }
     val avatarUri = if (isUser) null else conversation?.persona?.aiAvatarUri
+    val colorScheme = MaterialTheme.colorScheme
+    val excerpt = remember(message.content, query) {
+        com.quiddity.app.domain.ChatRecordSearch.buildExcerpt(message.content, query)
+    }
+    val displayText = remember(excerpt, message.content, name, colorScheme) {
+        val fallback = message.content.replace("\n", " ").trim()
+            .let { if (it.length > 80) it.take(80) + "…" else it }
+        val prefix = "$name："
+        buildAnnotatedString {
+            append(prefix)
+            append(excerpt?.text ?: fallback)
+            if (excerpt != null) {
+                excerpt.highlights.forEach { range ->
+                    addStyle(
+                        SpanStyle(
+                            background = colorScheme.primary.copy(alpha = 0.15f),
+                            fontWeight = FontWeight.SemiBold
+                        ),
+                        start = prefix.length + range.first,
+                        end = prefix.length + range.last + 1
+                    )
+                }
+            }
+        }
+    }
 
     Surface(
         modifier = Modifier
@@ -1175,9 +1266,7 @@ private fun ChatSearchResultRow(
                 }
                 Spacer(modifier = Modifier.size(4.dp))
                 Text(
-                    text = message.content.replace("\n", " ").trim().let {
-                        if (it.length > 80) it.take(80) + "…" else it
-                    },
+                    text = displayText,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 2,
@@ -1310,7 +1399,8 @@ private fun TimeLibraryDetailDialog(
 
 internal enum class HamburgerPanel {
     QuickSetup, Persona, UserPersona, Scene, ApiSelector, ApiEditor,
-    Wallpaper, Compression, SearchChat
+    Wallpaper, Compression, SearchChat,
+    GroupName, GroupContextLimit, GroupMembers
 }
 
 // ==================== 主菜单 ====================
@@ -1321,7 +1411,6 @@ private fun MainMenuContent(
     messages: List<com.quiddity.app.data.model.Message>,
     currentTier: com.quiddity.app.domain.ApiCatalogManager.ModelTier,
     settings: com.quiddity.app.data.model.AppSettings,
-    hasWallpaper: Boolean,
     onPanelSelected: (HamburgerPanel) -> Unit,
     onDismiss: () -> Unit,
     darkMode: Boolean,
@@ -1384,7 +1473,7 @@ private fun MainMenuContent(
             verticalArrangement = Arrangement.spacedBy(2.dp)
         ) {
             // 外观
-            SectionHeader("外观")
+            MenuSectionCard(title = "外观") {
             // 会话内的"外观"只是全局主题的一个快捷入口，状态直接来自 settings.darkMode，
             // 切换时调用 SettingsViewModel.setDarkMode，与设置面板中的总开关保持一致。
             ToggleMenuRow(
@@ -1392,7 +1481,6 @@ private fun MainMenuContent(
                 subtitle = if (darkMode) "当前：暗色" else "当前：亮色",
                 checked = darkMode,
                 onCheckedChange = onDarkModeChange,
-                hasWallpaper = hasWallpaper
             )
             // - 仅对当前会话生效，不影响其他会话
             // - 持久化到 conversation.wallpaperUri
@@ -1400,16 +1488,15 @@ private fun MainMenuContent(
                 title = "会话壁纸",
                 subtitle = if (conversation?.wallpaperUri != null) "已设置" else "未设置",
                 onClick = { onPanelSelected(HamburgerPanel.Wallpaper) },
-                hasWallpaper = hasWallpaper
             )
 
             // 人设
-            SectionHeader("人设")
+            }
+            MenuSectionCard(title = "人设") {
             MenuRow(
                 title = "快速设定",
                 subtitle = "描述你想要的人设，AI 一次性生成并填入",
                 onClick = { onPanelSelected(HamburgerPanel.QuickSetup) },
-                hasWallpaper = hasWallpaper,
                 expandableSubtitle = true
             )
             val aiPersonaName = conversation?.persona?.name
@@ -1418,7 +1505,6 @@ private fun MainMenuContent(
                 title = "AI 人设",
                 subtitle = if (aiPersonaSet) "AI: $aiPersonaName" else "未设置",
                 onClick = { onPanelSelected(HamburgerPanel.Persona) },
-                hasWallpaper = hasWallpaper,
                 expandableSubtitle = true,
                 subtitleColor = if (aiPersonaSet) {
                     MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
@@ -1431,7 +1517,6 @@ private fun MainMenuContent(
                 subtitle = if (conversation?.userPersona?.name?.isNotBlank() == true)
                     "用户: ${conversation.userPersona.name}" else "未设置",
                 onClick = { onPanelSelected(HamburgerPanel.UserPersona) },
-                hasWallpaper = hasWallpaper,
                 expandableSubtitle = true
             )
             MenuRow(
@@ -1439,29 +1524,28 @@ private fun MainMenuContent(
                 subtitle = if (conversation?.scene?.isNotBlank() == true)
                     conversation.scene.trim() else "未设置",
                 onClick = { onPanelSelected(HamburgerPanel.Scene) },
-                hasWallpaper = hasWallpaper,
                 expandableSubtitle = true
             )
 
             // 模型配置
-            SectionHeader("模型配置")
+            }
+            MenuSectionCard(title = "模型配置") {
             MenuRow(
                 title = "选择模型配置",
                 subtitle = settings.catalog
                     .firstOrNull { it.id == (conversation?.apiCatalogId ?: settings.activeCatalogId) }
                     ?.let { "当前：${it.name} · ${it.apiModel}" } ?: "未选择",
                 onClick = { onPanelSelected(HamburgerPanel.ApiSelector) },
-                hasWallpaper = hasWallpaper,
                 expandableSubtitle = true
             )
             MenuRow(
                 title = "管理模型配置",
                 subtitle = "添加、编辑或删除模型配置",
                 onClick = { onPanelSelected(HamburgerPanel.ApiEditor) },
-                hasWallpaper = hasWallpaper
             )
 
-            SectionHeader("统计")
+            }
+            MenuSectionCard(title = "统计") {
             TokenStatsPanel(
                 conversation = conversation,
                 messages = messages,
@@ -1470,7 +1554,8 @@ private fun MainMenuContent(
             )
 
             // 主动消息（对应算法文档 2.2 会话级开启）
-            SectionHeader("主动消息")
+            }
+            MenuSectionCard(title = "主动消息") {
             ToggleMenuRow(
                 title = "主动消息",
                 subtitle = if (conversation?.activeMessageEnabled == true) {
@@ -1480,7 +1565,6 @@ private fun MainMenuContent(
                 },
                 checked = conversation?.activeMessageEnabled == true,
                 onCheckedChange = onActiveMessageChange,
-                hasWallpaper = hasWallpaper
             )
             // 系统条件引导：会话级开启后展示精确闹钟 / 电池优化状态与一键跳转
             if (conversation?.activeMessageEnabled == true) {
@@ -1493,12 +1577,12 @@ private fun MainMenuContent(
                     title = "查看时间库",
                     subtitle = "查看本会话今日时间库（按 AI 设定可能需要密码）",
                     onClick = onViewTimeLibrary,
-                    hasWallpaper = hasWallpaper
                 )
             }
 
             // 数据
-            SectionHeader("数据")
+            }
+            MenuSectionCard(title = "数据") {
             MenuRow(
                 title = "会话压缩",
                 subtitle = if (conversation?.memoryBankEnabled == true) {
@@ -1507,7 +1591,6 @@ private fun MainMenuContent(
                     "未启用（点击进入配置）"
                 },
                 onClick = onCompressionClick,
-                hasWallpaper = hasWallpaper,
                 trailingIcon = Icons.Filled.Compress,
                 trailingTint = MaterialTheme.colorScheme.primary
             )
@@ -1517,7 +1600,6 @@ private fun MainMenuContent(
                 subtitle = "导出或导入当前会话的人设卡",
                 onExport = onExportPersona,
                 onImport = onImportPersona,
-                hasWallpaper = hasWallpaper
             )
             Spacer(modifier = Modifier.size(4.dp))
             ExportImportCard(
@@ -1525,24 +1607,22 @@ private fun MainMenuContent(
                 subtitle = "导出或导入当前会话的全部数据",
                 onExport = onExportConversation,
                 onImport = onImportConversation,
-                hasWallpaper = hasWallpaper
             )
             Spacer(modifier = Modifier.size(4.dp))
             MenuRow(
                 title = "查找聊天记录",
                 subtitle = "按关键词搜索本会话的历史消息",
                 onClick = onOpenSearchChat,
-                hasWallpaper = hasWallpaper
             )
 
             // 危险操作：清空设置放在最底部并加感叹号，以示区别
             Spacer(modifier = Modifier.size(16.dp))
-            SectionHeader("危险操作")
+            }
+            MenuSectionCard(title = "危险操作") {
             MenuRow(
                 title = "清空会话记录",
                 subtitle = "删除全部消息并重置压缩对话（仅影响当前会话，保留人设/场景/记忆/壁纸）",
                 onClick = onClearMessages,
-                hasWallpaper = hasWallpaper,
                 trailingIcon = Icons.Filled.DeleteSweep,
                 trailingTint = MaterialTheme.colorScheme.error
             )
@@ -1551,23 +1631,57 @@ private fun MainMenuContent(
                 title = "清空会话设置",
                 subtitle = "重置当前会话的人设/用户/场景/记忆（不影响消息记录）",
                 onClick = onClearSettings,
-                hasWallpaper = hasWallpaper,
                 trailingIcon = Icons.Filled.Warning,
                 trailingTint = MaterialTheme.colorScheme.error
             )
+            }
         }
     }
 }
 
 @Composable
-private fun SectionHeader(title: String) {
-    Text(
-        text = title,
-        style = MaterialTheme.typography.labelLarge,
-        fontWeight = FontWeight.SemiBold,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(start = 12.dp, top = 16.dp, bottom = 6.dp)
-    )
+private fun MenuSectionCard(
+    title: String,
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 10.dp, vertical = 6.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .border(
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f),
+                shape = RoundedCornerShape(18.dp)
+            )
+            .padding(horizontal = 2.dp, vertical = 6.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(4.dp)
+                    .height(16.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(MaterialTheme.colorScheme.primary)
+            )
+            Spacer(modifier = Modifier.size(10.dp))
+            Text(
+                text = title,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+        content()
+        Spacer(modifier = Modifier.height(4.dp))
+    }
 }
 
 @Composable
@@ -1575,7 +1689,6 @@ private fun MenuRow(
     title: String,
     subtitle: String = "",
     onClick: () -> Unit,
-    hasWallpaper: Boolean = false,
     expandableSubtitle: Boolean = false,
     trailingIcon: ImageVector? = null,
     trailingTint: androidx.compose.ui.graphics.Color? = null,
@@ -1587,9 +1700,7 @@ private fun MenuRow(
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(
-                // 玻璃层级区分：壁纸存在时卡片用更低透明度，与主面板形成层次
-                if (hasWallpaper) MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.5f)
-                else MaterialTheme.colorScheme.surface
+                MaterialTheme.colorScheme.surfaceContainerLow
             )
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
@@ -1636,6 +1747,532 @@ private fun MenuRow(
     }
 }
 
+// ============================================================
+// 群聊 1.5.0：群设置（群名称 / 上下文条数 N / 成员管理 / 停止模式）
+// ============================================================
+
+/**
+ * 群聊主菜单（方案十：群名称、上下文条数 N、成员管理、停止模式 A/B；
+ * 不含共享用户人设与时间库入口）。
+ */
+@Composable
+private fun GroupMenuContent(
+    conversation: Conversation?,
+    onDismiss: () -> Unit,
+    onRename: () -> Unit,
+    onContextLimit: () -> Unit,
+    onStopModeChange: (String) -> Unit,
+    onManageMembers: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "群聊设置",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { onDismiss() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Filled.Close, "关闭",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+        Spacer(modifier = Modifier.size(16.dp))
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            MenuSectionCard(title = "群聊") {
+                MenuRow(
+                    title = "群名称",
+                    subtitle = conversation?.title?.ifBlank { "新群聊" } ?: "新群聊",
+                    onClick = onRename
+                )
+                MenuRow(
+                    title = "上下文条数 N",
+                    subtitle = "最近 ${conversation?.groupContextLimit ?: QuiddityConstants.GROUP_DEFAULT_CONTEXT_LIMIT} 条",
+                    onClick = onContextLimit
+                )
+                val stopMode = conversation?.stopMode ?: QuiddityConstants.GROUP_DEFAULT_STOP_MODE
+                ToggleMenuRow(
+                    title = "停止模式",
+                    subtitle = if (stopMode == QuiddityConstants.GROUP_STOP_MODE_A)
+                        "A：只停止当前成员，排队的递补" else "B：停止时清空整个队列（默认）",
+                    checked = stopMode == QuiddityConstants.GROUP_STOP_MODE_B,
+                    onCheckedChange = { checked ->
+                        onStopModeChange(
+                            if (checked) QuiddityConstants.GROUP_STOP_MODE_B
+                            else QuiddityConstants.GROUP_STOP_MODE_A
+                        )
+                    }
+                )
+            }
+            MenuSectionCard(title = "成员管理") {
+                MenuRow(
+                    title = "查看 / 添加 / 移除成员",
+                    subtitle = "当前 ${conversation?.memberConversationIds?.size ?: 0}/3 个",
+                    onClick = onManageMembers,
+                    trailingIcon = Icons.Filled.ChevronRight
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 群名称编辑面板（方案十.1：群名称可随时改名）。
+ */
+@Composable
+private fun GroupNamePanel(
+    currentName: String,
+    onBack: () -> Unit,
+    onSave: (String) -> Unit
+) {
+    var name by rememberSaveable { mutableStateOf(currentName) }
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "群名称",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { onBack() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack, "返回",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+        Spacer(modifier = Modifier.size(16.dp))
+        OutlinedTextField(
+            value = name,
+            onValueChange = { name = it },
+            label = { Text("群名称") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(modifier = Modifier.size(16.dp))
+        TextButton(
+            enabled = name.isNotBlank(),
+            onClick = { onSave(name.trim()) }
+        ) {
+            Text("保存")
+        }
+    }
+}
+
+/**
+ * 群聊上下文条数 N 编辑面板（方案六.2：默认 50，范围 1～200）。
+ */
+@Composable
+private fun GroupContextLimitPanel(
+    currentLimit: Int,
+    onBack: () -> Unit,
+    onSave: (Int) -> Unit
+) {
+    var limit by rememberSaveable { mutableIntStateOf(currentLimit) }
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "上下文条数 N",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { onBack() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack, "返回",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+        Spacer(modifier = Modifier.size(16.dp))
+        Text(
+            text = "群聊记录只取最近 N 条（1～200）",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.size(12.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(
+                enabled = limit > QuiddityConstants.GROUP_MIN_CONTEXT_LIMIT,
+                onClick = { limit = (limit - 5).coerceAtLeast(QuiddityConstants.GROUP_MIN_CONTEXT_LIMIT) }
+            ) { Text("−5") }
+            TextButton(
+                enabled = limit > QuiddityConstants.GROUP_MIN_CONTEXT_LIMIT,
+                onClick = { limit = (limit - 1).coerceAtLeast(QuiddityConstants.GROUP_MIN_CONTEXT_LIMIT) }
+            ) { Text("−1") }
+            Text(
+                text = limit.toString(),
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(horizontal = 16.dp)
+            )
+            TextButton(
+                enabled = limit < QuiddityConstants.GROUP_MAX_CONTEXT_LIMIT,
+                onClick = { limit = (limit + 1).coerceAtMost(QuiddityConstants.GROUP_MAX_CONTEXT_LIMIT) }
+            ) { Text("+1") }
+            TextButton(
+                enabled = limit < QuiddityConstants.GROUP_MAX_CONTEXT_LIMIT,
+                onClick = { limit = (limit + 5).coerceAtMost(QuiddityConstants.GROUP_MAX_CONTEXT_LIMIT) }
+            ) { Text("+5") }
+        }
+        Spacer(modifier = Modifier.size(16.dp))
+        TextButton(onClick = { onSave(limit) }) { Text("保存") }
+    }
+}
+
+/**
+ * 群聊成员管理面板（方案十.4-5）：显示当前成员头像；满 3 个显示 3 个，
+ * 不足 3 个显示成员 + 加号按钮（添加成员）；移除后历史消息保留。
+ */
+@Composable
+private fun GroupMemberManagePanel(
+    group: Conversation,
+    viewModel: ChatViewModel,
+    settings: com.quiddity.app.data.model.AppSettings,
+    onBack: () -> Unit
+) {
+    var showAddDialog by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val members = remember(group.memberConversationIds) {
+        group.memberConversationIds.mapNotNull { id ->
+            com.quiddity.app.di.ServiceLocator.conversationRepository.getConversation(id)
+        }
+    }
+    val soloList = remember(settings.catalog) {
+        com.quiddity.app.di.ServiceLocator.conversationRepository.conversations.value
+            .filter { it.type == ConversationType.SOLO }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "成员管理",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { onBack() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack, "返回",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+        Spacer(modifier = Modifier.size(16.dp))
+
+        Text(
+            text = "当前成员（${members.size}/${QuiddityConstants.GROUP_MAX_MEMBERS}）",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.size(8.dp))
+        LazyColumn(modifier = Modifier.weight(1f)) {
+            items(members, key = { it.id }) { member ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (member.persona.aiAvatarUri != null) {
+                            AsyncImage(
+                                model = member.persona.aiAvatarUri,
+                                contentDescription = null,
+                                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize().clip(CircleShape)
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Filled.Person,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.size(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = member.persona.name.ifBlank { "未命名 AI" },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "模型：${member.apiCatalogId?.let { id ->
+                                settings.catalog.firstOrNull { c -> c.id == id }?.apiModel
+                            } ?: "跟随全局"}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    TextButton(
+                        enabled = members.size > 1,
+                        onClick = { viewModel.removeGroupMember(member.id) }
+                    ) {
+                        Text(
+                            text = "移除",
+                            color = if (members.size > 1) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                        )
+                    }
+                }
+            }
+            if (members.size < QuiddityConstants.GROUP_MAX_MEMBERS) {
+                item(key = "add_member") {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null
+                            ) { showAddDialog = true }
+                            .padding(vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primaryContainer),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "+",
+                                style = MaterialTheme.typography.titleLarge,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+                        Spacer(modifier = Modifier.size(10.dp))
+                        Text(
+                            text = "添加成员",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    if (showAddDialog) {
+        AddGroupMembersDialog(
+            soloList = soloList,
+            currentIds = group.memberConversationIds,
+            hasApiConfig = settings.catalog.isNotEmpty(),
+            onConfirm = { ids ->
+                viewModel.addGroupMembers(ids) { result ->
+                    showAddDialog = false
+                    result.onFailure { e ->
+                        android.widget.Toast.makeText(
+                            context,
+                            e.message ?: "添加成员失败",
+                            android.widget.Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            },
+            onDismiss = { showAddDialog = false }
+        )
+    }
+}
+
+/**
+ * 添加群聊成员弹窗（方案十.5）：私聊列表勾选，最多选到 3 个，
+ * 确定后执行 API 测试，通过的角色加入，未通过的返回通知可重试。
+ */
+@Composable
+private fun AddGroupMembersDialog(
+    soloList: List<Conversation>,
+    currentIds: List<String>,
+    hasApiConfig: Boolean,
+    onConfirm: (List<String>) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var selected by rememberSaveable { mutableStateOf<Set<String>>(emptySet()) }
+    val candidates = soloList.filter { it.id !in currentIds }
+    fun toggle(id: String) {
+        selected = if (id in selected) selected - id else selected + id
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("添加成员") },
+        text = {
+            if (candidates.isEmpty()) {
+                Text(
+                    text = "没有可添加的私聊会话",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                LazyColumn(modifier = Modifier.heightIn(max = 360.dp)) {
+                    items(candidates, key = { it.id }) { conv ->
+                        val checked = conv.id in selected
+                        val status = when {
+                            !hasApiConfig -> "API 未配置"
+                            conv.userPersona.name.isBlank() -> "用户名未设置"
+                            conv.persona.name.isBlank() -> "AI 名未设置"
+                            else -> "可加入"
+                        }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null
+                                ) { toggle(conv.id) }
+                                .padding(horizontal = 4.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(checked = checked, onCheckedChange = { toggle(conv.id) })
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (conv.persona.aiAvatarUri != null) {
+                                    AsyncImage(
+                                        model = conv.persona.aiAvatarUri,
+                                        contentDescription = null,
+                                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize().clip(CircleShape)
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Filled.Person,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.size(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = conv.title.ifBlank { "未命名会话" },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = "AI：${conv.persona.name.ifBlank { "未设置" }} · $status",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (status == "可加入") MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.error
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = selected.isNotEmpty() &&
+                    (currentIds.size + selected.size) <= QuiddityConstants.GROUP_MAX_MEMBERS,
+                onClick = { onConfirm(selected.toList()) }
+            ) {
+                Text("确定")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        }
+    )
+}
+
 /**
  * 带开关的设置行。
  *
@@ -1649,7 +2286,6 @@ private fun ToggleMenuRow(
     subtitle: String = "",
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
-    hasWallpaper: Boolean = false
 ) {
     // Box 替代 Surface：行内无 elevation 需求，Box+background+clip 跳过 Surface 的 CompositionLocalProvider 开销
     Box(
@@ -1657,8 +2293,7 @@ private fun ToggleMenuRow(
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(
-                if (hasWallpaper) MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.5f)
-                else MaterialTheme.colorScheme.surface
+                MaterialTheme.colorScheme.surfaceContainerLow
             )
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
@@ -1697,7 +2332,6 @@ private fun ToggleMenuRow(
 /**
  * 导出/导入卡片：标题、说明文字、以及「导出」「导入」两个按钮。
  *
- * @param hasWallpaper 壁纸存在时使用更低透明度，形成玻璃层级区分
  */
 @Composable
 private fun ExportImportCard(
@@ -1705,7 +2339,6 @@ private fun ExportImportCard(
     subtitle: String,
     onExport: () -> Unit,
     onImport: () -> Unit,
-    hasWallpaper: Boolean = false
 ) {
     // Box 替代 Surface：无 elevation 需求，Box+background+clip 跳过 Surface 开销
     Box(
@@ -1713,9 +2346,7 @@ private fun ExportImportCard(
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(
-                // 玻璃层级区分：壁纸存在时卡片用更低透明度
-                if (hasWallpaper) MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.5f)
-                else MaterialTheme.colorScheme.surfaceContainerLow
+                MaterialTheme.colorScheme.surfaceContainerLow
             )
     ) {
         Column(modifier = Modifier.padding(16.dp)) {

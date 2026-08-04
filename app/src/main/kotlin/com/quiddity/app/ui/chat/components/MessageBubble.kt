@@ -49,6 +49,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -101,6 +103,8 @@ fun MessageBubble(
     message: Message,
     userAvatarUri: String?,
     aiAvatarUri: String?,
+    senderName: String? = null,
+    senderAvatarUri: String? = null,
     bracketGrayEnabled: Boolean = false,
     isLastAiMessage: Boolean = false,
     onRegenerate: (() -> Unit)? = null,
@@ -149,7 +153,7 @@ fun MessageBubble(
     }
     val grayColor = remember(textColor) { textColor.copy(alpha = 0.55f) }
 
-    val avatarUri = if (isUser) userAvatarUri else aiAvatarUri
+    val avatarUri = if (isUser) userAvatarUri else (senderAvatarUri ?: aiAvatarUri)
     val avatarIcon = Icons.Filled.Person
 
     // ===== 打字机效果：UI 层逐字渲染 =====
@@ -245,6 +249,22 @@ fun MessageBubble(
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 4.dp)
     ) {
+        // 群聊发言者名字（方案十二.1-2：气泡上方显示名字；用户显示「我」）
+        if (senderName != null && !multiSelectMode) {
+            Text(
+                text = senderName,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = if (isUser) TextAlign.End else TextAlign.Start,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(if (isUser) Modifier.padding(end = 0.dp) else Modifier.padding(start = 48.dp))
+                    .padding(bottom = 2.dp)
+            )
+        }
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,

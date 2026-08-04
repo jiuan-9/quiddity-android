@@ -52,6 +52,7 @@ class GroupReplyQueue(
     val isFull: Boolean get() = items.size >= maxReplying + maxQueued
     val size: Int get() = items.size
     val isEmpty: Boolean get() = items.isEmpty()
+    val isNotEmpty: Boolean get() = items.isNotEmpty()
 
     fun contains(memberId: String): Boolean = items.any { it.memberId == memberId }
 
