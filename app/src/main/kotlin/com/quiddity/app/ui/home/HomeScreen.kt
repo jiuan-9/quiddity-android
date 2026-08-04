@@ -3,6 +3,7 @@ package com.quiddity.app.ui.home
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -71,6 +72,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -177,20 +179,6 @@ fun HomeScreen(
         messageHits = viewModel.searchMessages(q)
     }
 
-    val filteredConversations by remember {
-        derivedStateOf {
-            if (searchQuery.isBlank()) {
-                conversations
-            } else {
-                val q = searchQuery.trim()
-                conversations.filter {
-                    it.title.contains(q, ignoreCase = true) ||
-                            it.lastMessagePreview.contains(q, ignoreCase = true)
-                }
-            }
-        }
-    }
-
     val soloConversations by viewModel.soloConversations.collectAsStateWithLifecycle()
     val groupConversations by viewModel.groupConversations.collectAsStateWithLifecycle()
 
@@ -204,6 +192,35 @@ fun HomeScreen(
     }
     val soloFiltered = remember(soloConversations, searchQuery) { filterByQuery(soloConversations) }
     val groupFiltered = remember(groupConversations, searchQuery) { filterByQuery(groupConversations) }
+
+    // ===== 搜索会话仅对当前模式有效（方案十四 + 需求） =====
+    val currentTab = pagerState.currentPage
+    val soloIds = remember(soloConversations) { soloConversations.map { it.id }.toSet() }
+    val groupIds = remember(groupConversations) { groupConversations.map { it.id }.toSet() }
+    val scopedMessageHits = remember(messageHits, currentTab, soloIds, groupIds) {
+        val ids = if (currentTab == 0) soloIds else groupIds
+        messageHits.filter { it.conversationId in ids }
+    }
+    val searchScopeConversations = if (currentTab == 0) soloFiltered else groupFiltered
+
+    // ===== 模式切换时列表淡出/淡入（重新加载感，方案十四.7） =====
+    val listReloadAlpha = remember { Animatable(1f) }
+    var firstTabRender by remember { mutableStateOf(true) }
+    LaunchedEffect(pagerState.currentPage) {
+        if (firstTabRender) {
+            firstTabRender = false
+            return@LaunchedEffect
+        }
+        listReloadAlpha.snapTo(1f)
+        listReloadAlpha.animateTo(
+            0f,
+            animationSpec = tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate)
+        )
+        listReloadAlpha.animateTo(
+            1f,
+            animationSpec = tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedDecelerate)
+        )
+    }
 
     val deleteIdsSaver = remember {
         androidx.compose.runtime.saveable.Saver<List<String>?, String>(
@@ -345,29 +362,43 @@ fun HomeScreen(
                         hasListWallpaper = hasListWallpaper
                     )
                 } else {
-                    HomeTopBar(
-                        userAvatarUri = userAvatarUri,
-                        searchQuery = searchQuery,
-                        onSearchQueryChange = { searchQuery = it },
-                        onSettingsClick = { showSettings = true },
-                        onNewConversation = {
-                            if (pagerState.currentPage == 0) {
-                                viewModel.createConversation()
-                            } else {
-                                showNewGroupDialog = true
-                            }
+                    // 模式切换（私聊/群聊）时，顶部三个 UI（头像/搜索/新建）整体淡出淡入，
+                    // 做出重新加载的意思
+                    AnimatedContent(
+                        targetState = pagerState.currentPage,
+                        transitionSpec = {
+                            fadeIn(
+                                tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedDecelerate)
+                            ) togetherWith fadeOut(
+                                tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate)
+                            )
                         },
-                        hasListWallpaper = hasListWallpaper
-                    )
+                        label = "topbar_mode_switch"
+                    ) { _ ->
+                        HomeTopBar(
+                            userAvatarUri = userAvatarUri,
+                            searchQuery = searchQuery,
+                            onSearchQueryChange = { searchQuery = it },
+                            onSettingsClick = { showSettings = true },
+                            onNewConversation = {
+                                if (pagerState.currentPage == 0) {
+                                    viewModel.createConversation()
+                                } else {
+                                    showNewGroupDialog = true
+                                }
+                            },
+                            hasListWallpaper = hasListWallpaper
+                        )
+                    }
                 }
             }
 
             val homeUiState = when {
                 isLoading -> "loading"
+                conversations.isEmpty() -> "empty"
                 searchQuery.isNotBlank() &&
-                    soloFiltered.isEmpty() &&
-                    groupFiltered.isEmpty() &&
-                    messageHits.isEmpty() -> "search_empty"
+                    searchScopeConversations.isEmpty() &&
+                    scopedMessageHits.isEmpty() -> "search_empty"
                 else -> "content"
             }
             AnimatedContent(
@@ -383,14 +414,17 @@ fun HomeScreen(
                     "loading" -> {
                         Box(modifier = Modifier.fillMaxSize())
                     }
+                    "empty" -> {
+                        WelcomeContent()
+                    }
                     "search_empty" -> {
                         SearchEmptyContent(query = searchQuery)
                     }
                     else -> {
                         if (searchQuery.isNotBlank()) {
                             GlobalSearchResultList(
-                                conversations = filteredConversations,
-                                messageHits = messageHits,
+                                conversations = searchScopeConversations,
+                                messageHits = scopedMessageHits,
                                 query = searchQuery,
                                 isMultiSelect = isMultiSelect,
                                 selectedIds = selectedIds,
@@ -403,7 +437,9 @@ fun HomeScreen(
                         } else {
                             HorizontalPager(
                                 state = pagerState,
-                                modifier = Modifier.fillMaxSize()
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .graphicsLayer { alpha = listReloadAlpha.value }
                             ) { page ->
                                 AnimatedContent(
                                     targetState = page,
@@ -451,7 +487,8 @@ fun HomeScreen(
             }
 
             // ===== 私聊 / 群聊底部 Tab（方案十四.1-4） =====
-            if (!isMultiSelect && searchQuery.isBlank()) {
+            // 零会话（欢迎页）时不显示模式切换，保证有会话后才能使用（需求）
+            if (!isMultiSelect && searchQuery.isBlank() && conversations.isNotEmpty()) {
                 ChatTypeTabBar(
                     currentPage = pagerState.currentPage + pagerState.currentPageOffsetFraction,
                     darkMode = settings.darkMode,
@@ -910,6 +947,83 @@ private fun ConversationCard(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f)
             )
+        }
+    }
+}
+
+@Composable
+private fun WelcomeContent() {
+    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+    val screenWidthDp = configuration.screenWidthDp.dp
+    val screenHeightDp = configuration.screenHeightDp.dp
+    val isLandscape = screenWidthDp > screenHeightDp
+
+    val titleFontSize = (screenWidthDp.value * 0.20f).sp
+    val maxTitleSize = 72.sp
+    val finalTitleSize = if (titleFontSize.value > maxTitleSize.value) maxTitleSize else titleFontSize
+
+    val subtitleFontSize = 18.sp
+
+    val titleColor = MaterialTheme.colorScheme.onSurface
+    val subtitleColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.78f)
+    val verticalSpacing = if (isLandscape) 12.dp else 20.dp
+    val horizontalPadding = if (isLandscape) 40.dp else 24.dp
+
+    var visible by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        delay(40)
+        visible = true
+    }
+
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(
+            animationSpec = tween(
+                durationMillis = 300,
+                easing = Motion.EasingEmphasizedDecelerate
+            )
+        ) + slideInVertically(
+            initialOffsetY = { it / 6 },
+            animationSpec = tween(
+                durationMillis = 320,
+                easing = Motion.EasingEmphasizedDecelerate
+            )
+        ),
+        modifier = Modifier.fillMaxSize()
+    ) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.CenterStart
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = horizontalPadding),
+                horizontalAlignment = Alignment.Start,
+                verticalArrangement = Arrangement.spacedBy(verticalSpacing)
+            ) {
+                Text(
+                    text = "Quiddity",
+                    fontSize = finalTitleSize,
+                    fontWeight = FontWeight.Bold,
+                    color = titleColor,
+                    textAlign = TextAlign.Start,
+                    letterSpacing = (-1.2).sp,
+                    lineHeight = (finalTitleSize.value * 1.05f).sp,
+                    maxLines = 1,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    text = "开始你的旅程",
+                    fontSize = subtitleFontSize,
+                    fontWeight = FontWeight.Medium,
+                    color = subtitleColor,
+                    textAlign = TextAlign.Start,
+                    letterSpacing = 0.sp,
+                    maxLines = 1,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
         }
     }
 }
