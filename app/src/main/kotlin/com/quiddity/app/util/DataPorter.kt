@@ -410,7 +410,7 @@ object DataPorter {
                 // 6. API Key 密文解密自检（3.2）：失败条目标记「需重新填写密钥」
                 val needsKeyRefill = restored.settings.catalog
                     .filter { entry ->
-                        runCatching { CryptoUtils.decrypt(entry.apiKeyEnc) }.isFailure
+                        !CryptoUtils.isDecryptable(entry.apiKeyEnc)
                     }
                     .map { it.name }
 

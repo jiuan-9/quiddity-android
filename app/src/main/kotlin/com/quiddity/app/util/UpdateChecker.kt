@@ -9,10 +9,14 @@ import android.database.Cursor
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.content.pm.PackageManager
 import android.provider.Settings
 import androidx.core.content.FileProvider
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOn
@@ -90,6 +94,12 @@ object UpdateChecker {
      */
     private const val GITHUB_RELEASES_URL =
         "https://github.com/jiuan-9/Quiddity-website/releases/latest"
+
+    /**
+     * 官网下载页（应用内下载失败时引导用户前往）。
+     * 与版本检测第一优先级源同站，保证用户拿到的是同一发布渠道的安装包。
+     */
+    const val OFFICIAL_DOWNLOAD_PAGE_URL = "https://quiddity-3by.pages.dev/"
 
     /**
      * SharedPreferences 存储键：已忽略的版本号。
@@ -289,6 +299,22 @@ object UpdateChecker {
     }
 
     /**
+     * 打开官网下载页（「去官网下载」按钮的统一入口）。
+     * 与 [openDownloadPage] 的区别：这里不做首页重定向，永远指向官网本身，
+     * 供应用内下载失败后的兜底引导使用。
+     */
+    fun openOfficialDownloadPage(context: Context) {
+        try {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(OFFICIAL_DOWNLOAD_PAGE_URL)).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            // 没有浏览器可用，静默失败
+        }
+    }
+
+    /**
      * 解析最终 APK 直链。
      *
      * 规则（按优先级）：
@@ -324,7 +350,7 @@ object UpdateChecker {
             if (!homepageLike && url.startsWith("http", ignoreCase = true)) {
                 if (isGitHubReleasesUrl(url)) {
                     parseGitHubOwnerRepo(url)?.let { (owner, repo) ->
-                        fetchLatestApkFromGitHub(owner, repo)?.let { add(it) }
+                        fetchLatestApk(owner, repo)?.let { add(it) }
                     }
                 } else {
                     add(url)
@@ -457,6 +483,9 @@ object UpdateChecker {
      * 若旧文件来自过期来源（站点曾误放旧安装包 / 此前下载中断残留），会导致装到
      * 旧版本；现改为启动前删除旧文件与残留 .tmp，保证安装包内容与本次 URL 一致。
      *
+     * 取消支持：收集方取消 Flow（或调用方 Job.cancel）时，下载循环立即停止，
+     * 残留 .tmp 文件会被清理，不会留下半截安装包。
+     *
      * @return Flow，发射下载进度，最终状态为 SUCCESSFUL 或 FAILED
      */
     fun downloadApkDirect(
@@ -507,6 +536,8 @@ object UpdateChecker {
                     val buffer = ByteArray(8192)
                     var bytesRead: Int
                     while (input.read(buffer).also { bytesRead = it } != -1) {
+                        // 协作式取消：用户点击「取消」后立即停止写入，避免继续下载
+                        currentCoroutineContext().ensureActive()
                         output.write(buffer, 0, bytesRead)
                         downloaded += bytesRead
                         trySend(
@@ -542,6 +573,10 @@ object UpdateChecker {
             } else {
                 trySend(DownloadProgress(0, DownloadStatus.FAILED, 0, 0, null, "文件写入失败"))
             }
+        } catch (e: CancellationException) {
+            // 用户取消：清理半截 .tmp，不视为下载失败，直接向上传播取消
+            runCatching { tempFile.delete() }
+            throw e
         } catch (e: Exception) {
             trySend(
                 DownloadProgress(
@@ -635,6 +670,82 @@ object UpdateChecker {
             }
         }
     }.flowOn(Dispatchers.IO)
+
+    /**
+     * 安装包校验结果。
+     *
+     * - [Ok]：包名与本应用一致，且签名证书一致 → 可安全覆盖安装（数据保留）；
+     * - [Mismatch]：包名或签名不一致 → 不能覆盖安装，必须引导用户前往官网下载；
+     * - [Unverifiable]：设备无法读取安装包信息（个别 ROM / 系统版本限制）→ 允许安装，
+     *   但界面应提示用户确认来源。
+     */
+    sealed class ApkVerifyResult {
+        data class Ok(val packageName: String, val signerFingerprints: List<String>) : ApkVerifyResult()
+        data class Mismatch(val reason: String) : ApkVerifyResult()
+        data class Unverifiable(val reason: String) : ApkVerifyResult()
+    }
+
+    /**
+     * 校验下载完成的 APK 是否为本应用的官方安装包。
+     *
+     * 判断依据（保证覆盖安装与数据保留的前提）：
+     * 1. 包名必须等于当前应用包名（[Context.getPackageName]）；
+     * 2. 签名证书必须与当前已安装应用一致 —— Android 只有在签名一致时才允许
+     *    覆盖安装，且覆盖安装会完整保留本地数据（conversations.json 等）。
+     *
+     * 校验失败（[Mismatch]）时调用方应删除该文件并引导用户前往官网下载，
+     * 避免安装到错误来源的安装包。
+     */
+    fun verifyApk(context: Context, apkFile: File): ApkVerifyResult {
+        return try {
+            val pm = context.packageManager
+            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                PackageManager.GET_SIGNING_CERTIFICATES
+            } else {
+                @Suppress("DEPRECATION")
+                PackageManager.GET_SIGNATURES
+            }
+
+            @Suppress("DEPRECATION")
+            val archiveInfo = pm.getPackageArchiveInfo(apkFile.absolutePath, flags)
+            if (archiveInfo == null || archiveInfo.packageName.isNullOrBlank()) {
+                return ApkVerifyResult.Unverifiable("无法读取安装包信息")
+            }
+            if (archiveInfo.packageName != context.packageName) {
+                return ApkVerifyResult.Mismatch(
+                    "安装包包名 ${archiveInfo.packageName} 与本应用（${context.packageName}）不一致"
+                )
+            }
+
+            val archiveSigners = signerFingerprints(archiveInfo)
+            val installedInfo = pm.getPackageInfo(context.packageName, flags)
+            val installedSigners = signerFingerprints(installedInfo)
+            if (archiveSigners == null || installedSigners == null) {
+                return ApkVerifyResult.Unverifiable("无法读取签名信息")
+            }
+            if (archiveSigners != installedSigners) {
+                return ApkVerifyResult.Mismatch("安装包签名与本应用不一致，无法覆盖安装")
+            }
+            ApkVerifyResult.Ok(archiveInfo.packageName, archiveSigners)
+        } catch (t: Throwable) {
+            ApkVerifyResult.Unverifiable(t.message ?: "校验过程异常")
+        }
+    }
+
+    /** 提取签名证书的 SHA-256 指纹列表（排序后比较，忽略顺序差异）。 */
+    private fun signerFingerprints(info: android.content.pm.PackageInfo): List<String>? {
+        val signers = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            info.signingInfo?.apkContentsSigners
+        } else {
+            @Suppress("DEPRECATION")
+            info.signatures
+        } ?: return null
+        return signers.map { cert ->
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+                .digest(cert.toByteArray())
+            digest.joinToString("") { "%02x".format(it) }
+        }.sorted()
+    }
 
     /**
      * 触发 APK 安装（直接指定文件）。

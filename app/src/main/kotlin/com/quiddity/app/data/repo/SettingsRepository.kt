@@ -3,6 +3,7 @@ package com.quiddity.app.data.repo
 import com.quiddity.app.data.local.SettingsStore
 import com.quiddity.app.data.model.AppSettings
 import com.quiddity.app.data.model.ApiCatalogEntry
+import com.quiddity.app.util.CryptoUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -84,6 +85,33 @@ class SettingsRepository(private val store: SettingsStore) {
             if (initialized) return@withLock
             _snapshot.value = store.data.first()
             initialized = true
+        }
+    }
+
+    /**
+     * 升级迁移：把旧版（固定密钥）加密的 API Key 自动改用设备 Keystore 密钥重新加密。
+     *
+     * 触发条件：密文无法用当前密钥解密、但旧密钥可以解开（见
+     * [com.quiddity.app.util.CryptoUtils.isLegacyEncrypted]）。
+     * 迁移成功后旧密文被替换，用户无感知；解不开的条目保持原样，
+     * 由数据导入流程（needsKeyRefill）或 API 使用时报错提示重新填写。
+     */
+    suspend fun migrateLegacyApiKeysIfNeeded() {
+        ensureInitialized()
+        val current = _snapshot.value
+        val pending = current.catalog.filter { entry ->
+            entry.apiKeyEnc.isNotEmpty() && CryptoUtils.isLegacyEncrypted(entry.apiKeyEnc)
+        }
+        if (pending.isEmpty()) return
+        val reEncrypted = pending.mapNotNull { entry ->
+            runCatching { CryptoUtils.decryptLegacy(entry.apiKeyEnc) }
+                .getOrNull()
+                ?.let { plain -> entry.copy(apiKeyEnc = CryptoUtils.encrypt(plain)) }
+        }
+        if (reEncrypted.isEmpty()) return
+        val byId = reEncrypted.associateBy { it.id }
+        store.update { settings ->
+            settings.copy(catalog = settings.catalog.map { byId[it.id] ?: it })
         }
     }
 
