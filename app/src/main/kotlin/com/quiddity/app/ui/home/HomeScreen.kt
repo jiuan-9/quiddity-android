@@ -94,6 +94,7 @@ import com.quiddity.app.ui.settings.SettingsViewModel
 import com.quiddity.app.ui.theme.Motion
 import com.quiddity.app.util.DateUtils
 import com.quiddity.app.util.QuiddityConstants
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 /*
@@ -203,9 +204,10 @@ fun HomeScreen(
     }
     val searchScopeConversations = if (currentTab == 0) soloFiltered else groupFiltered
 
-    // ===== 顶部 UI 模式切换"重新加载"动画：柔和缓慢的 alpha 脉动（graphicsLayer 驱动，
-    // 零重组；不降到接近透明，避免闪动/不稳定） =====
+    // ===== 顶部 UI 模式切换"重新加载"动画：整体淡出 → 淡入并轻微下落复位。
+    // 由 graphicsLayer 在 draw phase 驱动（零重组）；速度放缓避免闪动。 =====
     val topBarReloadAlpha = remember { Animatable(1f) }
+    val topBarReloadOffsetY = remember { Animatable(0f) }
     var firstTopBarRender by remember { mutableStateOf(true) }
     LaunchedEffect(pagerState.currentPage) {
         if (firstTopBarRender) {
@@ -213,14 +215,18 @@ fun HomeScreen(
             return@LaunchedEffect
         }
         topBarReloadAlpha.snapTo(1f)
-        topBarReloadAlpha.animateTo(
-            0.65f,
-            animationSpec = tween(250, easing = Motion.EasingStandard)
-        )
-        topBarReloadAlpha.animateTo(
-            1f,
-            animationSpec = tween(350, easing = Motion.EasingStandard)
-        )
+        // 淡出
+        topBarReloadAlpha.animateTo(0f, tween(220, easing = Motion.EasingStandard))
+        // 预置轻微上移，淡入的同时下落复位，模拟内容重新加载
+        topBarReloadOffsetY.snapTo(-12f)
+        coroutineScope {
+            launch {
+                topBarReloadAlpha.animateTo(1f, tween(320, easing = Motion.EasingStandard))
+            }
+            launch {
+                topBarReloadOffsetY.animateTo(0f, tween(320, easing = Motion.EasingStandard))
+            }
+        }
     }
 
     val deleteIdsSaver = remember {
@@ -368,7 +374,10 @@ fun HomeScreen(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .graphicsLayer { alpha = topBarReloadAlpha.value }
+                            .graphicsLayer {
+                                alpha = topBarReloadAlpha.value
+                                translationY = topBarReloadOffsetY.value
+                            }
                     ) {
                         HomeTopBar(
                             userAvatarUri = userAvatarUri,
