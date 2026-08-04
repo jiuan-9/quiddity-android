@@ -192,8 +192,8 @@ class PromptBuilderTest {
             history = history,
             senderLabels = mapOf("conv_a" to "小A", "conv_b" to "小B")
         )
-        assertEquals("[小A] 早上好", labeled[0].content)
-        assertEquals("[小B] 你好呀", labeled[1].content)
+        assertEquals("小A：早上好", labeled[0].content)
+        assertEquals("小B：你好呀", labeled[1].content)
     }
 
     @Test
@@ -217,7 +217,7 @@ class PromptBuilderTest {
             lastN = 2,
             senderNames = mapOf("conv_a" to "小A", "conv_b" to "小B")
         )
-        assertEquals("[小B] 第二句\n[小A] 第三句", transcript)
+        assertEquals("小B：第二句\n小A：第三句", transcript)
     }
 
     @Test
@@ -234,5 +234,50 @@ class PromptBuilderTest {
         assertEquals("search_chat", tool.function.name)
         assertTrue(tool.function.parameters.containsKey("properties"), "工具应带 query 参数定义")
         assertTrue(tool.function.parameters.containsKey("required"), "工具应声明必填参数")
+    }
+
+    @Test
+    fun `group system prompt contains member persona and group rules`() {
+        val member = conv().copy(
+            persona = com.quiddity.app.data.model.Persona(
+                name = "小A",
+                persona = "群聊测试成员"
+            )
+        )
+        val prompt = PromptBuilder.buildGroupSystemPrompt(member, PromptBuilder.GROUP_RULES)
+        assertTrue(prompt.contains("小A"), "成员人设名应进入 system 提示词")
+        assertTrue(prompt.contains("群聊规则"), "应包含群聊规则节")
+        assertTrue(prompt.contains("不要替别人发言"), "应包含群聊规则内容")
+    }
+
+    @Test
+    fun `group decision prompt contains transcript and output constraint`() {
+        val member = conv().copy(
+            persona = com.quiddity.app.data.model.Persona(name = "小A")
+        )
+        val transcript = PromptBuilder.buildGroupTranscript(
+            listOf(
+                msg("m1", content = "你好", senderId = "conv_user"),
+                msg("m2", content = "你们好呀", senderId = "conv_b")
+            ),
+            lastN = 10,
+            senderNames = mapOf("conv_user" to "我", "conv_b" to "小B")
+        )
+        val prompt = PromptBuilder.buildGroupDecisionPrompt(member, transcript)
+        assertTrue(prompt.contains("群聊转述"), "决策提示词应包含群聊转述节")
+        assertTrue(prompt.contains("我：你好"), "转述应使用名字：内容格式")
+        assertTrue(prompt.contains("严格只输出数字 0"), "应包含输出约束")
+    }
+
+    @Test
+    fun `group memory summary prompt contains transcript`() {
+        val transcript = PromptBuilder.buildGroupTranscript(
+            listOf(msg("m1", content = "第一句", senderId = "conv_a")),
+            lastN = 0,
+            senderNames = mapOf("conv_a" to "小A")
+        )
+        val prompt = PromptBuilder.buildGroupMemorySummaryPrompt(transcript)
+        assertTrue(prompt.contains("本次需要压缩的群聊对话"), "应包含压缩指令")
+        assertTrue(prompt.contains("小A：第一句"), "应包含群聊转述")
     }
 }

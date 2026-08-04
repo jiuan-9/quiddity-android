@@ -369,7 +369,7 @@ object PromptBuilder {
             }
             val content = if (msg.senderId != null && senderLabels.isNotEmpty()) {
                 val label = senderLabels[msg.senderId] ?: msg.senderId
-                "[$label] ${msg.content}"
+                "$label：${msg.content}"
             } else {
                 msg.content
             }
@@ -522,7 +522,7 @@ $persona
     }
 
     /**
-     * 构造群聊转述文本（4.2）：`[名字] 内容` 格式，只给最近 [lastN] 条（5.2）。
+     * 构造群聊转述文本（4.2）：`名字：内容` 格式（方案五），只给最近 [lastN] 条（5.2）。
      *
      * @param senderNames 成员会话 id → 名字映射；未映射的 senderId 直接显示 id，无 senderId 显示「未知成员」（3.3）。
      * @param lastN 保留最近 N 条；<= 0 表示全部。
@@ -535,9 +535,18 @@ $persona
         val effective = if (lastN > 0 && messages.size > lastN) messages.takeLast(lastN) else messages
         return effective.joinToString("\n") { msg ->
             val name = msg.senderId?.let { senderNames[it] ?: it } ?: "未知成员"
-            "[$name] ${msg.content}"
+            "$name：${msg.content}"
         }
     }
+
+    /**
+     * 群聊规则（4.2 群聊成员 system 提示词的群规则部分）。
+     */
+    const val GROUP_RULES =
+        "1. 你正在参与一场群聊，群聊中有用户和其他 AI 成员。\n" +
+        "2. 每次发言前先完整阅读群聊转述，保持你的人设一致。\n" +
+        "3. 只说你作为该角色会说的话，不要替别人发言。\n" +
+        "4. 直接输出发言内容，不要输出名字前缀、冒号或任何解释。"
 
     /**
      * 构造"该不该我接话"的判断指令（4.2）：成员人设 + 群聊转述 + 输出约束。
