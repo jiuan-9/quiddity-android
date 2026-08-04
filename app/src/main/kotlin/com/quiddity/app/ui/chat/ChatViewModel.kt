@@ -158,6 +158,13 @@ class ChatViewModel(
     /** 当前流式会话的根 Job，用于 stopGeneration 整体取消。 */
     private var streamJob: Job? = null
 
+    /**
+     * 1.5.0 延迟输出：加载动画时长 = 回复字数 × 每字毫秒数。
+     * [replyRunStart] 当前回复运行开始时间；[replyRunChars] 累计字数（含切分消息）。
+     */
+    private var replyRunStart = 0L
+    private var replyRunChars = 0
+
     // ===== 群聊点名回复队列（方案四：1 个回复 + 2 个排队） =====
     private val groupQueueEngine = GroupReplyQueue()
     private val _groupQueue = MutableStateFlow<List<GroupReplyQueue.Item>>(emptyList())
@@ -244,6 +251,8 @@ class ChatViewModel(
         while (attempt < QuiddityConstants.GROUP_RETRY_COUNT) {
             attempt++
             var failed = false
+            replyRunStart = System.currentTimeMillis()
+            replyRunChars = 0
             chatRepository.streamGroupMemberReply(
                 member = member,
                 group = group,
@@ -393,6 +402,8 @@ class ChatViewModel(
             cleanupStaleStreamingMessages()
             _isGenerating.value = true
             try {
+                replyRunStart = System.currentTimeMillis()
+                replyRunChars = 0
                 val history = _messages.value
                 chatRepository.streamAssistantReply(
                     conv,
@@ -659,6 +670,8 @@ class ChatViewModel(
         // 取消上一轮（如果仍在进行）
         streamJob?.cancel()
         _isGenerating.value = true
+        replyRunStart = System.currentTimeMillis()
+        replyRunChars = 0
         streamJob = viewModelScope.launch {
             // 防御性：清理可能残留的 streaming 状态
             // 用户停止生成 / 异常退出后，最后一条消息可能仍是 streaming=true，
@@ -706,6 +719,27 @@ class ChatViewModel(
                 if (!conversationRepository.updateMessage(event.message)) raiseStorageError()
             }
             is ChatRepository.Event.CompleteMessage -> {
+                // 1.5.0 延迟输出：加载动画时长 = 累计回复字数 × 每字毫秒数。
+                // 流式文字自然显示（MessageBubble 不再逐字停顿），消息保持
+                // streaming 状态直到该时长结束（气泡光标 / 群聊头像三点不提前停止）。
+                replyRunChars += event.message.content.length
+                val settings = settingsRepository.currentSnapshot()
+                if (settings.typingDelayEnabled && settings.typingDelayMsPerChar > 0 &&
+                    replyRunStart > 0 && event.message.content.isNotEmpty()
+                ) {
+                    val targetDuration = replyRunChars.toLong() * settings.typingDelayMsPerChar
+                    val elapsed = System.currentTimeMillis() - replyRunStart
+                    val remainder = targetDuration - elapsed
+                    if (remainder > 0) {
+                        try {
+                            kotlinx.coroutines.delay(remainder)
+                        } catch (c: kotlinx.coroutines.CancellationException) {
+                            // 停止生成：先把消息落盘为完成态，避免加载光标卡住，再继续取消
+                            if (!conversationRepository.updateMessage(event.message)) raiseStorageError()
+                            throw c
+                        }
+                    }
+                }
                 if (!conversationRepository.updateMessage(event.message)) raiseStorageError()
                 // AI 消息完成时累加 token 用量
                 accumulateTokenUsage(event.message.tokenCount)

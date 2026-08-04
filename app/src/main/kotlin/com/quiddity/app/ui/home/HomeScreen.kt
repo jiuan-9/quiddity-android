@@ -3,7 +3,6 @@ package com.quiddity.app.ui.home
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -72,7 +71,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -202,25 +200,6 @@ fun HomeScreen(
         messageHits.filter { it.conversationId in ids }
     }
     val searchScopeConversations = if (currentTab == 0) soloFiltered else groupFiltered
-
-    // ===== 模式切换时列表淡出/淡入（重新加载感，方案十四.7） =====
-    val listReloadAlpha = remember { Animatable(1f) }
-    var firstTabRender by remember { mutableStateOf(true) }
-    LaunchedEffect(pagerState.currentPage) {
-        if (firstTabRender) {
-            firstTabRender = false
-            return@LaunchedEffect
-        }
-        listReloadAlpha.snapTo(1f)
-        listReloadAlpha.animateTo(
-            0f,
-            animationSpec = tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate)
-        )
-        listReloadAlpha.animateTo(
-            1f,
-            animationSpec = tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedDecelerate)
-        )
-    }
 
     val deleteIdsSaver = remember {
         androidx.compose.runtime.saveable.Saver<List<String>?, String>(
@@ -362,34 +341,22 @@ fun HomeScreen(
                         hasListWallpaper = hasListWallpaper
                     )
                 } else {
-                    // 模式切换（私聊/群聊）时，顶部三个 UI（头像/搜索/新建）整体淡出淡入，
-                    // 做出重新加载的意思
-                    AnimatedContent(
-                        targetState = pagerState.currentPage,
-                        transitionSpec = {
-                            fadeIn(
-                                tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedDecelerate)
-                            ) togetherWith fadeOut(
-                                tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate)
-                            )
+                    // 模式切换（私聊/群聊）为纯滑动切换，不做顶部淡入淡出，
+                    // 避免切换时出现闪动
+                    HomeTopBar(
+                        userAvatarUri = userAvatarUri,
+                        searchQuery = searchQuery,
+                        onSearchQueryChange = { searchQuery = it },
+                        onSettingsClick = { showSettings = true },
+                        onNewConversation = {
+                            if (pagerState.currentPage == 0) {
+                                viewModel.createConversation()
+                            } else {
+                                showNewGroupDialog = true
+                            }
                         },
-                        label = "topbar_mode_switch"
-                    ) { _ ->
-                        HomeTopBar(
-                            userAvatarUri = userAvatarUri,
-                            searchQuery = searchQuery,
-                            onSearchQueryChange = { searchQuery = it },
-                            onSettingsClick = { showSettings = true },
-                            onNewConversation = {
-                                if (pagerState.currentPage == 0) {
-                                    viewModel.createConversation()
-                                } else {
-                                    showNewGroupDialog = true
-                                }
-                            },
-                            hasListWallpaper = hasListWallpaper
-                        )
-                    }
+                        hasListWallpaper = hasListWallpaper
+                    )
                 }
             }
 
@@ -437,9 +404,7 @@ fun HomeScreen(
                         } else {
                             HorizontalPager(
                                 state = pagerState,
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .graphicsLayer { alpha = listReloadAlpha.value }
+                                modifier = Modifier.fillMaxSize()
                             ) { page ->
                                 AnimatedContent(
                                     targetState = page,
@@ -487,8 +452,12 @@ fun HomeScreen(
             }
 
             // ===== 私聊 / 群聊底部 Tab（方案十四.1-4） =====
-            // 零会话（欢迎页）时不显示模式切换，保证有会话后才能使用（需求）
-            if (!isMultiSelect && searchQuery.isBlank() && conversations.isNotEmpty()) {
+            // 零会话（欢迎页）时不显示模式切换；从欢迎页进入正式页时淡入（需求）
+            AnimatedVisibility(
+                visible = !isMultiSelect && searchQuery.isBlank() && conversations.isNotEmpty(),
+                enter = fadeIn(tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedDecelerate)),
+                exit = fadeOut(tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate))
+            ) {
                 ChatTypeTabBar(
                     currentPage = pagerState.currentPage + pagerState.currentPageOffsetFraction,
                     darkMode = settings.darkMode,

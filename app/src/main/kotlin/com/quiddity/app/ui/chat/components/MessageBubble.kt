@@ -38,11 +38,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -156,36 +154,14 @@ fun MessageBubble(
     val avatarUri = if (isUser) userAvatarUri else (senderAvatarUri ?: aiAvatarUri)
     val avatarIcon = Icons.Filled.Person
 
-    // ===== 打字机效果：UI 层逐字渲染 =====
+    // ===== 1.5.0 延迟输出定义：不再逐字停顿流式文字，回复内容自然流式显示；
+    // 加载动画时长由 ViewModel 按回复字数 × 每字毫秒数控制（isStreaming 状态持续） =====
     val fullContent = message.content
-    val typingActive = isStreaming && typingDelayEnabled && typingDelayMsPerChar > 0
-    var displayedLength by remember(message.id) { mutableIntStateOf(0) }
+    val content = fullContent
 
     var wasStreamed by remember(message.id) { mutableStateOf(false) }
     LaunchedEffect(isStreaming) {
         if (isStreaming) wasStreamed = true
-    }
-
-    // 当前规则：LaunchedEffect key 不含 fullContent，避免每个 token 重启协程；用 snapshotFlow 监听内容增长，逐步推进 displayedLength。
-    LaunchedEffect(message.id, isStreaming, typingDelayEnabled, typingDelayMsPerChar) {
-        if (!typingActive) {
-            displayedLength = fullContent.length
-        } else {
-            snapshotFlow { fullContent.length }.collect { targetLen ->
-                while (displayedLength < targetLen) {
-                    kotlinx.coroutines.delay(typingDelayMsPerChar.toLong())
-                    displayedLength = (displayedLength + 1).coerceAtMost(targetLen)
-                }
-            }
-        }
-    }
-    if (displayedLength > fullContent.length) {
-        displayedLength = fullContent.length
-    }
-    val content = if (typingActive) {
-        fullContent.substring(0, displayedLength.coerceIn(0, fullContent.length))
-    } else {
-        fullContent
     }
 
     val bubbleInteractionSource = remember { MutableInteractionSource() }
