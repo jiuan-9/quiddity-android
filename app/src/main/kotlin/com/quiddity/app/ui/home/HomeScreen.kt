@@ -564,10 +564,15 @@ fun HomeScreen(
             },
             confirmText = "删除",
             onConfirm = {
+                var referenced = emptyList<String>()
                 viewModel.deleteConversations(
                     ids,
-                    onReferencedByGroups = { referenced -> pendingReferencedDelete = referenced }
+                    onReferencedByGroups = { referenced = it }
                 )
+                if (referenced.isNotEmpty()) {
+                    // 保留完整选择集，二次确认后全部删除（含被群聊引用的）
+                    pendingReferencedDelete = ids
+                }
                 pendingDeleteIds = null
                 exitMultiSelect()
             },
