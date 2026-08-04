@@ -139,16 +139,21 @@ object ServiceLocator {
 
         // 启动时加载会话
         appScope.launch {
-            // 预加载设置，确保冷启动时 currentSnapshot() 返回磁盘真实值而非默认值
-            settingsRepository.ensureInitialized()
-            // 升级迁移：旧版固定密钥加密的 API Key 自动改用设备 Keystore 密钥
-            settingsRepository.migrateLegacyApiKeysIfNeeded()
-            conversationRepository.loadAll()
-            characterRepository.loadAll()
-            // 详见 ConversationStore.migrateDeduplicateMessageIds
-            conversationRepository.migrateDeduplicateMessageIds()
-            // 主动消息：每日首次启动重置 done → pending，并重注册闹钟
-            timeLibraryRepository.onAppStart()
+            // 容错：启动加载任一环节异常只记录日志，不让整个 App 闪退
+            runCatching {
+                // 预加载设置，确保冷启动时 currentSnapshot() 返回磁盘真实值而非默认值
+                settingsRepository.ensureInitialized()
+                // 升级迁移：旧版固定密钥加密的 API Key 自动改用设备 Keystore 密钥
+                settingsRepository.migrateLegacyApiKeysIfNeeded()
+                conversationRepository.loadAll()
+                characterRepository.loadAll()
+                // 详见 ConversationStore.migrateDeduplicateMessageIds
+                conversationRepository.migrateDeduplicateMessageIds()
+                // 主动消息：每日首次启动重置 done → pending，并重注册闹钟
+                timeLibraryRepository.onAppStart()
+            }.onFailure {
+                android.util.Log.e("ServiceLocator", "启动加载数据失败", it)
+            }
         }
     }
 }

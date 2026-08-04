@@ -2,9 +2,11 @@ package com.quiddity.app.data.local
 
 import android.content.Context
 import androidx.datastore.core.DataStore
+import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -50,7 +52,9 @@ import kotlinx.serialization.json.Json
  * 所有默认值统一从 [AppSettings.Default] 派生，避免遗漏导致用户升级后行为不一致。
  */
 val Context.appSettingsDataStore: DataStore<Preferences> by preferencesDataStore(
-    name = "quiddity_settings"
+    name = "quiddity_settings",
+    // 容错：设置文件损坏时用空设置代替，避免启动时读设置抛异常闪退
+    corruptionHandler = ReplaceFileCorruptionHandler { _ -> emptyPreferences() }
 )
 
 class SettingsStore(private val context: Context) {

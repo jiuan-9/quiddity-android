@@ -602,7 +602,10 @@ class UpdateController(
             isChecking = true
             try {
                 kotlinx.coroutines.delay(2000)
-                val result = UpdateChecker.checkForUpdates(context, forceCheck = false)
+                // 容错：检查更新异常不崩溃 App
+                val result = runCatching {
+                    UpdateChecker.checkForUpdates(context, forceCheck = false)
+                }.getOrElse { UpdateChecker.Result.Error(it.message ?: "检查更新失败") }
                 if (result is UpdateChecker.Result.UpdateAvailable) {
                     updateResult = result
                 }
