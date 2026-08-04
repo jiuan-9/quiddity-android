@@ -850,12 +850,20 @@ class ChatViewModel(
     ): String {
         // 新名为空：保持原标题（不因清空名字而清空标题）
         if (newPersonaName.isBlank()) return currentTitle
-        return when (currentTitle) {
-            QuiddityConstants.DEFAULT_CONVERSATION_TITLE -> newPersonaName
-            oldPersonaName -> newPersonaName
+        return when {
+            // 旧默认「新会话」或 1.5.0 带编号默认名（新会话 1、2、3…）都可被 AI 名字覆盖
+            isDefaultSoloTitle(currentTitle) -> newPersonaName
+            currentTitle == oldPersonaName -> newPersonaName
             else -> currentTitle
         }
     }
+
+    /**
+     * 1.5.0 私聊默认名判定（方案二.4）：旧默认「新会话」或带编号的「新会话 N」。
+     */
+    private fun isDefaultSoloTitle(title: String): Boolean =
+        title == QuiddityConstants.DEFAULT_CONVERSATION_TITLE ||
+            title.startsWith(QuiddityConstants.SOLO_DEFAULT_TITLE_PREFIX + " ")
 
     /**
      * 判断用户可编辑的人设字段是否发生变化（用于 [updatePersona] 决定是否清空编译缓存）。
@@ -1309,7 +1317,7 @@ class ChatViewModel(
 
                 // 3. 标题更新：仅当当前是默认标题且解析到非默认标题时
                 val updatedTitle = if (
-                    conv.title == QuiddityConstants.DEFAULT_CONVERSATION_TITLE &&
+                    isDefaultSoloTitle(conv.title) &&
                     result.title.isNotBlank() &&
                     result.title != QuiddityConstants.DEFAULT_CONVERSATION_TITLE
                 ) {
@@ -1446,34 +1454,38 @@ class ChatViewModel(
      * 添加群聊成员（方案十.5）：逐个校验（用户名 / AI 名 / API 测试），
      * 通过的角色加入，未通过的返回通知可重试；最多 3 个。
      */
-    fun addGroupMembers(ids: List<String>, onDone: (Result<Unit>) -> Unit) {
+    fun addGroupMembers(ids: List<String>, onDone: (Result<Unit>, List<String>) -> Unit) {
         val group = conversation.value ?: return
         if (!isGroup()) return
         viewModelScope.launch {
             val current = group.memberConversationIds
-            val target = (current + ids).distinct()
-            if (target.size > QuiddityConstants.GROUP_MAX_MEMBERS) {
-                onDone(Result.failure(
-                    IllegalStateException("群聊成员最多 ${QuiddityConstants.GROUP_MAX_MEMBERS} 个")
-                ))
-                return@launch
-            }
             val newIds = ids.filter { it !in current }
             val failures = mutableListOf<String>()
+            val passed = mutableListOf<String>()
             for (id in newIds) {
                 val member = conversationRepository.getConversation(id) ?: continue
                 val result = conversationRepository.validateGroupMember(member)
                 if (result.isFailure) {
                     val name = member.persona.name.ifBlank { member.title }
                     failures += "$name：${result.exceptionOrNull()?.message}"
+                } else {
+                    passed += id
                 }
             }
-            if (failures.isNotEmpty()) {
-                onDone(Result.failure(IllegalStateException(failures.joinToString("\n"))))
+            if (passed.isEmpty()) {
+                onDone(Result.failure(IllegalStateException(failures.joinToString("\n"))), failures)
+                return@launch
+            }
+            val target = (current + passed).distinct()
+            if (target.size > QuiddityConstants.GROUP_MAX_MEMBERS) {
+                onDone(
+                    Result.failure(IllegalStateException("群聊成员最多 ${QuiddityConstants.GROUP_MAX_MEMBERS} 个")),
+                    failures
+                )
                 return@launch
             }
             conversationRepository.updateConversation(group.copy(memberConversationIds = target))
-            onDone(Result.success(Unit))
+            onDone(Result.success(Unit), failures)
         }
     }
 

@@ -90,33 +90,36 @@ class HomeViewModel(
 
     /**
      * 创建群聊（方案二.6）：先逐个校验成员（用户名 / AI 名 / API 测试），
-     * 全部通过才建群并回调群 id；任一失败返回失败原因（可重试）。
+     * 通过的角色加入，未通过的返回通知（可重试），至少 1 个通过才建群。
      */
     fun createGroup(
         memberIds: List<String>,
         title: String?,
-        onDone: (Result<String>) -> Unit
+        onDone: (Result<String>, List<String>) -> Unit
     ) {
         viewModelScope.launch {
             val members = memberConversations(memberIds)
             if (members.isEmpty()) {
-                onDone(Result.failure(IllegalStateException("未选择成员")))
+                onDone(Result.failure(IllegalStateException("未选择成员")), emptyList())
                 return@launch
             }
             val failures = mutableListOf<String>()
+            val passed = mutableListOf<String>()
             for (member in members) {
                 val result = conversationRepository.validateGroupMember(member)
                 if (result.isFailure) {
                     val name = member.persona.name.ifBlank { member.title }
                     failures += "$name：${result.exceptionOrNull()?.message}"
+                } else {
+                    passed += member.id
                 }
             }
-            if (failures.isNotEmpty()) {
-                onDone(Result.failure(IllegalStateException(failures.joinToString("\n"))))
+            if (passed.isEmpty()) {
+                onDone(Result.failure(IllegalStateException(failures.joinToString("\n"))), failures)
                 return@launch
             }
-            val group = conversationRepository.createGroupConversation(memberIds, title)
-            onDone(Result.success(group.id))
+            val group = conversationRepository.createGroupConversation(passed, title)
+            onDone(Result.success(group.id), failures)
         }
     }
 

@@ -2149,8 +2149,15 @@ private fun GroupMemberManagePanel(
             currentIds = group.memberConversationIds,
             hasApiConfig = settings.catalog.isNotEmpty(),
             onConfirm = { ids ->
-                viewModel.addGroupMembers(ids) { result ->
+                viewModel.addGroupMembers(ids) { result, failures ->
                     showAddDialog = false
+                    if (failures.isNotEmpty()) {
+                        android.widget.Toast.makeText(
+                            context,
+                            "${failures.size} 个成员未通过校验：\n${failures.joinToString("\n")}",
+                            android.widget.Toast.LENGTH_LONG
+                        ).show()
+                    }
                     result.onFailure { e ->
                         android.widget.Toast.makeText(
                             context,
@@ -2255,6 +2262,14 @@ private fun AddGroupMembersDialog(
                             }
                         }
                     }
+                }
+                if (selected.size + currentIds.size > QuiddityConstants.GROUP_MAX_MEMBERS) {
+                    Text(
+                        text = "最多 ${QuiddityConstants.GROUP_MAX_MEMBERS} 个成员",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(top = 6.dp)
+                    )
                 }
             }
         },

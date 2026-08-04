@@ -16,7 +16,6 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -72,6 +71,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.SpanStyle
@@ -80,7 +80,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
@@ -95,7 +94,6 @@ import com.quiddity.app.util.DateUtils
 import com.quiddity.app.util.QuiddityConstants
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlin.math.roundToInt
 /*
  * ============================================================================
  * 开发规范 (Development Specifications)
@@ -532,8 +530,15 @@ fun HomeScreen(
             soloConversations = soloConversations,
             hasApiConfig = settings.catalog.isNotEmpty(),
             onCreate = { memberIds, title ->
-                viewModel.createGroup(memberIds, title) { result ->
+                viewModel.createGroup(memberIds, title) { result, failures ->
                     showNewGroupDialog = false
+                    if (failures.isNotEmpty()) {
+                        android.widget.Toast.makeText(
+                            context,
+                            "${failures.size} 个成员未通过校验：\n${failures.joinToString("\n")}",
+                            android.widget.Toast.LENGTH_LONG
+                        ).show()
+                    }
                     result.fold(
                         onSuccess = { groupId -> onOpenConversation(groupId) },
                         onFailure = { e ->
@@ -1297,7 +1302,8 @@ private fun ChatListPage(
 
 /**
  * 底部「私聊 / 群聊」Tab 栏（方案十四.1-4）：
- * 当前页文字高亮（浅色黑 / 深色白），指示块随滑动进度在两词之间移动。
+ * 两个词靠近居中排列，无滑动指示块；高亮由文字颜色表达——
+ * 当前页文字高亮（浅色黑 / 深色白），滑动时颜色随滑动方向在两个词之间渐变过渡。
  */
 @Composable
 private fun ChatTypeTabBar(
@@ -1306,52 +1312,44 @@ private fun ChatTypeTabBar(
     onSelect: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    BoxWithConstraints(modifier = modifier) {
-        val tabWidth = maxWidth / 2
-        val indicatorX = (currentPage * tabWidth.value).roundToInt()
-        Box(
-            modifier = Modifier
-                .width(tabWidth)
-                .offset { IntOffset(indicatorX.dp.roundToPx(), 0) }
-                .padding(horizontal = 28.dp)
-                .height(36.dp)
-                .clip(RoundedCornerShape(999.dp))
-                .background(
-                    if (darkMode) Color.White.copy(alpha = 0.14f)
-                    else Color.Black.copy(alpha = 0.08f)
-                )
+    // 私聊高亮比例：停在 0 页为 1，滑到 1 页降为 0
+    val soloHighlight = (1f - currentPage).coerceIn(0f, 1f)
+    // 群聊高亮比例：停在 1 页为 1，滑回 0 页降为 0
+    val groupHighlight = currentPage.coerceIn(0f, 1f)
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        ChatTypeTabWord(
+            label = "私聊",
+            highlightFraction = soloHighlight,
+            darkMode = darkMode,
+            onClick = { onSelect(0) }
         )
-        Row(modifier = Modifier.fillMaxWidth()) {
-            ChatTypeTabWord(
-                label = "私聊",
-                active = currentPage.roundToInt() == 0,
-                darkMode = darkMode,
-                onClick = { onSelect(0) },
-                modifier = Modifier.weight(1f)
-            )
-            ChatTypeTabWord(
-                label = "群聊",
-                active = currentPage.roundToInt() == 1,
-                darkMode = darkMode,
-                onClick = { onSelect(1) },
-                modifier = Modifier.weight(1f)
-            )
-        }
+        Spacer(modifier = Modifier.size(24.dp))
+        ChatTypeTabWord(
+            label = "群聊",
+            highlightFraction = groupHighlight,
+            darkMode = darkMode,
+            onClick = { onSelect(1) }
+        )
     }
 }
 
 @Composable
 private fun ChatTypeTabWord(
     label: String,
-    active: Boolean,
+    highlightFraction: Float,
     darkMode: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    onClick: () -> Unit
 ) {
+    val highlightColor = if (darkMode) Color.White else Color.Black
+    val mutedColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+    val wordColor = lerp(mutedColor, highlightColor, highlightFraction)
     Box(
-        modifier = modifier
-            .height(36.dp)
-            .clip(RoundedCornerShape(999.dp))
+        modifier = Modifier
+            .height(40.dp)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -1362,12 +1360,8 @@ private fun ChatTypeTabWord(
         Text(
             text = label,
             style = MaterialTheme.typography.titleSmall,
-            fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
-            color = when {
-                active && darkMode -> Color.White
-                active -> Color.Black
-                else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-            }
+            fontWeight = FontWeight.SemiBold,
+            color = wordColor
         )
     }
 }
@@ -1620,6 +1614,14 @@ private fun NewGroupDialog(
                             }
                         }
                     }
+                }
+                if (selected.size > QuiddityConstants.GROUP_MAX_MEMBERS) {
+                    Text(
+                        text = "最多选择 ${QuiddityConstants.GROUP_MAX_MEMBERS} 个成员",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(top = 6.dp)
+                    )
                 }
             }
         },
