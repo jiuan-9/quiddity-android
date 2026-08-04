@@ -260,7 +260,7 @@ class ConversationRepository(
      * v2 快照导入（4.1：replaceAll 扩展支持角色库，或新增 importV2Snapshot）。
      *
      * 写盘顺序（3.4）：角色库 → 会话 → 消息；群聊（[groupChats]）1.3.0 不导入，
-     * 由 DataPorter 在解析阶段计入跳过清单。
+     * 1.5.0 起随调用方传入的 conversations/messages 一并恢复（方案十七.2）。
      *
      * @param characters 角色库主档
      * @param conversations 私聊会话

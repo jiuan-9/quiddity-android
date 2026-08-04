@@ -418,7 +418,7 @@ object DataPorter {
                     payload = restored,
                     skipItems = skipItems,
                     needsKeyRefill = needsKeyRefill,
-                    groupChatsSkipped = restored.groupChats.size
+                    groupChatsSkipped = skipItems.count { it.objectType == "群聊" }
                 )
             }.onFailure { Log.e("DataPorter", "导入失败", it) }
         }
@@ -490,8 +490,8 @@ object DataPorter {
         val assets = payload.assets ?: ExportAssets()
         val skipItems = mutableListOf<ImportSkipItem>()
 
-        // 会话级壁纸
-        val updatedBundles = payload.privateChats.map { bundle ->
+        // 会话级壁纸（私聊与群聊共用恢复逻辑）
+        val restoredBundles = (payload.privateChats + payload.groupChats).map { bundle ->
             var conv = bundle.conversation
             val wallpaperData = assets.wallpapers[conv.id]
             if (wallpaperData != null) {
@@ -512,6 +512,9 @@ object DataPorter {
             }
             bundle.copy(conversation = conv)
         }
+        val privateIds = payload.privateChats.map { it.conversation.id }.toSet()
+        val updatedBundles = restoredBundles.filter { it.conversation.id in privateIds }
+        val updatedGroupBundles = restoredBundles.filterNot { it.conversation.id in privateIds }
 
         // 列表壁纸（稳定文件名 list_wallpaper.jpg，覆盖而非累积）
         var updatedSettings = payload.settings
@@ -617,6 +620,7 @@ object DataPorter {
 
         val updated = payload.copy(
             privateChats = finalBundles,
+            groupChats = updatedGroupBundles,
             characters = updatedCharacters,
             settings = updatedSettings
         )
@@ -625,24 +629,24 @@ object DataPorter {
 
     /**
      * 导入前引用校验 → 跳过清单（3.3）：
-     * - 群聊整体跳过（1.3.0 群聊实体未加入；成员引用悬空时同样整体跳过）
+     * - 群聊仅当成员引用悬空时整体跳过（1.5.0 已支持恢复群聊，方案十七.2）
      * - 消息 senderId 悬空仅发生在文件本身损坏时（导出前已校验），导入保留并显示「未知成员」，不跳过
      * - 会话 characterId 悬空回退使用 conversation.persona 内嵌副本（旧数据路径），不阻塞
      */
-    private fun buildSkipItems(payload: ExportPayload): List<ImportSkipItem> {
+    internal fun buildSkipItems(payload: ExportPayload): List<ImportSkipItem> {
         val privateIds = payload.privateChats.map { it.conversation.id }.toSet()
-        return payload.groupChats.map { bundle ->
+        return payload.groupChats.mapNotNull { bundle ->
             val conv = bundle.conversation
             val danglingMembers = conv.memberConversationIds.filterNot { it in privateIds }
-            ImportSkipItem(
-                objectType = "群聊",
-                id = conv.id,
-                reason = if (danglingMembers.isNotEmpty()) {
-                    "群聊功能未实现且成员引用悬空（${danglingMembers.joinToString(",")}），整体跳过"
-                } else {
-                    "群聊功能未实现（1.3.0 仅预留接口），整体跳过"
-                }
-            )
+            if (danglingMembers.isNotEmpty()) {
+                ImportSkipItem(
+                    objectType = "群聊",
+                    id = conv.id,
+                    reason = "成员引用悬空（${danglingMembers.joinToString(",")}），整体跳过"
+                )
+            } else {
+                null
+            }
         }
     }
 

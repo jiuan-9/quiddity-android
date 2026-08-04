@@ -289,10 +289,12 @@ class SettingsViewModel(
             }
             ImportMode.CHARACTERS_ONLY -> Unit
         }
+        // 1.5.0：群聊随私聊一并导入（方案十七.2），群聊消息按会话 id 落盘
+        val allBundles = payload.privateChats + payload.groupChats
         conversationRepository.importV2Snapshot(
             characters = payload.characters,
-            conversations = payload.privateChats.map { it.conversation },
-            messages = payload.privateChats.associate { it.conversation.id to it.messages },
+            conversations = allBundles.map { it.conversation },
+            messages = allBundles.associate { it.conversation.id to it.messages },
             mode = mode
         )
     }
