@@ -92,16 +92,6 @@ object UpdateChecker {
         "https://github.com/jiuan-9/Quiddity-website/releases/latest"
 
     /**
-     * APK 备用直链（当 version.json 中的 downloadUrl 不可用时的最终兜底）。
-     * 每次发版后需同步更新为本版本 APK 的实际地址；解析时逐个做可达性校验，
-     * 失效链接会被自动跳过，不会因此下载到旧版或错误的文件。
-     */
-    private val APK_FALLBACK_URLS: List<String> = listOf(
-        "https://quiddity-3by.pages.dev/downloads/quiddity-1.3.0.apk",
-        "https://github.com/jiuan-9/Quiddity-website/releases/download/v1.3.0/quiddity-1.3.0.apk"
-    )
-
-    /**
      * SharedPreferences 存储键：已忽略的版本号。
      */
     private const val PREFS_NAME = "update_check_prefs"
@@ -306,19 +296,23 @@ object UpdateChecker {
      * 2. URL 指向 GitHub Releases 页面（HTML）→ 先调用 GitHub Releases API 解析
      *    最新 Release 中的第一个 .apk 资产直链（动态获取，避免版本写死）；
      * 3. 其他合法 HTTP(S) URL → 视为候选直链；
-     * 4. 依次将 [APK_FALLBACK_URLS] 预置链接加入候选链；
+     * 4. 兜底：解析本仓库 GitHub 最新 Release 的 APK 直链（与版本检测同一发布
+     *    仓库），保证兜底版本与检测到的远程版本一致，杜绝"检到新版本却下到旧安装包"；
      * 5. 对候选链逐个做 HEAD 可达性校验，返回第一个可用直链。
-     *
-     * 关键修复：
-     * - 旧实现把 GitHub API 解析写反了：命中 GitHub Releases 页面时直接返回
-     *   预置兜底 URL，GitHub API 反而从不执行，导致一旦预置 URL 过期/误放旧包
-     *   就必然下载到错误版本；现改为 GitHub API 优先、预置 URL 兜底。
-     * - 旧实现不做可达性校验，失效链接会被直接交给下载器；现逐个 HEAD 校验，
-     *   失效链接自动跳过，杜绝"检到新版本却下到旧安装包"。
      *
      * @return APK 直链；全部候选均不可达返回 null
      */
-    suspend fun resolveApkUrl(rawUrl: String): String? = withContext(Dispatchers.IO) {
+    suspend fun resolveApkUrl(rawUrl: String): String? = resolveApkUrl(
+        rawUrl = rawUrl,
+        fetchLatestApk = { owner, repo -> fetchLatestApkFromGitHub(owner, repo) },
+        isReachable = { url -> isReachable(url) }
+    )
+
+    internal suspend fun resolveApkUrl(
+        rawUrl: String,
+        fetchLatestApk: (owner: String, repo: String) -> String?,
+        isReachable: (String) -> Boolean
+    ): String? = withContext(Dispatchers.IO) {
         val url = rawUrl.trim()
 
         val homepageLike = url.isBlank() ||
@@ -336,7 +330,7 @@ object UpdateChecker {
                     add(url)
                 }
             }
-            APK_FALLBACK_URLS.forEach { add(it) }
+            fetchLatestApk("jiuan-9", "Quiddity-website")?.let { add(it) }
         }
         candidates.firstOrNull { isReachable(it) }
     }
