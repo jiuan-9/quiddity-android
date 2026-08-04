@@ -242,10 +242,16 @@ class PromptBuilderTest {
             persona = com.quiddity.app.data.model.Persona(
                 name = "小A",
                 persona = "群聊测试成员"
+            ),
+            userPersona = com.quiddity.app.data.model.UserPersona(
+                name = "小明",
+                identity = "程序员"
             )
         )
         val prompt = PromptBuilder.buildGroupSystemPrompt(member, PromptBuilder.GROUP_RULES)
         assertTrue(prompt.contains("小A"), "成员人设名应进入 system 提示词")
+        assertTrue(prompt.contains("小明"), "该成员私聊里的用户人设名字应注入 system 提示词")
+        assertTrue(prompt.contains("程序员"), "该成员私聊里的用户人设应注入 system 提示词")
         assertTrue(prompt.contains("群聊规则"), "应包含群聊规则节")
         assertTrue(prompt.contains("不要替别人发言"), "应包含群聊规则内容")
     }
@@ -279,5 +285,36 @@ class PromptBuilderTest {
         val prompt = PromptBuilder.buildGroupMemorySummaryPrompt(transcript)
         assertTrue(prompt.contains("本次需要压缩的群聊对话"), "应包含压缩指令")
         assertTrue(prompt.contains("小A：第一句"), "应包含群聊转述")
+    }
+
+    @Test
+    fun `group transcript uses member user persona name for user messages`() {
+        val messages = listOf(
+            msg("m1", content = "你好", senderId = null),
+            msg("m2", content = "你们好呀", senderId = "conv_b")
+        )
+        val transcript = PromptBuilder.buildGroupTranscript(
+            messages = messages,
+            lastN = 10,
+            senderNames = mapOf("conv_b" to "小B"),
+            userName = "小明"
+        )
+        assertEquals("小明：你好\n小B：你们好呀", transcript)
+    }
+
+    @Test
+    fun `toApiMessages prefixes user messages with member user persona name`() {
+        val history = listOf(
+            msg("m1", Role.USER, "早上好", senderId = null),
+            msg("m2", Role.ASSISTANT, "你好呀", senderId = "conv_b")
+        )
+        val labeled = PromptBuilder.toApiMessages(
+            systemPrompt = "",
+            history = history,
+            senderLabels = mapOf("conv_b" to "小B"),
+            userName = "小明"
+        )
+        assertEquals("小明：早上好", labeled[0].content)
+        assertEquals("小B：你好呀", labeled[1].content)
     }
 }

@@ -160,18 +160,8 @@ fun ChatScreen(
 
     // ===== 群聊信息（方案十二：消息按发送者显示头像与名字） =====
     val isGroupChat = conversation?.type == ConversationType.GROUP
-    val groupMembers = remember(conversation?.id) {
+    val groupMembers = remember(conversation?.id, conversation?.memberConversationIds) {
         viewModel.groupMembers()
-    }
-    val senderNameMap = remember(conversation?.id) {
-        conversation?.memberConversationIds.orEmpty().associateWith { id ->
-            viewModel.memberName(id)
-        }
-    }
-    val senderAvatarMap = remember(conversation?.id) {
-        conversation?.memberConversationIds.orEmpty().associateWith { id ->
-            viewModel.memberAvatar(id)
-        }
     }
 
     // ===== 私聊用户名强制（方案九.4/6：未设置用户名不能发送，进入会话先弹窗） =====
@@ -251,7 +241,7 @@ fun ChatScreen(
             val role = when {
                 isGroupChat && msg.role == Role.USER -> "我"
                 isGroupChat -> msg.senderId?.let {
-                    senderNameMap[it]?.takeIf { name -> name.isNotBlank() }
+                    viewModel.memberName(it).takeIf { name -> name.isNotBlank() }
                 } ?: "未知成员"
                 msg.role == Role.USER -> "我"
                 else -> "AI"
@@ -422,6 +412,15 @@ fun ChatScreen(
         if (selectedMessageIds.isEmpty() || exportingImage) return
         val conv = conversation ?: return
         val selected = messages.filter { it.id in selectedMessageIds }
+        val exportSenderNames = if (isGroupChat) {
+            selected.mapNotNull { it.senderId }
+                .distinct()
+                .associateWith { id ->
+                    viewModel.memberName(id).takeIf { name -> name.isNotBlank() } ?: "未知成员"
+                }
+        } else {
+            emptyMap()
+        }
         exportingImage = true
         scope.launch {
             val outcome = runCatching {
@@ -432,7 +431,8 @@ fun ChatScreen(
                     conversationTitle = conv.title,
                     style = exportStyle,
                     wallpaperUri = conv.wallpaperUri,
-                    wallpaperDarken = conv.wallpaperDarken
+                    wallpaperDarken = conv.wallpaperDarken,
+                    senderNames = exportSenderNames
                 )
                 ChatImageExporter.share(context, file)
             }
@@ -778,14 +778,14 @@ fun ChatScreen(
                                                 } else {
                                                     if (isGroupChat) {
                                                         message.senderId?.let {
-                                                            senderNameMap[it]
-                                                                ?.takeIf { name -> name.isNotBlank() }
+                                                            viewModel.memberName(it)
+                                                                .takeIf { name -> name.isNotBlank() }
                                                                 ?: "未知成员"
                                                         }
                                                     } else null
                                                 },
                                                 senderAvatarUri = if (isGroupChat) {
-                                                    message.senderId?.let { senderAvatarMap[it] }
+                                                    message.senderId?.let { viewModel.memberAvatar(it) }
                                                 } else null,
                                                 bracketGrayEnabled = settings.bracketGrayEnabled,
                                                 typingDelayEnabled = settings.typingDelayEnabled,
@@ -807,7 +807,8 @@ fun ChatScreen(
                             }
 
                             val lastMsg = messages.lastOrNull()
-                            val showThinking = isGenerating &&
+                            // 群聊用头像栏三点表示正在回复，不显示私聊的思考气泡
+                            val showThinking = !isGroupChat && isGenerating &&
                                 (lastMsg == null || !(lastMsg.role == Role.ASSISTANT && lastMsg.isStreaming))
                             if (showThinking) {
                                 item(key = "thinking_bubble", contentType = { "thinking" }) {
@@ -833,6 +834,7 @@ fun ChatScreen(
                 ChatInputBar(
                     enterToSend = settings.enterToSend,
                     isGenerating = isGenerating,
+                    allowSendWhileGenerating = isGroupChat,
                     onSend = { text -> viewModel.sendMessage(text) },
                     onStop = { viewModel.stopGeneration() },
                     enabled = !showHamburger,

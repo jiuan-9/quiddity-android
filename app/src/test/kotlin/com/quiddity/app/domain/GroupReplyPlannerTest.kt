@@ -175,6 +175,37 @@ class GroupReplyPlannerTest {
     }
 
     @Test
+    fun `user messages use the replying member's user persona name`() {
+        val settings = AppSettings.Default.copy(catalog = listOf(catalogEntry("cat_a")))
+        val transcript = listOf(
+            Message(
+                id = "m1",
+                conversationId = "group_1",
+                role = Role.USER,
+                content = "大家好",
+                timestamp = now,
+                senderId = null
+            ),
+            msg("m2", "member_a")
+        )
+        val plan = GroupReplyPlanner.buildPlan(
+            settings = settings,
+            member = member().copy(
+                userPersona = com.quiddity.app.data.model.UserPersona(name = "小明")
+            ),
+            group = group(),
+            transcript = transcript,
+            senderId = "member_a",
+            tier = ApiCatalogManager.ModelTier.BASIC,
+            senderNames = mapOf("member_a" to "小A"),
+            userName = "小明"
+        ).getOrThrow()
+        val userMessages = plan.request.messages.filter { it.role == "user" }
+        assertEquals("小明：大家好", userMessages[0].content)
+        assertEquals("小A：测试消息 m2", userMessages[1].content)
+    }
+
+    @Test
     fun `failure when no catalog configured`() {
         val settings = AppSettings.Default.copy(catalog = emptyList())
         val result = GroupReplyPlanner.buildPlan(

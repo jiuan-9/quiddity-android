@@ -59,7 +59,8 @@ object GroupReplyPlanner {
      * @param transcript 群聊转述（点击头像那一刻定格的消息快照）
      * @param senderId 发言人会话 id（写入消息 senderId）
      * @param tier 成员模型分级（由调用方解析）
-     * @param senderNames 成员会话 id → 名字映射（转述格式「名字：内容」）
+     * @param senderNames 成员会话 id → 成员 AI 名字映射（转述格式「名字：内容」）
+     * @param userName 用户消息的名字（方案九.3：= 该成员私聊用户人设里的名字）
      * @return 成功返回 [Plan]；API 解析失败返回失败结果（含用户提示）
      */
     fun buildPlan(
@@ -69,7 +70,8 @@ object GroupReplyPlanner {
         transcript: List<Message>,
         senderId: String,
         tier: ApiCatalogManager.ModelTier,
-        senderNames: Map<String, String> = emptyMap()
+        senderNames: Map<String, String> = emptyMap(),
+        userName: String? = null
     ): Result<Plan> {
         val access = ApiAccess.resolve(settings, member)
         if (access is ApiAccess.Failure) {
@@ -78,7 +80,7 @@ object GroupReplyPlanner {
         access as ApiAccess.Resolved
 
         val systemPrompt = PromptBuilder.buildGroupSystemPrompt(member, PromptBuilder.GROUP_RULES)
-        val apiMessages = PromptBuilder.toApiMessages(systemPrompt, transcript, senderNames)
+        val apiMessages = PromptBuilder.toApiMessages(systemPrompt, transcript, senderNames, userName)
         val maxTokens = member.maxTokens ?: settings.globalMaxTokens
         val singleMsgTokens = member.singleMessageTokens ?: settings.globalSingleMessageTokens
         val useSearchTool = tier == ApiCatalogManager.ModelTier.FULL

@@ -71,6 +71,7 @@ import androidx.compose.ui.unit.dp
 fun ChatInputBar(
     enterToSend: Boolean,
     isGenerating: Boolean,
+    allowSendWhileGenerating: Boolean = false,
     onSend: (String) -> Unit,
     onStop: () -> Unit,
     modifier: Modifier = Modifier,
@@ -84,7 +85,7 @@ fun ChatInputBar(
     fun trySend() {
         if (!enabled) return
         val v = text.trim()
-        if (v.isNotEmpty() && !isGenerating && !isCompressing) {
+        if (v.isNotEmpty() && !isCompressing && (allowSendWhileGenerating || !isGenerating)) {
             onSend(v)
             text = ""
             onTextChange?.invoke("")

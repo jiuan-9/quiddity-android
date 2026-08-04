@@ -349,13 +349,16 @@ object PromptBuilder {
     /**
      * 把消息列表转为 ChatMessage（含 system）。
      *
-     * @param senderLabels 群聊发言人标签映射（senderId → 名字，6.5.3 群聊转述可区分说话人）。
-     *   仅当映射非空且消息带 senderId 时给内容加 `[名字] ` 前缀；私聊/空映射行为不变。
+     * @param senderLabels 群聊发言人标签映射（senderId → 成员 AI 名字）。
+     *   仅当映射非空时给内容加「名字：」前缀；私聊/空映射行为不变。
+     * @param userName 群聊场景下用户消息的名字（方案九.3：= 该成员私聊里的用户人设名字）；
+     *   null 时用户消息（senderId=null）不加前缀。
      */
     fun toApiMessages(
         systemPrompt: String,
         history: List<Message>,
-        senderLabels: Map<String, String> = emptyMap()
+        senderLabels: Map<String, String> = emptyMap(),
+        userName: String? = null
     ): List<ChatMessage> {
         val result = mutableListOf<ChatMessage>()
         if (systemPrompt.isNotBlank()) {
@@ -367,11 +370,14 @@ object PromptBuilder {
                 Role.ASSISTANT -> "assistant"
                 Role.SYSTEM -> "system"
             }
-            val content = if (msg.senderId != null && senderLabels.isNotEmpty()) {
-                val label = senderLabels[msg.senderId] ?: msg.senderId
-                "$label：${msg.content}"
-            } else {
-                msg.content
+            val content = when {
+                msg.senderId != null && senderLabels.isNotEmpty() -> {
+                    val label = senderLabels[msg.senderId] ?: msg.senderId
+                    "$label：${msg.content}"
+                }
+                msg.senderId == null && userName != null && senderLabels.isNotEmpty() &&
+                    msg.role == Role.USER -> "$userName：${msg.content}"
+                else -> msg.content
             }
             result.add(ChatMessage(role = role, content = content))
         }
@@ -510,11 +516,15 @@ $persona
 """.trim()
 
     /**
-     * 构造群聊成员 system 提示词（4.2）：成员人设 + 群规则。
+     * 构造群聊成员 system 提示词（4.2）：成员人设 + 群规则 + 该成员私聊里的用户人设
+     * （方案九.2：成员 A 回复时注入的用户人设 = A 私聊里的用户人设）。
      */
     fun buildGroupSystemPrompt(member: Conversation, groupRules: String): String {
         val sb = StringBuilder()
         sb.append(buildPersonaSnippet(member)).append("\n\n")
+        buildUserPersonaSnippet(member.userPersona)?.let { userSection ->
+            sb.append(userSection).append("\n\n")
+        }
         if (groupRules.isNotBlank()) {
             sb.append("【群聊规则】\n").append(groupRules)
         }
@@ -522,19 +532,45 @@ $persona
     }
 
     /**
+     * 用户人设片段（【对话伙伴信息】），全空时返回 null。
+     */
+    private fun buildUserPersonaSnippet(user: com.quiddity.app.data.model.UserPersona): String? {
+        if (user.name.isBlank() && user.identity.isBlank() && user.gender.isBlank() &&
+            user.age.isBlank() && user.appearance.isBlank()
+        ) {
+            return null
+        }
+        val sb = StringBuilder()
+        sb.append("【对话伙伴信息】\n")
+        if (user.name.isNotBlank()) sb.append("- 名字：").append(user.name).append("\n")
+        if (user.identity.isNotBlank()) sb.append("- 身份：").append(user.identity).append("\n")
+        if (user.gender.isNotBlank()) sb.append("- 性别：").append(user.gender).append("\n")
+        if (user.age.isNotBlank()) sb.append("- 年龄：").append(user.age).append("\n")
+        if (user.appearance.isNotBlank()) sb.append("- 外观：").append(user.appearance).append("\n")
+        return sb.toString().trim()
+    }
+
+    /**
      * 构造群聊转述文本（4.2）：`名字：内容` 格式（方案五），只给最近 [lastN] 条（5.2）。
      *
-     * @param senderNames 成员会话 id → 名字映射；未映射的 senderId 直接显示 id，无 senderId 显示「未知成员」（3.3）。
+     * @param senderNames 成员会话 id → 成员 AI 名字映射；未映射的 senderId 直接显示 id。
+     * @param userName 用户消息的名字（方案九.3：= 该成员私聊里的用户人设名字）；
+     *   null 时用户消息显示「未知成员」。
      * @param lastN 保留最近 N 条；<= 0 表示全部。
      */
     fun buildGroupTranscript(
         messages: List<Message>,
         lastN: Int,
-        senderNames: Map<String, String> = emptyMap()
+        senderNames: Map<String, String> = emptyMap(),
+        userName: String? = null
     ): String {
         val effective = if (lastN > 0 && messages.size > lastN) messages.takeLast(lastN) else messages
         return effective.joinToString("\n") { msg ->
-            val name = msg.senderId?.let { senderNames[it] ?: it } ?: "未知成员"
+            val name = when {
+                msg.senderId != null -> senderNames[msg.senderId] ?: msg.senderId
+                userName != null -> userName
+                else -> "未知成员"
+            }
             "$name：${msg.content}"
         }
     }

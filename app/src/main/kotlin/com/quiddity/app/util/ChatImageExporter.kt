@@ -3,9 +3,11 @@ package com.quiddity.app.util
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.text.Layout
@@ -80,22 +82,50 @@ object ChatImageExporter {
     private const val TEXT_SIZE = 32f
     private const val LINE_SPACING_EXTRA = 6f
     private const val TIME_TEXT_SIZE = 20f
+    /** 群聊发送者名字标签字号。 */
+    private const val NAME_TEXT_SIZE = 22f
+    /** 群聊发送者名字标签预留高度（px）。 */
+    private const val NAME_LABEL_HEIGHT = 20
+    /** Vertical gap between bubble bottom and timestamp (px). */
+    internal const val TIME_V_OFFSET = 24
+    /** Reserved height for the timestamp line (px); row height must fit it. */
+    internal const val TIME_TEXT_HEIGHT = 32
     private const val ROW_GAP = 14
     private const val HEADER_HEIGHT = 196
     private const val FOOTER_HEIGHT = 64
 
-    // 固定浅色调色板（不随 App 深/浅主题变化）
-    private const val COLOR_BACKGROUND = 0xFFFFFFFF.toInt()
-    private const val COLOR_HEADER_TITLE = 0xFF1F2329.toInt()
-    private const val COLOR_HEADER_SUB = 0xFF8A919F.toInt()
-    private const val COLOR_HEADER_DIVIDER = 0xFFEDEFF2.toInt()
-    private const val COLOR_AI_BUBBLE = 0xFFF2F3F5.toInt()
-    private const val COLOR_AI_TEXT = 0xFF1F2329.toInt()
-    private const val COLOR_AI_AVATAR = 0xFFDDE3EA.toInt()
-    private const val COLOR_USER_BUBBLE = 0xFF3478F6.toInt()
-    private const val COLOR_USER_TEXT = 0xFFFFFFFF.toInt()
-    private const val COLOR_TIME = 0xFF9AA0A6.toInt()
-    private const val COLOR_FOOTER = 0xFF9AA0A6.toInt()
+    /**
+     * Palette for the exported image, injected by the caller from the current
+     * Compose theme so the export matches the chat UI in both light/dark mode.
+     */
+    data class ExportStyle(
+        val background: Int,
+        val headerTitle: Int,
+        val headerSub: Int,
+        val headerDivider: Int,
+        val aiBubble: Int,
+        val aiText: Int,
+        val aiAvatar: Int,
+        val userBubble: Int,
+        val userText: Int,
+        val time: Int,
+        val footer: Int
+    )
+
+    /** Default light style, preserving the old fixed palette. */
+    val LightExportStyle = ExportStyle(
+        background = 0xFFFFFFFF.toInt(),
+        headerTitle = 0xFF1F2329.toInt(),
+        headerSub = 0xFF8A919F.toInt(),
+        headerDivider = 0xFFEDEFF2.toInt(),
+        aiBubble = 0xFFF2F3F5.toInt(),
+        aiText = 0xFF1F2329.toInt(),
+        aiAvatar = 0xFFDDE3EA.toInt(),
+        userBubble = 0xFF3478F6.toInt(),
+        userText = 0xFFFFFFFF.toInt(),
+        time = 0xFF9AA0A6.toInt(),
+        footer = 0xFF9AA0A6.toInt()
+    )
 
     private val timeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
     private val dateFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
@@ -106,11 +136,13 @@ object ChatImageExporter {
      * @param isUser true=用户消息（右侧蓝色气泡），false=AI 消息（左侧浅灰气泡）
      * @param content 消息正文（含换行）
      * @param timestamp 消息时间戳（毫秒）
+     * @param senderName 群聊发送者名字（AI 消息按 senderId 解析；null 时回退 aiName）
      */
     data class Segment(
         val isUser: Boolean,
         val content: String,
-        val timestamp: Long
+        val timestamp: Long,
+        val senderName: String? = null
     )
 
     /** [fitSegments] 的结果。 */
@@ -124,14 +156,21 @@ object ChatImageExporter {
      * 把消息列表转为分段：过滤 isNotice 提示气泡、保持原顺序。
      * 纯逻辑，可单测。
      */
-    fun buildSegments(messages: List<Message>): List<Segment> =
+    fun buildSegments(
+        messages: List<Message>,
+        senderNames: Map<String, String> = emptyMap()
+    ): List<Segment> =
         messages
             .filterNot { it.isNotice }
             .map { message ->
+                val isUser = message.role == Role.USER
                 Segment(
-                    isUser = message.role == Role.USER,
+                    isUser = isUser,
                     content = message.content,
-                    timestamp = message.timestamp
+                    timestamp = message.timestamp,
+                    senderName = if (!isUser) {
+                        message.senderId?.let { senderNames[it] }
+                    } else null
                 )
             }
 
@@ -173,10 +212,15 @@ object ChatImageExporter {
         context: Context,
         messages: List<Message>,
         aiName: String,
-        conversationTitle: String
+        conversationTitle: String,
+        style: ExportStyle = LightExportStyle,
+        wallpaperUri: String? = null,
+        wallpaperDarken: Float = 0f,
+        senderNames: Map<String, String> = emptyMap()
     ): File = withContext(Dispatchers.Default) {
-        val segments = buildSegments(messages)
-        val bitmap = renderBitmap(segments, aiName, conversationTitle)
+        val segments = buildSegments(messages, senderNames)
+        val wallpaper = wallpaperUri?.let { decodeWallpaper(context, it) }
+        val bitmap = renderBitmap(segments, aiName, conversationTitle, style, wallpaper, wallpaperDarken)
         val file = File(
             context.cacheDir,
             "quiddity_share_${System.currentTimeMillis()}.png"
@@ -217,7 +261,10 @@ object ChatImageExporter {
     private fun renderBitmap(
         segments: List<Segment>,
         aiName: String,
-        conversationTitle: String
+        conversationTitle: String,
+        style: ExportStyle,
+        wallpaper: Bitmap?,
+        wallpaperDarken: Float
     ): Bitmap {
         val fit = fitSegments(segments, MAX_HEIGHT, FOOTER_HEIGHT, ::segmentHeight)
         val list = fit.segments
@@ -228,29 +275,73 @@ object ChatImageExporter {
 
         val bitmap = Bitmap.createBitmap(IMAGE_WIDTH, totalHeight, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
-        canvas.drawColor(COLOR_BACKGROUND)
+        canvas.drawColor(style.background)
+        if (wallpaper != null) {
+            drawWallpaper(canvas, wallpaper, IMAGE_WIDTH, totalHeight, wallpaperDarken)
+        }
 
-        drawHeader(canvas, aiName, conversationTitle)
+        drawHeader(canvas, aiName, conversationTitle, style)
 
         var y = HEADER_HEIGHT
         list.forEach { segment ->
-            y += drawSegment(canvas, segment, y, aiName)
+            y += drawSegment(canvas, segment, y, aiName, style)
             y += ROW_GAP
         }
         if (fit.truncated) {
-            drawFooter(canvas, y, fit.segments.size)
+            drawFooter(canvas, y, fit.segments.size, style)
         }
         return bitmap
     }
 
-    private fun drawHeader(canvas: Canvas, aiName: String, conversationTitle: String) {
+    private fun decodeWallpaper(context: Context, uri: String): Bitmap? = runCatching {
+        if (uri.startsWith("content://")) {
+            context.contentResolver.openInputStream(android.net.Uri.parse(uri))?.use { stream ->
+                BitmapFactory.decodeStream(stream)
+            }
+        } else {
+            BitmapFactory.decodeFile(uri.removePrefix("file://"))
+        }
+    }.getOrNull()
+
+    /**
+     * Draws the wallpaper tiled vertically at fill-width scale (the export is
+     * much taller than the original image, so stretching would distort it),
+     * then overlays the same black darken scrim used by the chat screen.
+     */
+    private fun drawWallpaper(
+        canvas: Canvas,
+        wallpaper: Bitmap,
+        targetW: Int,
+        targetH: Int,
+        darken: Float
+    ) {
+        if (wallpaper.width <= 0 || wallpaper.height <= 0) return
+        val scale = targetW.toFloat() / wallpaper.width
+        val tileH = (wallpaper.height * scale).toInt().coerceAtLeast(1)
+        val src = Rect(0, 0, wallpaper.width, wallpaper.height)
+        var top = 0
+        while (top < targetH) {
+            canvas.drawBitmap(wallpaper, src, Rect(0, top, targetW, top + tileH), null)
+            top += tileH
+        }
+        if (darken > 0f) {
+            canvas.drawColor(Color.argb((darken * 255f).toInt().coerceIn(0, 255), 0, 0, 0))
+        }
+    }
+
+    private fun drawHeader(
+        canvas: Canvas,
+        aiName: String,
+        conversationTitle: String,
+        style: ExportStyle
+    ) {
         val name = aiName.ifBlank { "AI" }
         val dateText = dateFormatter.format(Instant.ofEpochMilli(System.currentTimeMillis())
             .atZone(ZoneId.systemDefault()))
 
-        val titlePaint = textPaint(TEXT_SIZE, bold = true).apply { color = COLOR_HEADER_TITLE }
-        val subPaint = textPaint(26f, bold = false).apply { color = COLOR_HEADER_SUB }
-        val datePaint = textPaint(22f, bold = false).apply { color = COLOR_HEADER_SUB }
+        val titlePaint = textPaint(TEXT_SIZE, bold = true).apply { color = style.headerTitle }
+        val subPaint = textPaint(26f, bold = false).apply { color = style.headerSub }
+        val datePaint = textPaint(22f, bold = false).apply { color = style.headerSub }
 
         var y = 42
         y += drawText(canvas, name, SIDE_PADDING, y.toFloat(), titlePaint)
@@ -262,7 +353,7 @@ object ChatImageExporter {
         y += drawText(canvas, dateText, SIDE_PADDING, y.toFloat(), datePaint)
 
         val dividerPaint = Paint().apply {
-            color = COLOR_HEADER_DIVIDER
+            color = style.headerDivider
             strokeWidth = 2f
         }
         canvas.drawLine(
@@ -274,13 +365,22 @@ object ChatImageExporter {
         )
     }
 
-    private fun drawSegment(canvas: Canvas, segment: Segment, top: Int, aiName: String): Int {
+    private fun drawSegment(
+        canvas: Canvas,
+        segment: Segment,
+        top: Int,
+        aiName: String,
+        style: ExportStyle
+    ): Int {
         val isUser = segment.isUser
+        // 群聊发送者名字标签（方案十二.8：气泡带发送者名字）
+        val nameLabelH = if (!isUser && segment.senderName != null) NAME_LABEL_HEIGHT else 0
         val bubbleW = BUBBLE_MAX_WIDTH
         val textW = bubbleW - BUBBLE_PADDING_H * 2
         val textH = measureTextHeight(segment.content, textW, TEXT_SIZE, bold = false)
         val bubbleH = textH + BUBBLE_PADDING_V * 2
-        val rowH = maxOf(bubbleH, AVATAR_SIZE) + 28
+        val rowH = segmentRowHeight(bubbleH) + nameLabelH
+        val bubbleTop = top + nameLabelH
 
         // 头像：彩色圆 + 首字符
         val avatarLeft = if (isUser) {
@@ -289,7 +389,20 @@ object ChatImageExporter {
             SIDE_PADDING
         }
         val avatarTop = top + 2
-        drawAvatar(canvas, avatarLeft, avatarTop, isUser, aiName)
+        drawAvatar(canvas, avatarLeft, avatarTop + nameLabelH, isUser, aiName, style)
+
+        // 群聊发送者名字（AI 气泡上方）
+        if (!isUser && segment.senderName != null) {
+            val namePaint = textPaint(NAME_TEXT_SIZE, bold = true).apply {
+                color = style.aiText
+            }
+            canvas.drawText(
+                segment.senderName,
+                (SIDE_PADDING + AVATAR_SIZE + AVATAR_GAP).toFloat(),
+                (top + NAME_TEXT_SIZE).toFloat(),
+                namePaint
+            )
+        }
 
         // 气泡
         val bubbleLeft = if (isUser) {
@@ -299,23 +412,23 @@ object ChatImageExporter {
         }
         val bubbleRect = RectF(
             bubbleLeft.toFloat(),
-            top.toFloat(),
+            bubbleTop.toFloat(),
             (bubbleLeft + bubbleW).toFloat(),
-            (top + bubbleH).toFloat()
+            (bubbleTop + bubbleH).toFloat()
         )
         val bubblePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = if (isUser) COLOR_USER_BUBBLE else COLOR_AI_BUBBLE
+            color = if (isUser) style.userBubble else style.aiBubble
         }
         canvas.drawRoundRect(bubbleRect, BUBBLE_RADIUS, BUBBLE_RADIUS, bubblePaint)
 
         val textPaint = textPaint(TEXT_SIZE, bold = false).apply {
-            color = if (isUser) COLOR_USER_TEXT else COLOR_AI_TEXT
+            color = if (isUser) style.userText else style.aiText
         }
         drawText(
             canvas,
             segment.content,
             bubbleLeft + BUBBLE_PADDING_H,
-            (top + BUBBLE_PADDING_V).toFloat(),
+            (bubbleTop + BUBBLE_PADDING_V).toFloat(),
             textPaint,
             textW
         )
@@ -324,20 +437,27 @@ object ChatImageExporter {
         val timeText = timeFormatter.format(
             Instant.ofEpochMilli(segment.timestamp).atZone(ZoneId.systemDefault())
         )
-        val timePaint = textPaint(TIME_TEXT_SIZE, bold = false).apply { color = COLOR_TIME }
+        val timePaint = textPaint(TIME_TEXT_SIZE, bold = false).apply { color = style.time }
         val timeX = if (isUser) {
             (IMAGE_WIDTH - SIDE_PADDING - bubbleW - measureTextWidth(timeText, timePaint)).toInt()
         } else {
             bubbleLeft
         }
-        drawText(canvas, timeText, timeX, (top + bubbleH + 24).toFloat(), timePaint)
+        drawText(canvas, timeText, timeX, (top + bubbleH + TIME_V_OFFSET).toFloat(), timePaint)
 
         return rowH
     }
 
-    private fun drawAvatar(canvas: Canvas, left: Int, top: Int, isUser: Boolean, aiName: String) {
+    private fun drawAvatar(
+        canvas: Canvas,
+        left: Int,
+        top: Int,
+        isUser: Boolean,
+        aiName: String,
+        style: ExportStyle
+    ) {
         val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = if (isUser) COLOR_USER_BUBBLE else COLOR_AI_AVATAR
+            color = if (isUser) style.userBubble else style.aiAvatar
         }
         val cx = (left + AVATAR_SIZE / 2).toFloat()
         val cy = (top + AVATAR_SIZE / 2).toFloat()
@@ -349,17 +469,17 @@ object ChatImageExporter {
             aiName.firstOrNull { it.isLetterOrDigit() }?.toString() ?: "AI"
         }
         val textPaint = textPaint(26f, bold = true).apply {
-            color = if (isUser) COLOR_USER_TEXT else COLOR_AI_TEXT
+            color = if (isUser) style.userText else style.aiText
             textAlign = Paint.Align.CENTER
         }
         val baseline = cy - (textPaint.descent() + textPaint.ascent()) / 2f
         canvas.drawText(initial, cx, baseline, textPaint)
     }
 
-    private fun drawFooter(canvas: Canvas, top: Int, exportedCount: Int) {
+    private fun drawFooter(canvas: Canvas, top: Int, exportedCount: Int, style: ExportStyle) {
         val footerText = "内容过长，仅导出前 $exportedCount 条"
         val paint = textPaint(22f, bold = false).apply {
-            color = COLOR_FOOTER
+            color = style.footer
             textAlign = Paint.Align.CENTER
         }
         val baseline = top + 36f - (paint.descent() + paint.ascent()) / 2f
@@ -370,8 +490,17 @@ object ChatImageExporter {
         val textW = BUBBLE_MAX_WIDTH - BUBBLE_PADDING_H * 2
         val textH = measureTextHeight(segment.content, textW, TEXT_SIZE, bold = false)
         val bubbleH = textH + BUBBLE_PADDING_V * 2
-        return maxOf(bubbleH, AVATAR_SIZE) + 28
+        val nameLabelH = if (!segment.isUser && segment.senderName != null) NAME_LABEL_HEIGHT else 0
+        return segmentRowHeight(bubbleH) + nameLabelH
     }
+
+    /**
+     * Row height for one segment: bubble (or avatar) height plus the reserved
+     * timestamp area. The timestamp is drawn TIME_V_OFFSET below the bubble and
+     * needs TIME_TEXT_HEIGHT of space, otherwise it overlaps the next bubble.
+     */
+    internal fun segmentRowHeight(bubbleHeight: Int, avatarSize: Int = AVATAR_SIZE): Int =
+        maxOf(bubbleHeight, avatarSize) + TIME_V_OFFSET + TIME_TEXT_HEIGHT
 
     private fun textPaint(size: Float, bold: Boolean): TextPaint =
         TextPaint(Paint.ANTI_ALIAS_FLAG).apply {

@@ -188,7 +188,8 @@ class ChatViewModel(
         if (memberId !in group.memberConversationIds) return
         if (groupStreamJob?.isActive == true && groupQueueEngine.isFull) return
         if (groupQueueEngine.contains(memberId)) return
-        val frozen = _messages.value
+        // 上下文定格（方案四.8）：只冻结已完成的群聊消息，流式中的半截消息不入上下文
+        val frozen = _messages.value.filterNot { it.isNotice || it.isStreaming }
         if (!groupQueueEngine.enqueue(memberId, frozen)) return
         syncGroupQueue()
         if (groupStreamJob?.isActive != true) startGroupQueueProcessor()
@@ -296,11 +297,16 @@ class ChatViewModel(
      */
     fun sendMessage(text: String) {
         if (text.isBlank()) return
-        // 群聊只走头像点名回复（enqueueGroupMember），不走私聊自动回复
-        if (isGroup()) return
+        val conv = conversation.value ?: return
+        // 群聊：只追加用户消息，不自动触发回复（回复靠点头像点名）；
+        // 队列进行中仍可发送新消息（方案四.8），新消息不影响正在进行的回复
+        if (isGroup()) {
+            if (_compressionState.value is CompressionState.Compressing) return
+            sendGroupUserMessage(text, conv)
+            return
+        }
         // 仅在 API 调用 / 压缩期间阻止发送；发送延迟期间允许继续发送
         if (_isGenerating.value || _compressionState.value is CompressionState.Compressing) return
-        val conv = conversation.value ?: return
         // 方案九.4/6：私聊必须设置用户名才能发送消息
         if (conv.userPersona.name.isBlank()) {
             _errorEvent.value = "请先设置用户名"
@@ -341,6 +347,26 @@ class ChatViewModel(
 
             // 延迟结束（或未启用延迟）→ 发起 API 请求
             startApiStream()
+        }
+    }
+
+    /**
+     * 群聊用户消息：直接追加进群聊记录（方案三.1/四.8），不触发自动回复。
+     */
+    private fun sendGroupUserMessage(text: String, conv: Conversation) {
+        sendDelayJob?.cancel()
+        sendDelayJob = viewModelScope.launch {
+            withContext(NonCancellable) {
+                val now = System.currentTimeMillis()
+                val userMsg = Message(
+                    id = IdGenerator.newId(IdGenerator.Prefix.USER_MESSAGE),
+                    conversationId = conv.id,
+                    role = Role.USER,
+                    content = text,
+                    timestamp = now
+                )
+                conversationRepository.appendMessage(userMsg)
+            }
         }
     }
 
@@ -726,6 +752,10 @@ class ChatViewModel(
                 groupQueueEngine.clear()
             } else {
                 groupQueueEngine.removeReplying()
+                // 模式 A：只停当前成员，排队的照常顺位递补（方案四.7）
+                if (groupQueueEngine.isNotEmpty) {
+                    startGroupQueueProcessor()
+                }
             }
             syncGroupQueue()
             _isGenerating.value = false

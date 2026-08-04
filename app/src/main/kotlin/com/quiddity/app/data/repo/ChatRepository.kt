@@ -534,7 +534,8 @@ class ChatRepository(
             transcript = transcript,
             senderId = senderId,
             tier = resolveMemberTier(member, settings),
-            senderNames = senderNames
+            senderNames = senderNames,
+            userName = member.userPersona.name.takeIf { it.isNotBlank() }
         )
         plan.fold(
             onSuccess = { p ->
@@ -613,7 +614,8 @@ class ChatRepository(
         val transcriptText = PromptBuilder.buildGroupTranscript(
             transcript.filterNot { it.isNotice },
             lastN = 0,
-            senderNames = resolveSenderNames(transcript)
+            senderNames = resolveSenderNames(transcript),
+            userName = "用户"
         )
         val raw = api.completeNonStreaming(
             apiUrl = access.apiUrl,
