@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.quiddity.app.data.model.Conversation
+import com.quiddity.app.data.model.ConversationType
 import com.quiddity.app.data.model.Message
 import com.quiddity.app.data.repo.ConversationRepository
 import com.quiddity.app.domain.GlobalChatSearch
@@ -11,6 +12,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -67,6 +69,19 @@ class HomeViewModel(
                 initialValue = conversationRepository.conversations.value
             )
 
+    // ===== 私聊 / 群聊分节（方案十四：双列表各自独立） =====
+    val soloConversations: StateFlow<List<Conversation>> = conversations
+        .map { list -> list.filter { it.type != ConversationType.GROUP } }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    val groupConversations: StateFlow<List<Conversation>> = conversations
+        .map { list -> list.filter { it.type == ConversationType.GROUP } }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /** 群聊成员会话解析（id → Conversation），供列表头像拼合与成员校验。 */
+    fun memberConversations(ids: List<String>): List<Conversation> =
+        ids.mapNotNull { id -> conversationRepository.getConversation(id) }
+
     fun createConversation() {
         viewModelScope.launch {
             conversationRepository.createConversation()
@@ -74,12 +89,68 @@ class HomeViewModel(
     }
 
     /**
+     * 创建群聊（方案二.6）：先逐个校验成员（用户名 / AI 名 / API 测试），
+     * 全部通过才建群并回调群 id；任一失败返回失败原因（可重试）。
+     */
+    fun createGroup(
+        memberIds: List<String>,
+        title: String?,
+        onDone: (Result<String>) -> Unit
+    ) {
+        viewModelScope.launch {
+            val members = memberConversations(memberIds)
+            if (members.isEmpty()) {
+                onDone(Result.failure(IllegalStateException("未选择成员")))
+                return@launch
+            }
+            val failures = mutableListOf<String>()
+            for (member in members) {
+                val result = conversationRepository.validateGroupMember(member)
+                if (result.isFailure) {
+                    val name = member.persona.name.ifBlank { member.title }
+                    failures += "$name：${result.exceptionOrNull()?.message}"
+                }
+            }
+            if (failures.isNotEmpty()) {
+                onDone(Result.failure(IllegalStateException(failures.joinToString("\n"))))
+                return@launch
+            }
+            val group = conversationRepository.createGroupConversation(memberIds, title)
+            onDone(Result.success(group.id))
+        }
+    }
+
+    /**
      * 批量删除多个会话（多选模式触发）。
      *
      * - 删除时同时清理 messages_<id>.json 文件 + 内存缓存 + Flow（store 内部实现）。
+     * - 私聊删除保护（方案十.6）：被群聊引用的私聊先回调确认，确认后走
+     *   [confirmDeleteReferencedConversations] 从群聊中移除成员。
      */
-    fun deleteConversations(convIds: List<String>) {
+    fun deleteConversations(
+        convIds: List<String>,
+        onReferencedByGroups: (List<String>) -> Unit = {}
+    ) {
         if (convIds.isEmpty()) return
+        val referenced = convIds.filter {
+            conversationRepository.groupsReferencing(it).isNotEmpty()
+        }
+        if (referenced.isNotEmpty()) {
+            onReferencedByGroups(referenced)
+            return
+        }
+        performDelete(convIds)
+    }
+
+    /** 用户确认后删除被群聊引用的私聊，并把这些成员从群聊中移除（历史保留）。 */
+    fun confirmDeleteReferencedConversations(convIds: List<String>) {
+        viewModelScope.launch {
+            conversationRepository.deleteConversations(convIds)
+            convIds.forEach { conversationRepository.removeMemberFromGroups(it) }
+        }
+    }
+
+    private fun performDelete(convIds: List<String>) {
         viewModelScope.launch {
             conversationRepository.deleteConversations(convIds)
         }
