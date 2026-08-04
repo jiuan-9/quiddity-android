@@ -51,6 +51,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -107,6 +108,7 @@ fun ApiCatalogEditor(
     val screenHeight = configuration.screenHeightDp.dp
     val scope = rememberCoroutineScope()
     val apiCatalogManager = remember { ServiceLocator.apiCatalogManager }
+    val context = LocalContext.current
 
     var visible by rememberSaveable { mutableStateOf(false) }
     // 安全规则：不把解密后的 API Key 明文写入 rememberSaveable（可能落盘），
@@ -261,6 +263,14 @@ fun ApiCatalogEditor(
                                     val decryptedKey = runCatching {
                                         apiCatalogManager.decryptKey(entry)
                                     }.getOrDefault("")
+                                    // 存有密钥但解不开（重装/换设备导致 Keystore 失效）：明确提示，避免误以为没保存
+                                    if (entry.apiKeyEnc.isNotBlank() && decryptedKey.isBlank()) {
+                                        android.widget.Toast.makeText(
+                                            context,
+                                            "原密钥无法解密（可能更换过设备或重装过应用），请重新输入",
+                                            android.widget.Toast.LENGTH_LONG
+                                        ).show()
+                                    }
                                     editingState = ApiCatalogEditFormState(
                                         id = entry.id,
                                         name = entry.name,

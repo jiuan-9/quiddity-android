@@ -405,7 +405,9 @@ class ApiCatalogManager(
         apiModel: String,
         apiKey: String
     ): ApiCatalogEntry = ApiCatalogEntry(
-        id = id ?: generateId(),
+        // 关键修复：表单新增时 id 传空字符串 ""（ApiCatalogEditFormState 语义：空 = 新增）。
+        // 空串不能当真实 id 用，否则多个新条目 id 相同会互相覆盖（"密钥不保存"根因）
+        id = id?.takeIf { it.isNotBlank() } ?: generateId(),
         name = name,
         providerId = providerId,
         apiUrl = apiUrl,

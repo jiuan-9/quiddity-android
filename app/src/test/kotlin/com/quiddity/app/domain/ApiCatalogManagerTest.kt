@@ -44,6 +44,44 @@ class ApiCatalogManagerTest {
     private val manager = ApiCatalogManager(ChatApi())
 
     @Test
+    fun `buildEntry with blank id generates a fresh id`() {
+        val a = manager.buildEntry(
+            id = "",
+            name = "配置A",
+            providerId = "deepseek",
+            apiUrl = "https://api.deepseek.com/v1/chat/completions",
+            apiModel = "deepseek-chat",
+            apiKey = "test-key-a"
+        )
+        val b = manager.buildEntry(
+            id = "",
+            name = "配置B",
+            providerId = "deepseek",
+            apiUrl = "https://api.deepseek.com/v1/chat/completions",
+            apiModel = "deepseek-chat",
+            apiKey = "test-key-b"
+        )
+        assertTrue(a.id.isNotBlank(), "空串 id 必须生成独立新 id，否则保存第二条会覆盖第一条")
+        assertTrue(b.id.isNotBlank(), "空串 id 必须生成独立新 id")
+        assertTrue(a.id != b.id, "两次新建生成的 id 不能相同")
+        assertTrue(a.apiKeyEnc.isNotEmpty(), "配置A的密钥应已加密保存")
+        assertTrue(b.apiKeyEnc.isNotEmpty(), "配置B的密钥应已加密保存")
+    }
+
+    @Test
+    fun `buildEntry keeps non blank id`() {
+        val entry = manager.buildEntry(
+            id = "fixed-id",
+            name = "配置",
+            providerId = "deepseek",
+            apiUrl = "https://api.deepseek.com/v1/chat/completions",
+            apiModel = "deepseek-chat",
+            apiKey = "test-key"
+        )
+        assertEquals("fixed-id", entry.id)
+    }
+
+    @Test
     fun `all provider models have a tier`() {
         val providerModels = manager.providers
             .filter { it.id != "custom" }
