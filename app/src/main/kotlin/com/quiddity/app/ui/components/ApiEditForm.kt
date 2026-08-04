@@ -391,11 +391,11 @@ fun ApiEditForm(
                         testConnection(apiUrl.trim(), apiKey.trim(), apiModel.trim())
                             .onSuccess {
                                 testIsSuccess = true
-                                testResult = it
+                                testResult = it.take(80)
                             }
                             .onFailure {
                                 testIsSuccess = false
-                                testResult = it.message ?: "连接失败"
+                                testResult = (it.message ?: "连接失败").take(80)
                             }
                         testing = false
                     }

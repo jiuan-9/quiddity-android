@@ -219,7 +219,7 @@ class SettingsViewModel(
             settingsRepository.upsertCatalog(entry)
         }.onFailure {
             android.util.Log.e("SettingsViewModel", "保存模型配置失败", it)
-            _errorEvent.value = it.message ?: "保存模型配置失败"
+            _errorEvent.value = "保存模型配置失败：${it.javaClass.simpleName} ${it.message ?: ""}"
         }
     }
 
@@ -228,7 +228,7 @@ class SettingsViewModel(
             settingsRepository.removeCatalog(entryId)
         }.onFailure {
             android.util.Log.e("SettingsViewModel", "删除模型配置失败", it)
-            _errorEvent.value = it.message ?: "删除模型配置失败"
+            _errorEvent.value = "删除模型配置失败：${it.javaClass.simpleName} ${it.message ?: ""}"
         }
     }
 
@@ -237,7 +237,7 @@ class SettingsViewModel(
             settingsRepository.setActiveCatalog(id)
         }.onFailure {
             android.util.Log.e("SettingsViewModel", "切换模型配置失败", it)
-            _errorEvent.value = it.message ?: "切换模型配置失败"
+            _errorEvent.value = "切换模型配置失败：${it.javaClass.simpleName} ${it.message ?: ""}"
         }
     }
 

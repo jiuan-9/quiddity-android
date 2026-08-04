@@ -7,6 +7,13 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -191,7 +198,16 @@ open class ChatApi {
                 if (!resp.isSuccessful) {
                     throw ChatException("HTTP ${resp.code}: ${resp.message}")
                 }
-                resp.body?.string() ?: ""
+                // 只返回模型回复内容（截断），避免把整个响应 JSON 展示给用户
+                val raw = resp.body?.string().orEmpty()
+                val content = runCatching {
+                    val obj = json.parseToJsonElement(raw) as? JsonObject ?: return@runCatching null
+                    val choices = obj["choices"] as? JsonArray ?: return@runCatching null
+                    val first = choices.firstOrNull() as? JsonObject ?: return@runCatching null
+                    val message = first["message"] as? JsonObject ?: return@runCatching null
+                    message["content"] as? JsonPrimitive
+                }.getOrNull()
+                content?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }?.take(80) ?: "连接成功"
             }
         }
     }

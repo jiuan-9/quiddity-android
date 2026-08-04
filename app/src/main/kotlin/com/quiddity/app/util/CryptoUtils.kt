@@ -135,8 +135,17 @@ object CryptoUtils {
     }
 
     /** 加密明文，返回 Base64 字符串（包含 IV + 密文）。 */
-    fun encrypt(plain: String): String =
-        if (plain.isEmpty()) "" else encryptWith(currentKey, plain)
+    fun encrypt(plain: String): String {
+        if (plain.isEmpty()) return ""
+        return try {
+            encryptWith(currentKey, plain)
+        } catch (t: Throwable) {
+            // 设备 Keystore 异常（如恢复/迁移后密钥失效）时回退派生密钥，
+            // 保证"保存密钥"永不因加密失败而报错
+            Log.e(TAG, "当前密钥加密失败，回退派生密钥", t)
+            encryptWith(legacyKey, plain)
+        }
+    }
 
     /**
      * 解密 [encrypted]（Base64 字符串）。
