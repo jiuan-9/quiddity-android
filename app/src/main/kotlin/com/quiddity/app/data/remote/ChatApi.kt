@@ -52,7 +52,7 @@ import com.quiddity.app.util.QuiddityConstants
  * 通过 SSE 流式接收响应，向上层暴露为 Flow<String>。
  * 每条 String 是一个内容片段；Flow 正常结束代表 [DONE]。
  */
-class ChatApi {
+open class ChatApi {
 
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(QuiddityConstants.CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
@@ -90,7 +90,7 @@ class ChatApi {
      * @param request 请求体
      * @return [Flow] of [StreamEvent]；Flow 完成表示流结束
      */
-    fun streamChat(
+    open fun streamChat(
         apiUrl: String,
         apiKey: String,
         request: ChatCompletionRequest
@@ -213,7 +213,7 @@ class ChatApi {
      * @param temperature 采样温度（精调偏高鼓励表达，压缩偏低保证忠实）
      * @param emptyError 返回空内容时的错误提示文案
      */
-    suspend fun completeNonStreaming(
+    open suspend fun completeNonStreaming(
         apiUrl: String,
         apiKey: String,
         model: String,

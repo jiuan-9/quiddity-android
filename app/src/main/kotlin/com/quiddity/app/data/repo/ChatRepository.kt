@@ -4,6 +4,7 @@ import com.quiddity.app.data.model.Conversation
 import com.quiddity.app.data.model.Message
 import com.quiddity.app.data.model.MemoryCompressionResult
 import com.quiddity.app.data.model.Role
+import com.quiddity.app.data.model.AppSettings
 import com.quiddity.app.data.remote.ChatApi
 import com.quiddity.app.data.remote.ChatCompletionRequest
 import com.quiddity.app.data.remote.ChatException
@@ -12,6 +13,8 @@ import com.quiddity.app.data.remote.ChatStreamParser
 import com.quiddity.app.data.remote.AssistantToolCall
 import com.quiddity.app.domain.ChatRecordSearch
 import com.quiddity.app.domain.ChatError
+import com.quiddity.app.domain.ApiCatalogManager
+import com.quiddity.app.domain.GroupReplyPlanner
 import com.quiddity.app.domain.MemorySearch
 import com.quiddity.app.domain.MessageStreamCoordinator
 import com.quiddity.app.domain.PromptBuilder
@@ -61,6 +64,10 @@ class ChatRepository(
     private val api: ChatApi,
     private val conversationRepo: ConversationRepository,
     private val settingsRepo: SettingsRepository,
+    /**
+     * 模型分级解析（群聊成员完整级可用 search_chat 工具检索完整群聊消息）。
+     */
+    private val apiCatalogManager: ApiCatalogManager? = null,
     /**
      * 协调器工厂。默认使用 [MessageStreamCoordinator]。
      * 每轮新 run 都注入新 runId（基于 UUID），保证消息 id 全局唯一。
@@ -497,7 +504,7 @@ class ChatRepository(
     }
 
     // ============================================================
-    // 群聊接口（2.0.0 接口预留；1.3.0 仅声明，不实现群聊实体）
+    // 群聊接口（1.5.0 实现；decideGroupResponder 按方案第三节用户点名模式不启用）
     // ============================================================
 
     /**
@@ -518,7 +525,60 @@ class ChatRepository(
         senderId: String,
         onEvent: suspend (Event) -> Unit
     ) {
-        throw NotImplementedError("群聊功能未实现：1.3.0 仅预留接口，2.0.0 实体加入")
+        val settings = settingsRepo.currentSnapshot()
+        val senderNames = resolveSenderNames(transcript)
+        val plan = GroupReplyPlanner.buildPlan(
+            settings = settings,
+            member = member,
+            group = group,
+            transcript = transcript,
+            senderId = senderId,
+            tier = resolveMemberTier(member, settings),
+            senderNames = senderNames
+        )
+        plan.fold(
+            onSuccess = { p ->
+                val coordinator = coordinatorFactory(
+                    group.id,
+                    IdGenerator.newUuid(),
+                    settings.multilineAutoSplit,
+                    p.singleMessageTokens,
+                    p.senderId
+                )
+                runWithToolRound(api, p.apiUrl, p.apiKey, p.request, coordinator, group, onEvent)
+            },
+            onFailure = { emitError(onEvent, it, "") }
+        )
+    }
+
+    /**
+     * 解析群聊转述中出现的成员 id → 名字（未设置名字的成员回退显示 id）。
+     */
+    private fun resolveSenderNames(transcript: List<Message>): Map<String, String> {
+        val names = mutableMapOf<String, String>()
+        transcript.forEach { msg ->
+            val senderId = msg.senderId ?: return@forEach
+            if (senderId !in names) {
+                val name = conversationRepo.getConversation(senderId)
+                    ?.persona?.name
+                    ?.takeIf { it.isNotBlank() }
+                names[senderId] = name ?: senderId
+            }
+        }
+        return names
+    }
+
+    /**
+     * 解析成员的模型分级（member.apiCatalogId → activeCatalogId → catalog 第一条）。
+     */
+    private fun resolveMemberTier(member: Conversation, settings: AppSettings): ApiCatalogManager.ModelTier {
+        val manager = apiCatalogManager ?: return ApiCatalogManager.ModelTier.BASIC
+        val entry = settings.catalog
+            .firstOrNull { it.id == member.apiCatalogId }
+            ?: settings.catalog.firstOrNull { it.id == settings.activeCatalogId }
+            ?: settings.catalog.firstOrNull()
+            ?: return ApiCatalogManager.ModelTier.BASIC
+        return manager.getModelTier(entry.apiModel, entry.providerId)
     }
 
     /**
@@ -546,7 +606,26 @@ class ChatRepository(
         group: Conversation,
         transcript: List<Message>
     ): String {
-        throw NotImplementedError("群聊功能未实现：1.3.0 仅预留接口，2.0.0 实体加入")
+        val settings = settingsRepo.currentSnapshot()
+        val access = ApiAccess.resolve(settings, group)
+            as? ApiAccess.Resolved
+            ?: throw IllegalStateException("API 未配置，无法压缩群聊记忆")
+        val transcriptText = PromptBuilder.buildGroupTranscript(
+            transcript.filterNot { it.isNotice },
+            lastN = 0,
+            senderNames = resolveSenderNames(transcript)
+        )
+        val raw = api.completeNonStreaming(
+            apiUrl = access.apiUrl,
+            apiKey = access.apiKey,
+            model = access.model,
+            systemPrompt = PromptBuilder.GROUP_MEMORY_SYSTEM_PROMPT,
+            userContent = PromptBuilder.buildGroupMemorySummaryPrompt(transcriptText),
+            maxTokens = QuiddityConstants.GROUP_MEMORY_MAX_TOKENS,
+            temperature = QuiddityConstants.COMPRESSION_TEMPERATURE,
+            emptyError = "群聊记忆压缩返回空内容"
+        )
+        return GroupReplyPlanner.applyMemoryCompression(raw, group.groupMemory)
     }
 
     /**

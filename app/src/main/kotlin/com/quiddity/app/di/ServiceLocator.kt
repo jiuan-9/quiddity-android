@@ -122,7 +122,12 @@ object ServiceLocator {
             characterRepository = characterRepository
         )
         docsProvider = DocsProvider(apiCatalogManager)
-        chatRepository = ChatRepository(chatApi, conversationRepository, settingsRepository)
+        chatRepository = ChatRepository(
+            api = chatApi,
+            conversationRepo = conversationRepository,
+            settingsRepo = settingsRepository,
+            apiCatalogManager = apiCatalogManager
+        )
         alarmScheduler = AlarmScheduler(appContext)
         timeLibraryRepository = TimeLibraryRepository(
             conversationRepository = conversationRepository,

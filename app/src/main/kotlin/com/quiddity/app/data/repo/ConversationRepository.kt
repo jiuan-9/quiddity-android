@@ -8,6 +8,7 @@ import com.quiddity.app.data.model.ImportMode
 import com.quiddity.app.data.model.Message
 import com.quiddity.app.data.model.Persona
 import com.quiddity.app.domain.ApiCatalogManager
+import com.quiddity.app.domain.GroupChatRules
 import com.quiddity.app.util.IdGenerator
 import com.quiddity.app.util.QuiddityConstants
 import kotlinx.coroutines.flow.Flow
@@ -86,9 +87,10 @@ class ConversationRepository(
      */
     suspend fun createConversation(): Conversation {
         val now = System.currentTimeMillis()
+        val title = settingsRepository?.nextSoloTitle() ?: QuiddityConstants.DEFAULT_CONVERSATION_TITLE
         val conv = Conversation(
             id = IdGenerator.newId(IdGenerator.Prefix.CONVERSATION),
-            title = QuiddityConstants.DEFAULT_CONVERSATION_TITLE,
+            title = title,
             createdAt = now,
             updatedAt = now,
             // AI 人设：所有字段全部留空，输入框显示灰色占位提示引导用户设定。
@@ -111,6 +113,64 @@ class ConversationRepository(
         }
         store.createConversation(conv)
         return conv
+    }
+
+    /**
+     * 创建群聊会话（方案二.6）。
+     *
+     * @param memberIds 成员私聊会话 id（1～3 个，调用方已校验）
+     * @param title 群名；空串时自动编号「新群聊 N」
+     */
+    suspend fun createGroupConversation(
+        memberIds: List<String>,
+        title: String? = null
+    ): Conversation {
+        val now = System.currentTimeMillis()
+        val resolvedTitle = title?.takeIf { it.isNotBlank() }
+            ?: settingsRepository?.nextGroupTitle()
+            ?: QuiddityConstants.GROUP_DEFAULT_TITLE_PREFIX
+        val conv = GroupChatRules.buildGroupConversation(
+            id = IdGenerator.newId(IdGenerator.Prefix.CONVERSATION),
+            title = resolvedTitle,
+            memberIds = memberIds,
+            createdAt = now,
+            updatedAt = now
+        )
+        store.createConversation(conv)
+        return conv
+    }
+
+    /** 被 [memberId] 引用的群聊列表（私聊删除保护用，方案十.6）。 */
+    fun groupsReferencing(memberId: String): List<Conversation> =
+        GroupChatRules.groupsReferencing(store.conversations.value, memberId)
+
+    /** 从所有群聊中移除成员（私聊删除后调用；历史消息气泡保留，方案十.4）。 */
+    suspend fun removeMemberFromGroups(memberId: String) {
+        GroupChatRules.groupsWithoutMember(store.conversations.value, memberId)
+            .filter { it.type == ConversationType.GROUP }
+            .forEach { group ->
+                updateConversation(group)
+            }
+    }
+
+    /**
+     * 成员入群校验（方案七.4：用户名、AI 名、API 测试通过）。
+     *
+     * @return 成功返回消息文本；失败返回异常（含失败原因）
+     */
+    suspend fun validateGroupMember(member: Conversation): Result<String> {
+        GroupChatRules.validationFailureReason(member)?.let { reason ->
+            return Result.failure(IllegalStateException(reason))
+        }
+        val settings = settingsRepository?.currentSnapshot()
+            ?: return Result.failure(IllegalStateException("设置未加载"))
+        val manager = apiCatalogManager
+            ?: return Result.failure(IllegalStateException("API 名册未加载"))
+        val access = ApiAccess.resolve(settings, member)
+        return when (access) {
+            is ApiAccess.Failure -> Result.failure(access.toChatException())
+            is ApiAccess.Resolved -> manager.testConnection(access.apiUrl, access.apiKey, access.model)
+        }
     }
 
     /**
