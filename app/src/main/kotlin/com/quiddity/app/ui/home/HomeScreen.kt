@@ -364,7 +364,6 @@ fun HomeScreen(
 
             val homeUiState = when {
                 isLoading -> "loading"
-                conversations.isEmpty() -> "empty"
                 searchQuery.isNotBlank() &&
                     soloFiltered.isEmpty() &&
                     groupFiltered.isEmpty() &&
@@ -383,9 +382,6 @@ fun HomeScreen(
                 when (state) {
                     "loading" -> {
                         Box(modifier = Modifier.fillMaxSize())
-                    }
-                    "empty" -> {
-                        WelcomeContent()
                     }
                     "search_empty" -> {
                         SearchEmptyContent(query = searchQuery)
@@ -914,87 +910,6 @@ private fun ConversationCard(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f)
             )
-        }
-    }
-}
-
-@Composable
-private fun WelcomeContent() {
-    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
-    val screenWidthDp = configuration.screenWidthDp.dp
-    val screenHeightDp = configuration.screenHeightDp.dp
-    val isLandscape = screenWidthDp > screenHeightDp
-
-    // ===== 标题字号改为以 dp 为主计算（fontScale 已被 Application 锁定 1.0，sp 等同 dp）=====
-    // 用屏幕宽度比例缩放而非硬编码 4 档 sp，避免窄屏/宽屏/折叠屏差异过大。
-    // 比例 0.18~0.22 倍屏幕宽度，保证视觉占比一致；maxLines=1 防止溢出。
-    val titleFontSize = (screenWidthDp.value * 0.20f).sp
-    val maxTitleSize = 72.sp
-    val finalTitleSize = if (titleFontSize.value > maxTitleSize.value) maxTitleSize else titleFontSize
-
-    val subtitleFontSize = 18.sp
-
-    val titleColor = MaterialTheme.colorScheme.onSurface
-    val subtitleColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.78f)
-    val verticalSpacing = if (isLandscape) 12.dp else 20.dp
-
-    val horizontalPadding = if (isLandscape) 40.dp else 24.dp
-
-    var visible by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        delay(40)
-        visible = true
-    }
-
-    AnimatedVisibility(
-        visible = visible,
-        enter = fadeIn(
-            animationSpec = tween(
-                durationMillis = 300,
-                easing = Motion.EasingEmphasizedDecelerate
-            )
-        ) + slideInVertically(
-            initialOffsetY = { it / 6 },
-            animationSpec = tween(
-                durationMillis = 320,
-                easing = Motion.EasingEmphasizedDecelerate
-            )
-        ),
-        modifier = Modifier.fillMaxSize()
-    ) {
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.CenterStart
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = horizontalPadding),
-                horizontalAlignment = Alignment.Start,
-                verticalArrangement = Arrangement.spacedBy(verticalSpacing)
-            ) {
-                Text(
-                    text = "Quiddity",
-                    fontSize = finalTitleSize,
-                    fontWeight = FontWeight.Bold,
-                    color = titleColor,
-                    textAlign = TextAlign.Start,
-                    letterSpacing = (-1.2).sp,
-                    lineHeight = (finalTitleSize.value * 1.05f).sp,
-                    maxLines = 1,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Text(
-                    text = "开始你的旅程",
-                    fontSize = subtitleFontSize,
-                    fontWeight = FontWeight.Medium,
-                    color = subtitleColor,
-                    textAlign = TextAlign.Start,
-                    letterSpacing = 0.sp,
-                    maxLines = 1,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
         }
     }
 }
