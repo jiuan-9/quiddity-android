@@ -2287,15 +2287,26 @@ private fun GroupMemberManagePanel(
             },
             onDismiss = { showApiCreateSheet = false },
             onSave = { state ->
-                val entry = apiCatalogManager.buildEntry(
-                    id = state.id,
-                    name = state.name,
-                    providerId = state.providerId,
-                    apiUrl = state.apiUrl,
-                    apiModel = state.apiModel,
-                    apiKey = state.apiKey
-                )
-                scope.launch { settingsRepo.upsertCatalog(entry) }
+                scope.launch {
+                    runCatching {
+                        val entry = apiCatalogManager.buildEntry(
+                            id = state.id,
+                            name = state.name,
+                            providerId = state.providerId,
+                            apiUrl = state.apiUrl,
+                            apiModel = state.apiModel,
+                            apiKey = state.apiKey
+                        )
+                        settingsRepo.upsertCatalog(entry)
+                    }.onFailure {
+                        android.util.Log.e("GroupMemberManagePanel", "新增模型配置失败", it)
+                        android.widget.Toast.makeText(
+                            context,
+                            "新增模型配置失败：${it.message ?: "未知错误"}",
+                            android.widget.Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
                 showApiCreateSheet = false
             }
         )

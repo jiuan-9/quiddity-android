@@ -353,7 +353,13 @@ fun ApiEditForm(
             value = apiKey,
             onValueChange = { apiKey = it },
             label = { Text("接口密钥") },
-            placeholder = { Text("sk-...") },
+            // 占位提示用灰色（与其它输入框一致），避免显示成正文色
+            placeholder = {
+                Text(
+                    text = "sk-...",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                )
+            },
             singleLine = true,
             visualTransformation = if (keyVisible) VisualTransformation.None else PasswordVisualTransformation(),
             trailingIcon = {

@@ -20,12 +20,14 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -159,6 +161,7 @@ fun SettingsBottomSheet(
     onDismiss: () -> Unit
 ) {
     val settings by viewModel.settings.collectAsStateWithLifecycle()
+    val settingsError by viewModel.errorEvent.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val configuration = LocalConfiguration.current
@@ -200,6 +203,14 @@ fun SettingsBottomSheet(
     val dismissThreshold = screenHeightPx * 0.2f
 
     LaunchedEffect(Unit) { visible = true }
+
+    // 模型配置等写操作失败提示（防静默失败）
+    LaunchedEffect(settingsError) {
+        settingsError?.let { msg ->
+            android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_LONG).show()
+            viewModel.consumeError()
+        }
+    }
 
     // ===== 三条开发规范（位于文件中间位置） =====
     // 1. 问题修复规范：所有代码问题修复必须采用系统性解决方案，严禁使用临时性补丁或 hack 手段。
@@ -394,10 +405,8 @@ fun SettingsBottomSheet(
                         }
 
                         // ===== Section 1: 显示 =====
-                        item(key = "section_display") {
-                            SectionHeader(title = "显示")
-                        }
-                        item(key = "dark_mode", contentType = { "toggle" }) {
+                        item(key = "section_display", contentType = { "section" }) {
+                            SettingsSectionCard(title = "显示") {
                             ToggleRow(
                                 icon = Icons.Filled.Brightness6,
                                 title = "深色模式",
@@ -405,8 +414,6 @@ fun SettingsBottomSheet(
                                 checked = settings.darkMode,
                                 onCheckedChange = { viewModel.setDarkMode(it) }
                             )
-                        }
-                        item(key = "bracket_gray", contentType = { "toggle" }) {
                             ToggleRow(
                                 icon = Icons.Filled.FormatSize,
                                 title = "括号内容灰化",
@@ -415,8 +422,6 @@ fun SettingsBottomSheet(
                                 checked = settings.bracketGrayEnabled,
                                 onCheckedChange = { viewModel.setBracketGrayEnabled(it) }
                             )
-                        }
-                        item(key = "follow_system_font", contentType = { "toggle" }) {
                             ToggleRow(
                                 icon = Icons.Filled.FormatSize,
                                 title = "跟随系统字体",
@@ -425,8 +430,6 @@ fun SettingsBottomSheet(
                                 checked = settings.followSystemFont,
                                 onCheckedChange = { viewModel.setFollowSystemFont(it) }
                             )
-                        }
-                        item(key = "font_size", contentType = { "slider" }) {
                             FontSizeRow(
                                 fontScale = settings.fontScale,
                                 enabled = !settings.followSystemFont,
@@ -435,8 +438,6 @@ fun SettingsBottomSheet(
                                     Toast.makeText(context, "已保存", Toast.LENGTH_SHORT).show()
                                 }
                             )
-                        }
-                        item(key = "list_wallpaper", contentType = { "click" }) {
                             ClickableRow(
                                 icon = Icons.Filled.Image,
                                 title = "会话列表壁纸",
@@ -444,8 +445,6 @@ fun SettingsBottomSheet(
                                 else "未设置",
                                 onClick = { showListWallpaper = true }
                             )
-                        }
-                        item(key = "proactive_message", contentType = { "toggle" }) {
                             ToggleRow(
                                 icon = Icons.Filled.Notifications,
                                 title = "主动消息",
@@ -470,21 +469,18 @@ fun SettingsBottomSheet(
                                     }
                                 }
                             )
-                        }
                         // 系统条件引导：总开关开启后展示精确闹钟 / 电池优化状态与一键跳转
                         if (settings.proactiveMessageEnabled) {
-                            item(key = "proactive_permission", contentType = { "card" }) {
                                 ActiveMessagePermissionCard(
                                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 3.dp)
                                 )
-                            }
                         }
 
-                        // ===== Section 2: 模型配置 =====
-                        item(key = "section_api") {
-                            SectionHeader(title = "模型配置")
+                            }
                         }
-                        item(key = "api_catalog", contentType = { "click" }) {
+                        // ===== Section 2: 模型配置 =====
+                        item(key = "section_api", contentType = { "section" }) {
+                            SettingsSectionCard(title = "模型配置") {
                             val apiSubtitle = remember(settings.catalog, settings.activeCatalogId) {
                                 if (settings.catalog.isEmpty()) "未配置"
                                 else "${settings.catalog.size} 项 · 当前：${settings.catalog.firstOrNull { it.id == settings.activeCatalogId }?.let { "${it.name} · ${it.apiModel}" } ?: "未选择"}"
@@ -496,13 +492,12 @@ fun SettingsBottomSheet(
                                 onClick = { showApiEditor = true },
                                 expandableSubtitle = true
                             )
-                        }
 
-                        // ===== Section 3: 生成 =====
-                        item(key = "section_generation") {
-                            SectionHeader(title = "生成")
+                            }
                         }
-                        item(key = "token_settings", contentType = { "click" }) {
+                        // ===== Section 3: 生成 =====
+                        item(key = "section_generation", contentType = { "section" }) {
+                            SettingsSectionCard(title = "生成") {
                             val tokenSubtitle = remember(settings.globalMaxTokens, settings.globalSingleMessageTokens) {
                                 "最大回复 ${settings.globalMaxTokens} / 单条 ${settings.globalSingleMessageTokens}"
                             }
@@ -512,23 +507,15 @@ fun SettingsBottomSheet(
                                 subtitle = tokenSubtitle,
                                 onClick = { showTokenEditor = !showTokenEditor }
                             )
-                        }
                         if (showTokenEditor) {
-                            item(key = "token_editor", contentType = { "editor" }) {
                                 TokenEditorPanel(
                                     maxTokens = settings.globalMaxTokens,
                                     singleTokens = settings.globalSingleMessageTokens,
                                     onMaxChange = { v -> if (v.isNotEmpty()) viewModel.setMaxTokens(v.toIntOrNull() ?: 4096) },
                                     onSingleChange = { v -> if (v.isNotEmpty()) viewModel.setSingleMessageTokens(v.toIntOrNull() ?: 800) },
-                                    modifier = Modifier.animateItem(
-                                        placementSpec = tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedDecelerate),
-                                        fadeInSpec = tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedDecelerate),
-                                        fadeOutSpec = tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate)
-                                    )
+                                    modifier = Modifier
                                 )
-                            }
                         }
-                        item(key = "multiline_split", contentType = { "toggle" }) {
                             ToggleRow(
                                 icon = Icons.Filled.Layers,
                                 title = "AI 回复切分",
@@ -536,13 +523,12 @@ fun SettingsBottomSheet(
                                 checked = settings.multilineAutoSplit,
                                 onCheckedChange = { viewModel.setMultilineSplit(it) }
                             )
-                        }
 
-                        // ===== Section 4: 交互 =====
-                        item(key = "section_interact") {
-                            SectionHeader(title = "交互")
+                            }
                         }
-                        item(key = "enter_to_send", contentType = { "toggle" }) {
+                        // ===== Section 4: 交互 =====
+                        item(key = "section_interact", contentType = { "section" }) {
+                            SettingsSectionCard(title = "交互") {
                             ToggleRow(
                                 icon = Icons.AutoMirrored.Filled.Send,
                                 title = "回车键发送",
@@ -550,9 +536,7 @@ fun SettingsBottomSheet(
                                 checked = settings.enterToSend,
                                 onCheckedChange = { viewModel.setEnterToSend(it) }
                             )
-                        }
                         // ===== 延迟设置入口 =====
-                        item(key = "delay_settings", contentType = { "click" }) {
                             val delayOverall = settings.typingDelayEnabled || settings.sendDelayEnabled
                             val delaySubtitle = remember(
                                 delayOverall, settings.typingDelayMsPerChar, settings.sendDelaySeconds
@@ -569,9 +553,7 @@ fun SettingsBottomSheet(
                                 subtitle = delaySubtitle,
                                 onClick = { showDelayEditor = !showDelayEditor }
                             )
-                        }
                         if (showDelayEditor) {
-                            item(key = "delay_editor", contentType = { "editor" }) {
                                 DelaySettingsPanel(
                                     typingDelayEnabled = settings.typingDelayEnabled,
                                     typingDelayMsPerChar = settings.typingDelayMsPerChar,
@@ -581,20 +563,15 @@ fun SettingsBottomSheet(
                                     onTypingDelayMsPerCharChange = { viewModel.setTypingDelayMsPerChar(it) },
                                     onSendDelayEnabledChange = { viewModel.setSendDelayEnabled(it) },
                                     onSendDelaySecondsChange = { viewModel.setSendDelaySeconds(it) },
-                                    modifier = Modifier.animateItem(
-                                        placementSpec = tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedDecelerate),
-                                        fadeInSpec = tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedDecelerate),
-                                        fadeOutSpec = tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate)
-                                    )
+                                    modifier = Modifier
                                 )
-                            }
                         }
 
-                        // ===== Section 5: 数据 =====
-                        item(key = "section_data") {
-                            SectionHeader(title = "数据")
+                            }
                         }
-                        item(key = "export_data", contentType = { "click" }) {
+                        // ===== Section 5: 数据 =====
+                        item(key = "section_data", contentType = { "section" }) {
+                            SettingsSectionCard(title = "数据") {
                             ClickableRow(
                                 icon = Icons.Filled.Upload,
                                 title = "数据导出",
@@ -603,8 +580,6 @@ fun SettingsBottomSheet(
                                     exportLauncher.launch("quiddity-backup-${IdGenerator.newUuid()}.json")
                                 }
                             )
-                        }
-                        item(key = "import_data", contentType = { "click" }) {
                             ClickableRow(
                                 icon = Icons.Filled.Download,
                                 title = "数据导入",
@@ -613,13 +588,12 @@ fun SettingsBottomSheet(
                                     importLauncher.launch(arrayOf("application/json"))
                                 }
                             )
-                        }
 
-                        // ===== Section 6: 关于 =====
-                        item(key = "section_about") {
-                            SectionHeader(title = "关于")
+                            }
                         }
-                        item(key = "check_version", contentType = { "click" }) {
+                        // ===== Section 6: 关于 =====
+                        item(key = "section_about", contentType = { "section" }) {
+                            SettingsSectionCard(title = "关于") {
                             ClickableRow(
                                 icon = Icons.Filled.Verified,
                                 title = "检查更新",
@@ -634,35 +608,27 @@ fun SettingsBottomSheet(
                                     }
                                 } else null
                             )
-                        }
-                        item(key = "documents", contentType = { "click" }) {
                             ClickableRow(
                                 icon = Icons.AutoMirrored.Filled.Article,
                                 title = "文档",
                                 subtitle = "新手教程、模型方案、API 密钥获取、备份说明",
                                 onClick = { showDocuments = true }
                             )
-                        }
                         // 法律与隐私文档入口
                         // - 引用国内外相关法律，撇清应用与用户行为的关系
                         // - 点击某法律协议自动复制对应官方地址
-                        item(key = "legal_docs", contentType = { "click" }) {
                             ClickableRow(
                                 icon = Icons.Filled.Gavel,
                                 title = "法律与隐私",
                                 subtitle = "用户协议、隐私政策、免责声明",
                                 onClick = { showLegalDocs = true }
                             )
-                        }
-                        item(key = "donate", contentType = { "click" }) {
                             ClickableRow(
                                 icon = Icons.Filled.FavoriteBorder,
                                 title = "打赏作者",
                                 subtitle = "支持一下",
                                 onClick = { showDonate = true }
                             )
-                        }
-                        item(key = "customer_service", contentType = { "info" }) {
                             CustomerServiceRow(
                                 qqNumber = "JiuanShen",
                                 onCopy = {
@@ -670,8 +636,6 @@ fun SettingsBottomSheet(
                                     toastMsg = "QQ号已复制"
                                 }
                             )
-                        }
-                        item(key = "about_footer", contentType = { "footer" }) {
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -694,6 +658,7 @@ fun SettingsBottomSheet(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                                     )
                                 }
+                            }
                             }
                         }
                     }
@@ -978,15 +943,53 @@ private fun CenterGrabBar(
     }
 }
 
+/**
+ * 设置页大类分组卡片：带边框与浅色底，标题用主题色竖条 + 主色文字，
+ * 与内部各行的小圆角框形成层级区分。
+ */
 @Composable
-private fun SectionHeader(title: String) {
-    Text(
-        text = title,
-        style = MaterialTheme.typography.labelLarge,
-        fontWeight = FontWeight.SemiBold,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(start = 24.dp, top = 16.dp, bottom = 6.dp)
-    )
+private fun SettingsSectionCard(
+    title: String,
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .clip(RoundedCornerShape(20.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.45f))
+            .border(
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f),
+                shape = RoundedCornerShape(20.dp)
+            )
+            .padding(horizontal = 4.dp, vertical = 6.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(4.dp)
+                    .height(16.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(MaterialTheme.colorScheme.primary)
+            )
+            Spacer(modifier = Modifier.size(10.dp))
+            Text(
+                text = title,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+        content()
+        Spacer(modifier = Modifier.height(4.dp))
+    }
 }
 
 /**

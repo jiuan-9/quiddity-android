@@ -15,6 +15,8 @@ import com.quiddity.app.data.repo.ConversationRepository
 import com.quiddity.app.data.repo.SettingsRepository
 import com.quiddity.app.domain.ApiCatalogManager
 import com.quiddity.app.util.QuiddityConstants
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
@@ -53,6 +55,14 @@ class SettingsViewModel(
     private val apiCatalogManager: ApiCatalogManager,
     private val characterRepository: CharacterRepository
 ) : ViewModel() {
+
+    /** 写操作失败提示（防未捕获协程异常导致 App 闪退）。 */
+    private val _errorEvent = MutableStateFlow<String?>(null)
+    val errorEvent: StateFlow<String?> = _errorEvent.asStateFlow()
+
+    fun consumeError() {
+        _errorEvent.value = null
+    }
 
     val settings: StateFlow<AppSettings> = settingsRepository.observeSettings()
         .stateIn(
@@ -186,34 +196,49 @@ class SettingsViewModel(
         apiModel: String,
         apiKey: String
     ) = viewModelScope.launch {
-        // 编辑时未重新输入密钥（表单明文未持久化，进程回收后为空）：保留原密文
-        val existing = id?.let { settingsRepository.getCatalogEntry(it) }
-        val entry = if (apiKey.isBlank() && existing != null) {
-            existing.copy(
-                name = name,
-                providerId = providerId,
-                apiUrl = apiUrl,
-                apiModel = apiModel
-            )
-        } else {
-            apiCatalogManager.buildEntry(
-                id = id,
-                name = name,
-                providerId = providerId,
-                apiUrl = apiUrl,
-                apiModel = apiModel,
-                apiKey = apiKey
-            )
+        runCatching {
+            // 编辑时未重新输入密钥（表单明文未持久化，进程回收后为空）：保留原密文
+            val existing = id?.let { settingsRepository.getCatalogEntry(it) }
+            val entry = if (apiKey.isBlank() && existing != null) {
+                existing.copy(
+                    name = name,
+                    providerId = providerId,
+                    apiUrl = apiUrl,
+                    apiModel = apiModel
+                )
+            } else {
+                apiCatalogManager.buildEntry(
+                    id = id,
+                    name = name,
+                    providerId = providerId,
+                    apiUrl = apiUrl,
+                    apiModel = apiModel,
+                    apiKey = apiKey
+                )
+            }
+            settingsRepository.upsertCatalog(entry)
+        }.onFailure {
+            android.util.Log.e("SettingsViewModel", "保存模型配置失败", it)
+            _errorEvent.value = it.message ?: "保存模型配置失败"
         }
-        settingsRepository.upsertCatalog(entry)
     }
 
     fun removeCatalog(entryId: String) = viewModelScope.launch {
-        settingsRepository.removeCatalog(entryId)
+        runCatching {
+            settingsRepository.removeCatalog(entryId)
+        }.onFailure {
+            android.util.Log.e("SettingsViewModel", "删除模型配置失败", it)
+            _errorEvent.value = it.message ?: "删除模型配置失败"
+        }
     }
 
     fun setActiveCatalog(id: String?) = viewModelScope.launch {
-        settingsRepository.setActiveCatalog(id)
+        runCatching {
+            settingsRepository.setActiveCatalog(id)
+        }.onFailure {
+            android.util.Log.e("SettingsViewModel", "切换模型配置失败", it)
+            _errorEvent.value = it.message ?: "切换模型配置失败"
+        }
     }
 
     /** 解密 API Key 用于在编辑器中显示（用户可看到原值）。 */
