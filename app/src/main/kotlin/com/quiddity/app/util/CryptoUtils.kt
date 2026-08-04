@@ -143,7 +143,7 @@ object CryptoUtils {
             // 设备 Keystore 异常（如恢复/迁移后密钥失效）时回退派生密钥，
             // 保证"保存密钥"永不因加密失败而报错
             Log.e(TAG, "当前密钥加密失败，回退派生密钥", t)
-            encryptWith(legacyKey, plain)
+            runCatching { encryptWith(legacyKey, plain) }.getOrDefault("")
         }
     }
 
@@ -167,6 +167,16 @@ object CryptoUtils {
                 throw e
             }
         }
+    }
+
+    /**
+     * 空安全解密：解不开（空 / 被篡改 / 密钥不匹配）时返回 null，不抛异常。
+     * UI 层统一使用本方法，避免到处 try/catch。
+     */
+    fun decryptOrNull(encrypted: String): String? = try {
+        decrypt(encrypted)
+    } catch (_: DecryptFailure) {
+        null
     }
 
     /**

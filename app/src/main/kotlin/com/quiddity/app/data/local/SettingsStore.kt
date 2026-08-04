@@ -150,9 +150,13 @@ class SettingsStore(private val context: Context) {
 
     val data: Flow<AppSettings> = context.appSettingsDataStore.data.map { it.toAppSettings() }
 
-    suspend fun update(block: (AppSettings) -> AppSettings) {
-        // 写入失败向上传播，由 ViewModel 层统一捕获并提示真实错误，不做静默失败
-        context.appSettingsDataStore.edit { prefs ->
+    /**
+     * 写入设置。返回是否写盘成功（失败记录日志，调用方据此提示）。
+     * 统一契约：写失败不抛异常，避免未捕获协程异常导致 App 闪退。
+     */
+    suspend fun update(block: (AppSettings) -> AppSettings): Boolean {
+        return try {
+            context.appSettingsDataStore.edit { prefs ->
             val current = prefs.toAppSettings()
             val next = block(current)
             prefs[Keys.DARK_MODE] = next.darkMode
@@ -190,6 +194,11 @@ class SettingsStore(private val context: Context) {
             }.onFailure {
                 android.util.Log.e("SettingsStore", "序列化 API 名册失败，保留旧值", it)
             }
+            }
+            true
+        } catch (t: Throwable) {
+            android.util.Log.e("SettingsStore", "写入设置失败", t)
+            false
         }
     }
 

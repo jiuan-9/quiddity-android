@@ -204,7 +204,7 @@ class SettingsViewModel(
         apiModel: String,
         apiKey: String
     ) = viewModelScope.launch {
-        runCatching {
+        val result = runCatching {
             // 编辑时未重新输入密钥（表单明文未持久化，进程回收后为空）：保留原密文
             val existing = id?.let { settingsRepository.getCatalogEntry(it) }
             val entry = if (apiKey.isBlank() && existing != null) {
@@ -225,7 +225,13 @@ class SettingsViewModel(
                 )
             }
             settingsRepository.upsertCatalog(entry)
-            _toastEvent.value = "模型配置已保存"
+        }
+        result.onSuccess { ok ->
+            if (ok) {
+                _toastEvent.value = "模型配置已保存"
+            } else {
+                _errorEvent.value = "保存模型配置失败（写入失败）"
+            }
         }.onFailure {
             android.util.Log.e("SettingsViewModel", "保存模型配置失败", it)
             _errorEvent.value = "保存模型配置失败：${it.javaClass.simpleName} ${it.message ?: ""}"
@@ -233,9 +239,10 @@ class SettingsViewModel(
     }
 
     fun removeCatalog(entryId: String) = viewModelScope.launch {
-        runCatching {
-            settingsRepository.removeCatalog(entryId)
-            _toastEvent.value = "模型配置已删除"
+        val result = runCatching { settingsRepository.removeCatalog(entryId) }
+        result.onSuccess { ok ->
+            if (ok) _toastEvent.value = "模型配置已删除"
+            else _errorEvent.value = "删除模型配置失败（写入失败）"
         }.onFailure {
             android.util.Log.e("SettingsViewModel", "删除模型配置失败", it)
             _errorEvent.value = "删除模型配置失败：${it.javaClass.simpleName} ${it.message ?: ""}"
@@ -243,17 +250,15 @@ class SettingsViewModel(
     }
 
     fun setActiveCatalog(id: String?) = viewModelScope.launch {
-        runCatching {
-            settingsRepository.setActiveCatalog(id)
-            _toastEvent.value = "已切换模型配置"
+        val result = runCatching { settingsRepository.setActiveCatalog(id) }
+        result.onSuccess { ok ->
+            if (ok) _toastEvent.value = "已切换模型配置"
+            else _errorEvent.value = "切换模型配置失败（写入失败）"
         }.onFailure {
             android.util.Log.e("SettingsViewModel", "切换模型配置失败", it)
             _errorEvent.value = "切换模型配置失败：${it.javaClass.simpleName} ${it.message ?: ""}"
         }
     }
-
-    /** 解密 API Key 用于在编辑器中显示（用户可看到原值）。 */
-    fun decryptApiKey(entry: ApiCatalogEntry): String = apiCatalogManager.decryptKey(entry)
 
     /** 测试 API 连接（封装 Result，UI 层只关心成功 / 失败）。 */
     suspend fun testApiConnection(

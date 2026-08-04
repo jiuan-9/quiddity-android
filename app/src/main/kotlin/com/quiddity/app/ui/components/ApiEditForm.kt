@@ -106,6 +106,7 @@ fun ApiEditForm(
     initial: ApiCatalogEditFormState?,
     catalogManager: ApiCatalogManager,
     testConnection: suspend (apiUrl: String, apiKey: String, model: String) -> Result<String>,
+    hasStoredKey: Boolean = false,
     onDismiss: () -> Unit,
     onSave: (ApiCatalogEditFormState) -> Unit,
     modifier: Modifier = Modifier
@@ -135,7 +136,10 @@ fun ApiEditForm(
 
     val selectedProvider = catalogManager.findProvider(selectedProviderId)
     val isCustomProvider = selectedProvider.id == "custom"
-    val canSave = name.isNotBlank() && apiUrl.isNotBlank() && apiModel.isNotBlank()
+    // 新建必须填密钥；编辑可留空（保持已保存的密钥不变）
+    val keyRequired = initial == null
+    val canSave = name.isNotBlank() && apiUrl.isNotBlank() && apiModel.isNotBlank() &&
+        (!keyRequired || apiKey.isNotBlank())
     val canTest = apiUrl.isNotBlank() && apiModel.isNotBlank()
 
     val scope = rememberCoroutineScope()
@@ -348,7 +352,7 @@ fun ApiEditForm(
             }
         }
 
-        // 接口密钥（带可见切换）
+        // 接口密钥（带可见切换；编辑时可留空保持原密钥）
         OutlinedTextField(
             value = apiKey,
             onValueChange = { apiKey = it },
@@ -356,9 +360,16 @@ fun ApiEditForm(
             // 占位提示用灰色（与其它输入框一致），避免显示成正文色
             placeholder = {
                 Text(
-                    text = "sk-...",
+                    text = if (hasStoredKey) "已保存密钥，留空保持不变" else "sk-...",
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                 )
+            },
+            supportingText = if (hasStoredKey && apiKey.isBlank()) {
+                { Text("已保存密钥，如需更换请输入新密钥", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            } else if (keyRequired && apiKey.isBlank()) {
+                { Text("新配置必须填写密钥", color = MaterialTheme.colorScheme.error) }
+            } else {
+                null
             },
             singleLine = true,
             visualTransformation = if (keyVisible) VisualTransformation.None else PasswordVisualTransformation(),

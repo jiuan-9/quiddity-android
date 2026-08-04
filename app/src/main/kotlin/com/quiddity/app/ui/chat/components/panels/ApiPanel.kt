@@ -210,17 +210,14 @@ fun ApiEditorPanel(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null
                         ) {
-                            // 编辑时解密已有 Key 并显示
-                            val decryptedKey = if (entry.apiKeyEnc.isNotEmpty()) {
-                                runCatching { catalogManager.decryptKey(entry) }.getOrDefault("")
-                            } else ""
+                            // 设计：编辑不预填解密后的密钥；已存密钥时表单提示"留空保持不变"
                             editingState = ApiCatalogEditFormState(
                                 id = entry.id,
                                 name = entry.name,
                                 providerId = entry.providerId,
                                 apiUrl = entry.apiUrl,
                                 apiModel = entry.apiModel,
-                                apiKey = decryptedKey
+                                apiKey = ""
                             )
                         },
                     color = MaterialTheme.colorScheme.surfaceContainerLow
@@ -273,6 +270,9 @@ fun ApiEditorPanel(
         ApiEditBottomSheet(
             initial = state,
             catalogManager = catalogManager,
+            hasStoredKey = catalog.firstOrNull { it.id == state.id }?.let {
+                catalogManager.hasStoredKey(it)
+            } ?: false,
             testConnection = { url, key, model -> catalogManager.testConnection(url, key, model) },
             onDismiss = { editingState = null },
             onSave = { updated ->

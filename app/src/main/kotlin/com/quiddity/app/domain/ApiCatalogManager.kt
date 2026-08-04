@@ -370,13 +370,14 @@ class ApiCatalogManager(
     /**
      * 解密 API Key。
      *
-     * 空字符串快捷路径：[apiKeyEnc] 为空时直接返回空串，不抛 [DecryptFailure.Empty]。
-     * 调用方无需自行判空。
+     * 空安全：密文为空或解不开（更换设备 / 重装 / 数据被篡改）时返回 null。
+     * UI 层据此显示"已保存密钥"或"密钥不可用需重新输入"，不再抛异常。
      */
-    fun decryptKey(entry: ApiCatalogEntry): String {
-        if (entry.apiKeyEnc.isEmpty()) return ""
-        return CryptoUtils.decrypt(entry.apiKeyEnc)
-    }
+    fun decryptKey(entry: ApiCatalogEntry): String? =
+        CryptoUtils.decryptOrNull(entry.apiKeyEnc)
+
+    /** 该条目是否存有密钥（用于编辑时提示"已保存，可留空保持不变"）。 */
+    fun hasStoredKey(entry: ApiCatalogEntry): Boolean = entry.apiKeyEnc.isNotEmpty()
 
     // ==================== 连接测试 ====================
 

@@ -116,9 +116,15 @@ class SettingsRepository(private val store: SettingsStore) {
         }
     }
 
-    suspend fun update(block: (AppSettings) -> AppSettings) {
-        ensureInitialized()
-        store.update(block)
+    /** 写入设置，返回是否成功（失败不抛异常，避免 App 闪退）。 */
+    suspend fun update(block: (AppSettings) -> AppSettings): Boolean {
+        return try {
+            ensureInitialized()
+            store.update(block)
+        } catch (t: Throwable) {
+            android.util.Log.e("SettingsRepository", "写入设置失败", t)
+            false
+        }
     }
 
     suspend fun setDarkMode(enabled: Boolean) = update { it.copy(darkMode = enabled) }
@@ -213,18 +219,18 @@ class SettingsRepository(private val store: SettingsStore) {
         return QuiddityConstants.GROUP_DEFAULT_TITLE_PREFIX + " " + n
     }
 
-    suspend fun upsertCatalog(entry: ApiCatalogEntry) = update { s ->
+    suspend fun upsertCatalog(entry: ApiCatalogEntry): Boolean = update { s ->
         val list = s.catalog.filterNot { it.id == entry.id } + entry
         s.copy(catalog = list, activeCatalogId = s.activeCatalogId ?: entry.id)
     }
 
-    suspend fun removeCatalog(entryId: String) = update { s ->
+    suspend fun removeCatalog(entryId: String): Boolean = update { s ->
         val list = s.catalog.filterNot { it.id == entryId }
         val active = if (s.activeCatalogId == entryId) list.firstOrNull()?.id else s.activeCatalogId
         s.copy(catalog = list, activeCatalogId = active)
     }
 
-    suspend fun setActiveCatalog(id: String?) = update { it.copy(activeCatalogId = id) }
+    suspend fun setActiveCatalog(id: String?): Boolean = update { it.copy(activeCatalogId = id) }
 
     fun getCatalogEntry(id: String?): ApiCatalogEntry? {
         if (id == null) return null

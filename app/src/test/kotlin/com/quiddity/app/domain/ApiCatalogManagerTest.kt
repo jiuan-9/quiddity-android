@@ -82,6 +82,34 @@ class ApiCatalogManagerTest {
     }
 
     @Test
+    fun `decryptKey returns null when key missing or undecryptable`() {
+        val noKey = manager.buildEntry(
+            id = "e1",
+            name = "无密钥",
+            providerId = "deepseek",
+            apiUrl = "https://api.deepseek.com/v1/chat/completions",
+            apiModel = "deepseek-chat",
+            apiKey = ""
+        )
+        assertEquals(false, manager.hasStoredKey(noKey))
+        assertEquals(null, manager.decryptKey(noKey))
+
+        val withKey = manager.buildEntry(
+            id = "e2",
+            name = "有密钥",
+            providerId = "deepseek",
+            apiUrl = "https://api.deepseek.com/v1/chat/completions",
+            apiModel = "deepseek-chat",
+            apiKey = "sk-test"
+        )
+        assertEquals(true, manager.hasStoredKey(withKey))
+        assertEquals("sk-test", manager.decryptKey(withKey))
+
+        val corrupt = withKey.copy(apiKeyEnc = "corrupt-!!!")
+        assertEquals(null, manager.decryptKey(corrupt))
+    }
+
+    @Test
     fun `all provider models have a tier`() {
         val providerModels = manager.providers
             .filter { it.id != "custom" }

@@ -163,6 +163,14 @@ class CryptoUtilsTest {
     }
 
     @Test
+    fun `decryptOrNull returns null instead of throwing`() {
+        assertEquals("abc", CryptoUtils.decryptOrNull(CryptoUtils.encrypt("abc")))
+        assertEquals(null, CryptoUtils.decryptOrNull(""))
+        assertEquals(null, CryptoUtils.decryptOrNull("not-valid-base64-!!!@@@"))
+        assertEquals(null, CryptoUtils.decryptOrNull("only-iv-without-ciphertext"))
+    }
+
+    @Test
     fun `isDecryptable accepts legacy and current ciphertexts`() {
         val plain = "sk-decryptable-test"
         assertTrue(CryptoUtils.isDecryptable(CryptoUtils.encrypt(plain)))

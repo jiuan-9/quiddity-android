@@ -80,6 +80,7 @@ fun ApiEditBottomSheet(
     initial: ApiCatalogEditFormState?,
     catalogManager: ApiCatalogManager,
     testConnection: suspend (apiUrl: String, apiKey: String, model: String) -> Result<String>,
+    hasStoredKey: Boolean = false,
     onDismiss: () -> Unit,
     onSave: (ApiCatalogEditFormState) -> Unit
 ) {
@@ -165,6 +166,7 @@ fun ApiEditBottomSheet(
                         initial = initial,
                         catalogManager = catalogManager,
                         testConnection = testConnection,
+                        hasStoredKey = hasStoredKey,
                         onDismiss = {
                             visible = false
                             scope.launch {

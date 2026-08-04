@@ -51,7 +51,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -108,7 +107,6 @@ fun ApiCatalogEditor(
     val screenHeight = configuration.screenHeightDp.dp
     val scope = rememberCoroutineScope()
     val apiCatalogManager = remember { ServiceLocator.apiCatalogManager }
-    val context = LocalContext.current
 
     var visible by rememberSaveable { mutableStateOf(false) }
     // 安全规则：不把解密后的 API Key 明文写入 rememberSaveable（可能落盘），
@@ -259,25 +257,16 @@ fun ApiCatalogEditor(
                                 isActive = entry.id == settings.activeCatalogId,
                                 catalogManager = apiCatalogManager,
                                 onClick = {
-                                    // 关键：编辑时把已加密的 Key 解密后预填
-                                    val decryptedKey = runCatching {
-                                        apiCatalogManager.decryptKey(entry)
-                                    }.getOrDefault("")
-                                    // 存有密钥但解不开（重装/换设备导致 Keystore 失效）：明确提示，避免误以为没保存
-                                    if (entry.apiKeyEnc.isNotBlank() && decryptedKey.isBlank()) {
-                                        android.widget.Toast.makeText(
-                                            context,
-                                            "原密钥无法解密（可能更换过设备或重装过应用），请重新输入",
-                                            android.widget.Toast.LENGTH_LONG
-                                        ).show()
-                                    }
+                                    // 设计：编辑不预填解密后的密钥（密钥是秘密，解密展示无必要）。
+                                    // 已存密钥时表单提示"已保存，留空保持不变"；
+                                    // 输入新密钥则替换。避免"解密失败被误认为没保存"。
                                     editingState = ApiCatalogEditFormState(
                                         id = entry.id,
                                         name = entry.name,
                                         providerId = entry.providerId,
                                         apiUrl = entry.apiUrl,
                                         apiModel = entry.apiModel,
-                                        apiKey = decryptedKey
+                                        apiKey = ""
                                     )
                                 },
                                 onSetActive = { viewModel.setActiveCatalog(entry.id) },
@@ -295,6 +284,9 @@ fun ApiCatalogEditor(
         ApiEditBottomSheet(
             initial = state,
             catalogManager = apiCatalogManager,
+            hasStoredKey = settings.catalog.firstOrNull { it.id == state.id }?.let {
+                apiCatalogManager.hasStoredKey(it)
+            } ?: false,
             testConnection = { url, key, model ->
                 apiCatalogManager.testConnection(url, key, model)
             },
@@ -417,6 +409,15 @@ private fun CatalogCard(
                     text = entry.apiUrl,
                     style = MaterialTheme.typography.labelSmall,
                     maxCollapsedLines = 1
+                )
+                Text(
+                    text = if (catalogManager.hasStoredKey(entry)) "密钥：已设置" else "密钥：未设置",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (catalogManager.hasStoredKey(entry)) {
+                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                    } else {
+                        MaterialTheme.colorScheme.error.copy(alpha = 0.7f)
+                    }
                 )
             }
             Box(
