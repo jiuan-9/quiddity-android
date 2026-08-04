@@ -38,6 +38,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -57,6 +58,8 @@ import com.quiddity.app.data.model.Role
 import com.quiddity.app.ui.theme.Motion
 import com.quiddity.app.util.DateUtils
 import com.quiddity.app.util.MarkdownParser
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 /*
  * ============================================================================
  * 开发规范 (Development Specifications)
@@ -195,9 +198,17 @@ fun MessageBubble(
     // ===== 内容渲染分流决策 =====
     // 关键性能优化：流式中用纯文本渲染（避免每 token 都重跑 MarkdownParser.parse），
     // 流结束后用 message.id 作 key 解析一次，之后保持稳定。
-    val blocks = remember(message.id, isStreaming) {
-        if (isStreaming || fullContent.isEmpty()) emptyList()
-        else MarkdownParser.parse(fullContent)
+    // 性能：Markdown 解析移到后台线程（完成消息时不再占主线程掉帧）
+    val blocks by produceState(
+        initialValue = emptyList<MarkdownParser.Block>(),
+        key1 = message.id,
+        key2 = isStreaming
+    ) {
+        value = if (isStreaming || fullContent.isEmpty()) {
+            emptyList()
+        } else {
+            withContext(Dispatchers.Default) { MarkdownParser.parse(fullContent) }
+        }
     }
     val renderMode = remember(blocks, isStreaming, fullContent) {
         when {

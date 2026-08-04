@@ -37,6 +37,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -73,7 +74,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.SpanStyle
@@ -203,8 +203,8 @@ fun HomeScreen(
     }
     val searchScopeConversations = if (currentTab == 0) soloFiltered else groupFiltered
 
-    // ===== 顶部 UI 模式切换"重新加载"动画：纯 alpha 脉动（graphicsLayer 驱动，
-    // 零重组、不整屏闪动，手机端代价极低） =====
+    // ===== 顶部 UI 模式切换"重新加载"动画：柔和缓慢的 alpha 脉动（graphicsLayer 驱动，
+    // 零重组；不降到接近透明，避免闪动/不稳定） =====
     val topBarReloadAlpha = remember { Animatable(1f) }
     var firstTopBarRender by remember { mutableStateOf(true) }
     LaunchedEffect(pagerState.currentPage) {
@@ -214,12 +214,12 @@ fun HomeScreen(
         }
         topBarReloadAlpha.snapTo(1f)
         topBarReloadAlpha.animateTo(
-            0.25f,
-            animationSpec = tween(110, easing = Motion.EasingEmphasizedAccelerate)
+            0.65f,
+            animationSpec = tween(250, easing = Motion.EasingStandard)
         )
         topBarReloadAlpha.animateTo(
             1f,
-            animationSpec = tween(170, easing = Motion.EasingEmphasizedDecelerate)
+            animationSpec = tween(350, easing = Motion.EasingStandard)
         )
     }
 
@@ -475,7 +475,7 @@ fun HomeScreen(
                 exit = fadeOut(tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate))
             ) {
                 ChatTypeTabBar(
-                    currentPage = pagerState.currentPage + pagerState.currentPageOffsetFraction,
+                    pagerState = pagerState,
                     darkMode = settings.darkMode,
                     onSelect = { page ->
                         pagerScope.launch { pagerState.animateScrollToPage(page) }
@@ -1276,13 +1276,7 @@ private fun ChatListPage(
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         items(conversations, key = { it.id }, contentType = { if (isGroup) "group" else "conversation" }) { conv ->
-            val cardModifier = Modifier.animateItem(
-                // 性能：会话每次收到新消息都会按 updatedAt 重排，
-                // 长 placement 动画在手机上明显卡顿——改为原位瞬移，仅保留快速的增删淡入淡出
-                placementSpec = null,
-                fadeInSpec = tween(Motion.DurationShort, easing = Motion.EasingEmphasizedDecelerate),
-                fadeOutSpec = tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate)
-            )
+            // 性能：去掉 per-item 动画修饰（animateItem），滚动/增删零动画开销
             val onTap = {
                 if (isMultiSelect) toggleSelection(conv.id) else onOpenConversation(conv.id)
             }
@@ -1298,7 +1292,6 @@ private fun ChatListPage(
                     memberResolver = memberResolver,
                     onTap = onTap,
                     onLongClick = onLongClick,
-                    modifier = cardModifier,
                     hasListWallpaper = hasListWallpaper
                 )
             } else {
@@ -1308,7 +1301,6 @@ private fun ChatListPage(
                     isSelected = conv.id in selectedIds,
                     onTap = onTap,
                     onLongClick = onLongClick,
-                    modifier = cardModifier,
                     hasListWallpaper = hasListWallpaper
                 )
             }
@@ -1323,15 +1315,11 @@ private fun ChatListPage(
  */
 @Composable
 private fun ChatTypeTabBar(
-    currentPage: Float,
+    pagerState: PagerState,
     darkMode: Boolean,
     onSelect: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // 私聊高亮比例：停在 0 页为 1，滑到 1 页降为 0
-    val soloHighlight = (1f - currentPage).coerceIn(0f, 1f)
-    // 群聊高亮比例：停在 1 页为 1，滑回 0 页降为 0
-    val groupHighlight = currentPage.coerceIn(0f, 1f)
     Row(
         modifier = modifier,
         horizontalArrangement = Arrangement.Center,
@@ -1339,14 +1327,16 @@ private fun ChatTypeTabBar(
     ) {
         ChatTypeTabWord(
             label = "私聊",
-            highlightFraction = soloHighlight,
+            invert = true,
+            pagerState = pagerState,
             darkMode = darkMode,
             onClick = { onSelect(0) }
         )
         Spacer(modifier = Modifier.size(24.dp))
         ChatTypeTabWord(
             label = "群聊",
-            highlightFraction = groupHighlight,
+            invert = false,
+            pagerState = pagerState,
             darkMode = darkMode,
             onClick = { onSelect(1) }
         )
@@ -1356,16 +1346,26 @@ private fun ChatTypeTabBar(
 @Composable
 private fun ChatTypeTabWord(
     label: String,
-    highlightFraction: Float,
+    invert: Boolean,
+    pagerState: PagerState,
     darkMode: Boolean,
     onClick: () -> Unit
 ) {
     val highlightColor = if (darkMode) Color.White else Color.Black
-    val mutedColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
-    val wordColor = lerp(mutedColor, highlightColor, highlightFraction)
     Box(
         modifier = Modifier
             .height(40.dp)
+            // 性能：高亮随滑动进度用 graphicsLayer alpha 在 draw phase 插值，
+            // 滑动过程中零重组（视觉上等效于颜色从灰渐变到高亮）
+            .graphicsLayer {
+                val continuous = pagerState.currentPage + pagerState.currentPageOffsetFraction
+                val fraction = if (invert) {
+                    (1f - continuous).coerceIn(0f, 1f)
+                } else {
+                    continuous.coerceIn(0f, 1f)
+                }
+                alpha = 0.55f + 0.45f * fraction
+            }
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -1377,7 +1377,7 @@ private fun ChatTypeTabWord(
             text = label,
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold,
-            color = wordColor
+            color = highlightColor
         )
     }
 }

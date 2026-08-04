@@ -751,14 +751,6 @@ fun ChatScreen(
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .animateItem(
-                                            placementSpec = tween(
-                                                Motion.DurationShort,
-                                                easing = Motion.EasingStandard
-                                            ),
-                                            fadeInSpec = null,
-                                            fadeOutSpec = null
-                                        )
                                 ) {
                                     if (message.isNotice) {
                                         NoticeBubble(content = message.content)
