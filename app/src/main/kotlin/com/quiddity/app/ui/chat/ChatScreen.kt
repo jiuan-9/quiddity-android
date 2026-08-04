@@ -32,17 +32,22 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Deselect
+import androidx.compose.material.icons.filled.IosShare
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -75,6 +80,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.quiddity.app.data.model.Message
 import com.quiddity.app.data.model.Role
+import com.quiddity.app.domain.ChatRecordSearch
 import com.quiddity.app.ui.chat.components.ChatInputBar
 import com.quiddity.app.ui.chat.components.CompressionProgressDialog
 import com.quiddity.app.ui.chat.components.HamburgerMenu
@@ -85,6 +91,8 @@ import com.quiddity.app.ui.chat.components.TypingIndicator
 import com.quiddity.app.ui.chat.gesture.ChatDragController
 import com.quiddity.app.ui.chat.gesture.detectNativeHorizontalSwipe
 import com.quiddity.app.ui.theme.Motion
+import com.quiddity.app.util.ChatImageExporter
+import com.quiddity.app.util.DateUtils
 import kotlinx.coroutines.launch
 /*
  * ============================================================================
@@ -122,6 +130,7 @@ import kotlinx.coroutines.launch
 fun ChatScreen(
     viewModel: ChatViewModel,
     settingsViewModel: com.quiddity.app.ui.settings.SettingsViewModel,
+    initialMessageId: String? = null,
     onBack: () -> Unit,
     onConversationExit: () -> Unit = {}
 ) {
@@ -157,6 +166,12 @@ fun ChatScreen(
     }
     // 查找聊天记录跳转高亮：记录要定位的消息 id，滚动过去并短暂高亮
     var highlightMessageId by remember { mutableStateOf<String?>(null) }
+
+    // ===== 会话内搜索 =====
+    var searchActive by rememberSaveable { mutableStateOf(false) }
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    // 待跳转定位的消息 id（来自搜索点击或外部跳转）；由自动滚动协程消费
+    var pendingJumpMessageId by remember { mutableStateOf(initialMessageId) }
 
     // 退出组合（返回主页/滑出会话）时通知宿主：无未完结任务立即释放，有任务等完结再释放
     DisposableEffect(Unit) {
@@ -242,9 +257,23 @@ fun ChatScreen(
     var initialScrollDone by rememberSaveable { mutableStateOf(false) }
     var lastSeenMessageId by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(lastMessageId, lastMessageContentLength, isAtBottom) {
+    LaunchedEffect(lastMessageId, lastMessageContentLength, isAtBottom, pendingJumpMessageId) {
         // 当前规则：仅有 isNotice 提示气泡时不触发自动滚动（LazyColumn 未渲染）
         if (messages.none { !it.isNotice }) return@LaunchedEffect
+        // 跳转定位优先：来自搜索点击或外部跳转（首页消息结果）的目标消息
+        val jumpId = pendingJumpMessageId
+        if (jumpId != null) {
+            pendingJumpMessageId = null
+            lastSeenMessageId = lastMessageId
+            initialScrollDone = true
+            val index = messages.indexOfFirst { it.id == jumpId }
+            if (index >= 0) {
+                highlightMessageId = jumpId
+                withFrameNanos { }
+                listState.scrollToItem(index)
+            }
+            return@LaunchedEffect
+        }
         val isNewMessage = lastMessageId != lastSeenMessageId
         lastSeenMessageId = lastMessageId
         if (isNewMessage) {
@@ -321,11 +350,43 @@ fun ChatScreen(
     val scope = rememberCoroutineScope()
     val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }
 
+    // ===== 多选导出长图 =====
+    var exportingImage by remember { mutableStateOf(false) }
+    fun exportSelectedAsImage() {
+        if (selectedMessageIds.isEmpty() || exportingImage) return
+        val conv = conversation ?: return
+        val selected = messages.filter { it.id in selectedMessageIds }
+        exportingImage = true
+        scope.launch {
+            val outcome = runCatching {
+                val file = ChatImageExporter.exportToFile(
+                    context = context,
+                    messages = selected,
+                    aiName = conv.persona.name,
+                    conversationTitle = conv.title
+                )
+                ChatImageExporter.share(context, file)
+            }
+            exportingImage = false
+            outcome.onSuccess { shared ->
+                if (shared) {
+                    Toast.makeText(context, "长图已生成", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "无法打开分享面板", Toast.LENGTH_LONG).show()
+                }
+            }.onFailure { e ->
+                Toast.makeText(context, "生成长图失败：${e.message}", Toast.LENGTH_LONG).show()
+            }
+            exitMultiSelect()
+        }
+    }
+
     val isCompressing = compressionState is CompressionState.Compressing
     // swipeEnabled 不含 !showHamburger：菜单打开时手势保持 enabled，由 ChatDragController
     // 根据 menuOpen 状态区分"右滑关菜单"与"右滑返回"。否则菜单打开后无法滑动关闭，只能系统返回键（卡死根因）。
     // 多选模式下禁用横滑，避免误触退出会话。
-    val swipeEnabled = !isGenerating && rewritingMessageId == null && !isCompressing && !multiSelectMode
+    val swipeEnabled = !isGenerating && rewritingMessageId == null &&
+        !isCompressing && !multiSelectMode && !searchActive
     // rememberUpdatedState：pointerInput 用 Unit key 不重启，通过它读取最新 swipeEnabled，
     // 避免 left-swipe 过程中 showHamburger 翻转导致 pointerInput 重启、手势被打断（左滑卡死根因）。
     val swipeEnabledState = rememberUpdatedState(swipeEnabled)
@@ -343,6 +404,10 @@ fun ChatScreen(
     // 优先级：菜单 BackHandler > 多选模式 > 改写中状态 > 返回手势动画
     BackHandler(enabled = !isGenerating && !showHamburger) {
         when {
+            searchActive -> {
+                searchActive = false
+                searchQuery = ""
+            }
             multiSelectMode -> exitMultiSelect()
             rewritingMessageId != null -> rewritingMessageId = null
             else -> dragController.animateBackAndExit()
@@ -404,6 +469,7 @@ fun ChatScreen(
                     onClose = { exitMultiSelect() },
                     onSelectAll = { toggleSelectAll() },
                     onCopy = { copySelectedMessages() },
+                    onExportImage = ::exportSelectedAsImage,
                     onDelete = { deleteSelectedMessages() }
                 )
             } else {
@@ -452,6 +518,27 @@ fun ChatScreen(
                             .clickable(
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null
+                            ) { searchActive = !searchActive },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Search,
+                            contentDescription = "搜索聊天记录",
+                            tint = if (searchActive) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurface
+                            },
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(RoundedCornerShape(50))
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null
                             ) { dragController.toggleMenu() },
                         contentAlignment = Alignment.Center
                     ) {
@@ -465,12 +552,65 @@ fun ChatScreen(
                 }
             }
 
+            // ===== 会话内搜索条（顶栏搜索图标展开） =====
+            if (searchActive) {
+                ChatSearchBar(
+                    query = searchQuery,
+                    onQueryChange = { searchQuery = it },
+                    onClose = {
+                        searchActive = false
+                        searchQuery = ""
+                    }
+                )
+            }
+
             // ===== 消息列表区域（手势已挪到外层 Box，整屏生效） =====
             Box(
                 modifier = Modifier
                     .weight(1f)
             ) {
                 when {
+                    searchActive && searchQuery.isNotBlank() -> {
+                        val searchResults = remember(messages, searchQuery) {
+                            val q = searchQuery.trim()
+                            if (q.isEmpty()) emptyList()
+                            else ChatRecordSearch.searchResults(
+                                messages.filterNot { it.isNotice },
+                                q
+                            )
+                        }
+                        if (searchResults.isEmpty()) {
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "未找到与“${searchQuery}”相关的消息",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.padding(horizontal = 32.dp)
+                                )
+                            }
+                        } else {
+                            LazyColumn(
+                                modifier = Modifier.fillMaxSize(),
+                                contentPadding = PaddingValues(vertical = 12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                items(searchResults, key = { it.id }) { msg ->
+                                    ChatSearchResultRow(
+                                        message = msg,
+                                        onClick = {
+                                            searchActive = false
+                                            searchQuery = ""
+                                            pendingJumpMessageId = msg.id
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
                     isLoading -> Unit
                     // 当前规则：仅有 isNotice 提示气泡时也视为空对话，保留"让AI先说"按钮
                     messages.none { !it.isNotice } -> Box(
@@ -559,8 +699,8 @@ fun ChatScreen(
                 }
             }
 
-            // 输入栏（多选模式下隐藏）
-            if (!multiSelectMode) {
+            // 输入栏（多选模式 / 会话内搜索时隐藏）
+            if (!multiSelectMode && !searchActive) {
                 ChatInputBar(
                     enterToSend = settings.enterToSend,
                     isGenerating = isGenerating,
@@ -707,9 +847,10 @@ private fun ThinkingBubble(aiAvatarUri: String?) {
 /**
  * 多选模式顶部操作栏。
  *
- * 布局：关闭按钮 | 已选 N 项 | 全选 + 复制 + 删除
+ * 布局：关闭按钮 | 已选 N 项 | 全选 + 复制 + 导出长图 + 删除
  * - 关闭按钮退出多选模式（清空选择）
  * - "全选"图标在已全选时切换为取消全选
+ * - 导出长图把选中消息生成固定浅色长图并弹系统分享
  * - 复制/删除在选中数为 0 时仍可点击但无操作（由调用方判断）
  */
 @Composable
@@ -719,6 +860,7 @@ private fun MultiSelectTopBar(
     onClose: () -> Unit,
     onSelectAll: () -> Unit,
     onCopy: () -> Unit,
+    onExportImage: () -> Unit,
     onDelete: () -> Unit
 ) {
     Row(
@@ -788,6 +930,24 @@ private fun MultiSelectTopBar(
                 imageVector = Icons.Filled.ContentCopy,
                 contentDescription = "复制",
                 tint = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.size(24.dp)
+            )
+        }
+        Box(
+            modifier = Modifier
+                .size(48.dp)
+                .clip(RoundedCornerShape(50))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onExportImage
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Filled.IosShare,
+                contentDescription = "导出长图",
+                tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(24.dp)
             )
         }
@@ -912,4 +1072,132 @@ private fun MessageBubbleItem(
         isSelected = isSelected,
         onSelectToggle = onSelectFinal
     )
+}
+
+/**
+ * 会话内搜索条：输入框 + 清除 + 关闭。
+ * 由顶栏搜索图标展开，点关闭或系统返回键收起。
+ */
+@Composable
+private fun ChatSearchBar(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    onClose: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .clip(RoundedCornerShape(12.dp)),
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        tonalElevation = 0.dp
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Search,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp)
+            )
+            Box(modifier = Modifier.weight(1f)) {
+                if (query.isEmpty()) {
+                    Text(
+                        text = "搜索本会话消息",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                    )
+                }
+                BasicTextField(
+                    value = query,
+                    onValueChange = onQueryChange,
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(
+                        color = MaterialTheme.colorScheme.onSurface
+                    ),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+            if (query.isNotEmpty()) {
+                Icon(
+                    imageVector = Icons.Filled.Clear,
+                    contentDescription = "清除",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .size(20.dp)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = { onQueryChange("") }
+                        )
+                )
+            }
+            Icon(
+                imageVector = Icons.Filled.Close,
+                contentDescription = "关闭搜索",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .size(20.dp)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = onClose
+                    )
+            )
+        }
+    }
+}
+
+/** 会话内搜索结果行：角色 + 内容摘录 + 时间；点击后定位到该消息。 */
+@Composable
+private fun ChatSearchResultRow(
+    message: Message,
+    onClick: () -> Unit
+) {
+    val roleLabel = if (message.role == Role.USER) "我" else "AI"
+    val excerpt = message.content
+        .replace("\n", " ")
+        .trim()
+        .let { if (it.length > 80) it.take(80) + "…" else it }
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick
+            ),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        tonalElevation = 0.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = "$roleLabel：$excerpt",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(modifier = Modifier.size(8.dp))
+            Text(
+                text = DateUtils.formatSearchTime(message.timestamp),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+            )
+        }
+    }
 }

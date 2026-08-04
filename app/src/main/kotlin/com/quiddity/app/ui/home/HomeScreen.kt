@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -68,6 +69,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.quiddity.app.data.model.Conversation
+import com.quiddity.app.domain.GlobalChatSearch
 import com.quiddity.app.ui.components.ConfirmDialog
 import com.quiddity.app.ui.settings.SettingsBottomSheet
 import com.quiddity.app.ui.settings.SettingsViewModel
@@ -107,7 +109,8 @@ fun HomeScreen(
     viewModel: HomeViewModel,
     settingsViewModel: SettingsViewModel,
     userAvatarUri: String?,
-    onOpenConversation: (String) -> Unit
+    onOpenConversation: (String) -> Unit,
+    onOpenMessage: (String, String) -> Unit
 ) {
     val conversations by viewModel.conversations.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
@@ -127,6 +130,20 @@ fun HomeScreen(
     val hasListWallpaper = listWallpaperUri != null
 
     var searchQuery by rememberSaveable { mutableStateOf("") }
+    var messageHits by remember { mutableStateOf<List<GlobalChatSearch.Hit>>(emptyList()) }
+
+    // 全局消息搜索：输入防抖 300ms，首次搜索时懒加载全量消息索引
+    LaunchedEffect(searchQuery) {
+        val q = searchQuery.trim()
+        if (q.isEmpty()) {
+            messageHits = emptyList()
+            return@LaunchedEffect
+        }
+        delay(300)
+        viewModel.ensureMessageIndexLoaded()
+        messageHits = viewModel.searchMessages(q)
+    }
+
     val filteredConversations by remember {
         derivedStateOf {
             if (searchQuery.isBlank()) {
@@ -292,7 +309,9 @@ fun HomeScreen(
             val homeUiState = when {
                 isLoading -> "loading"
                 conversations.isEmpty() -> "empty"
-                filteredConversations.isEmpty() -> "search_empty"
+                searchQuery.isNotBlank() &&
+                    filteredConversations.isEmpty() &&
+                    messageHits.isEmpty() -> "search_empty"
                 else -> "content"
             }
             AnimatedContent(
@@ -315,11 +334,7 @@ fun HomeScreen(
                         SearchEmptyContent(query = searchQuery)
                     }
                     else -> {
-                        LazyColumn(
-                            modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-                            verticalArrangement = Arrangement.spacedBy(16.dp)
-                        ) {
+                        val conversationItems: LazyListScope.() -> Unit = {
                             items(
                                 items = filteredConversations,
                                 key = { it.id },
@@ -359,6 +374,48 @@ fun HomeScreen(
                                     ),
                                     hasListWallpaper = hasListWallpaper
                                 )
+                            }
+                        }
+                        val messageHitItems: LazyListScope.() -> Unit = {
+                            items(
+                                items = messageHits,
+                                key = { it.message.id },
+                                contentType = { "message_hit" }
+                            ) { hit ->
+                                MessageHitRow(
+                                    hit = hit,
+                                    onClick = {
+                                        onOpenMessage(hit.conversationId, hit.message.id)
+                                    }
+                                )
+                            }
+                        }
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            if (searchQuery.isNotBlank()) {
+                                if (filteredConversations.isNotEmpty()) {
+                                    item(
+                                        key = "header_conversations",
+                                        contentType = { "section" }
+                                    ) {
+                                        SectionHeader(text = "会话")
+                                    }
+                                    conversationItems()
+                                }
+                                if (messageHits.isNotEmpty()) {
+                                    item(
+                                        key = "header_messages",
+                                        contentType = { "section" }
+                                    ) {
+                                        SectionHeader(text = "消息")
+                                    }
+                                    messageHitItems()
+                                }
+                            } else {
+                                conversationItems()
                             }
                         }
                     }
@@ -880,11 +937,80 @@ private fun SearchEmptyContent(query: String) {
         contentAlignment = Alignment.Center
     ) {
         Text(
-            text = "未找到与“${query}”相关的会话",
+            text = "未找到与“${query}”相关的会话或消息",
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(horizontal = 32.dp)
         )
+    }
+}
+
+/** 搜索结果分区标题（会话 / 消息）。 */
+@Composable
+private fun SectionHeader(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelLarge,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(vertical = 2.dp)
+    )
+}
+
+/** 全局消息搜索命中行：会话标题 + 角色/内容摘录 + 时间。 */
+@Composable
+private fun MessageHitRow(
+    hit: GlobalChatSearch.Hit,
+    onClick: () -> Unit
+) {
+    val roleLabel = if (hit.message.role == com.quiddity.app.data.model.Role.USER) "我" else "AI"
+    val excerpt = hit.message.content
+        .replace("\n", " ")
+        .trim()
+        .let { if (it.length > 80) it.take(80) + "…" else it }
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick
+            ),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        tonalElevation = 0.dp
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = hit.conversationTitle.ifBlank { "未命名会话" },
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    text = DateUtils.formatSearchTime(hit.message.timestamp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                )
+            }
+            Spacer(modifier = Modifier.size(4.dp))
+            Text(
+                text = "$roleLabel：$excerpt",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
     }
 }

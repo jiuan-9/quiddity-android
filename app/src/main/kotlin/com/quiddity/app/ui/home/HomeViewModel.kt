@@ -3,7 +3,10 @@ package com.quiddity.app.ui.home
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.quiddity.app.data.model.Conversation
+import com.quiddity.app.data.model.Message
 import com.quiddity.app.data.repo.ConversationRepository
+import com.quiddity.app.domain.GlobalChatSearch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -86,6 +89,30 @@ class HomeViewModel(
         viewModelScope.launch {
             conversationRepository.renameConversation(convId, newTitle)
         }
+    }
+
+    // ===== 全局消息搜索 =====
+    // 首次搜索时懒加载全量消息索引并缓存；会话/消息在本次会话内变化不主动刷新，
+    // 数据量小、索引一次性构建，冷启动后首次输入略慢属预期。
+    private val _messageIndex = MutableStateFlow<Map<String, List<Message>>>(emptyMap())
+    private var messageIndexLoaded = false
+
+    /** 确保消息索引已加载（首次搜索时触发，只加载一次）。 */
+    suspend fun ensureMessageIndexLoaded() {
+        if (messageIndexLoaded) return
+        _messageIndex.value = conversationRepository.exportAllMessages()
+        messageIndexLoaded = true
+    }
+
+    /**
+     * 按 [query] 跨会话搜索消息，返回按时间倒序的命中列表。
+     * 调用前需先 [ensureMessageIndexLoaded]。
+     */
+    fun searchMessages(query: String): List<GlobalChatSearch.Hit> {
+        val index = _messageIndex.value
+        if (query.isBlank() || index.isEmpty()) return emptyList()
+        val titles = conversations.value.associate { it.id to it.title }
+        return GlobalChatSearch.searchAll(index, titles, query)
     }
 }
 

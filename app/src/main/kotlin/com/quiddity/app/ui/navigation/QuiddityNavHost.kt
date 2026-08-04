@@ -146,6 +146,9 @@ fun QuiddityNavHost() {
                 userAvatarUri = settings.userAvatarUri,
                 onOpenConversation = { convId ->
                     navController.navigate(QuiddityRoute.Chat.create(convId))
+                },
+                onOpenMessage = { convId, messageId ->
+                    navController.navigate(QuiddityRoute.Chat.create(convId, messageId))
                 }
             )
         }
@@ -155,6 +158,9 @@ fun QuiddityNavHost() {
             arguments = QuiddityRoute.Chat.arguments
         ) { backStackEntry ->
             val convId = backStackEntry.arguments?.getString(QuiddityRoute.Chat.ARG_CONV_ID).orEmpty()
+            val messageId = backStackEntry.arguments
+                ?.getString(QuiddityRoute.Chat.ARG_MESSAGE_ID)
+                ?.takeIf { it.isNotBlank() }
             // 当前规则：ChatViewModel 由 Activity 作用域的宿主按会话 ID 管理。
             // - 退出会话时：无未完结任务（流式/压缩/发送延迟）→ 立即释放；
             // - 有未完结任务 → 等任务完结后再释放；
@@ -196,6 +202,7 @@ fun QuiddityNavHost() {
             ChatScreen(
                 viewModel = chatVm,
                 settingsViewModel = settingsVm,
+                initialMessageId = messageId,
                 onBack = { navController.popBackStack() },
                 onConversationExit = { chatHost.onScreenExit(convId) }
             )
@@ -215,11 +222,18 @@ fun QuiddityNavHost() {
 sealed class QuiddityRoute(val path: String) {
     data object Home : QuiddityRoute("home")
     data object Chat : QuiddityRoute("chat/{convId}") {
-        const val PATTERN = "chat/{convId}"
+        const val PATTERN = "chat/{convId}?messageId={messageId}"
         const val ARG_CONV_ID = "convId"
-        fun create(convId: String) = "chat/$convId"
+        const val ARG_MESSAGE_ID = "messageId"
+        fun create(convId: String, messageId: String? = null) =
+            if (messageId.isNullOrBlank()) "chat/$convId"
+            else "chat/$convId?messageId=$messageId"
         val arguments = listOf(
-            androidx.navigation.navArgument(ARG_CONV_ID) { type = androidx.navigation.NavType.StringType }
+            androidx.navigation.navArgument(ARG_CONV_ID) { type = androidx.navigation.NavType.StringType },
+            androidx.navigation.navArgument(ARG_MESSAGE_ID) {
+                type = androidx.navigation.NavType.StringType
+                nullable = true
+            }
         )
     }
 }
