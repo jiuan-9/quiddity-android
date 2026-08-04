@@ -153,6 +153,16 @@ class CryptoUtilsTest {
     }
 
     @Test
+    fun `public decrypt accepts anything encrypt produced`() {
+        // 契约：encrypt 输出的密文必须能被公开 decrypt 解开
+        // （加密回退派生密钥时，解密同样回退，保证"保存→重新编辑"能解开）
+        val plain = "some-api-key-123456"
+        assertEquals(plain, CryptoUtils.decrypt(CryptoUtils.encrypt(plain)))
+        // 派生密钥加密的密文也要能被公开 decrypt 解开
+        assertEquals(plain, CryptoUtils.decrypt(CryptoUtils.encryptLegacy(plain)))
+    }
+
+    @Test
     fun `isDecryptable accepts legacy and current ciphertexts`() {
         val plain = "sk-decryptable-test"
         assertTrue(CryptoUtils.isDecryptable(CryptoUtils.encrypt(plain)))

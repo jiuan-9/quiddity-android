@@ -162,6 +162,7 @@ fun SettingsBottomSheet(
 ) {
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val settingsError by viewModel.errorEvent.collectAsStateWithLifecycle()
+    val settingsToast by viewModel.toastEvent.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val configuration = LocalConfiguration.current
@@ -209,6 +210,13 @@ fun SettingsBottomSheet(
         settingsError?.let { msg ->
             android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_LONG).show()
             viewModel.consumeError()
+        }
+    }
+
+    LaunchedEffect(settingsToast) {
+        settingsToast?.let { msg ->
+            android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+            viewModel.consumeToast()
         }
     }
 

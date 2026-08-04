@@ -64,6 +64,14 @@ class SettingsViewModel(
         _errorEvent.value = null
     }
 
+    /** 写操作成功提示（如"模型配置已保存"）。 */
+    private val _toastEvent = MutableStateFlow<String?>(null)
+    val toastEvent: StateFlow<String?> = _toastEvent.asStateFlow()
+
+    fun consumeToast() {
+        _toastEvent.value = null
+    }
+
     val settings: StateFlow<AppSettings> = settingsRepository.observeSettings()
         .stateIn(
             scope = viewModelScope,
@@ -217,6 +225,7 @@ class SettingsViewModel(
                 )
             }
             settingsRepository.upsertCatalog(entry)
+            _toastEvent.value = "模型配置已保存"
         }.onFailure {
             android.util.Log.e("SettingsViewModel", "保存模型配置失败", it)
             _errorEvent.value = "保存模型配置失败：${it.javaClass.simpleName} ${it.message ?: ""}"
@@ -226,6 +235,7 @@ class SettingsViewModel(
     fun removeCatalog(entryId: String) = viewModelScope.launch {
         runCatching {
             settingsRepository.removeCatalog(entryId)
+            _toastEvent.value = "模型配置已删除"
         }.onFailure {
             android.util.Log.e("SettingsViewModel", "删除模型配置失败", it)
             _errorEvent.value = "删除模型配置失败：${it.javaClass.simpleName} ${it.message ?: ""}"
@@ -235,6 +245,7 @@ class SettingsViewModel(
     fun setActiveCatalog(id: String?) = viewModelScope.launch {
         runCatching {
             settingsRepository.setActiveCatalog(id)
+            _toastEvent.value = "已切换模型配置"
         }.onFailure {
             android.util.Log.e("SettingsViewModel", "切换模型配置失败", it)
             _errorEvent.value = "切换模型配置失败：${it.javaClass.simpleName} ${it.message ?: ""}"

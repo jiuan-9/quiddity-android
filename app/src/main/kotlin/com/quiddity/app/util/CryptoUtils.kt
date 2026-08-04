@@ -152,8 +152,22 @@ object CryptoUtils {
      *
      * GCM 是带认证的加密，认证失败通常意味着数据被篡改 / 磁盘损坏 / 密钥不匹配。
      * 抛出细分类型的 [DecryptFailure]，调用方按需降级。
+     *
+     * 兼容回退：加密时若 Keystore 异常会回退派生密钥（[encrypt]），
+     * 因此解密遇到当前密钥认证失败时也尝试派生密钥，保证"保存 → 重新编辑"能解开。
      */
-    fun decrypt(encrypted: String): String = decryptWith(currentKey, encrypted)
+    fun decrypt(encrypted: String): String {
+        if (encrypted.isEmpty()) throw DecryptFailure.Empty()
+        return try {
+            decryptWith(currentKey, encrypted)
+        } catch (e: DecryptFailure.AuthenticationFailed) {
+            try {
+                decryptWith(legacyKey, encrypted)
+            } catch (_: DecryptFailure) {
+                throw e
+            }
+        }
+    }
 
     /**
      * 判断密文是否为旧版（固定密钥）加密：当前密钥解不开、但旧密钥能解开。
@@ -162,7 +176,8 @@ object CryptoUtils {
     fun isLegacyEncrypted(encrypted: String): Boolean {
         if (encrypted.isEmpty()) return false
         return try {
-            decrypt(encrypted)
+            // 直接比较当前密钥，避免被 decrypt 的派生密钥回退干扰迁移检测
+            decryptWith(currentKey, encrypted)
             false
         } catch (e: DecryptFailure.AuthenticationFailed) {
             try {
