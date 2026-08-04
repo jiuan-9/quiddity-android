@@ -7,6 +7,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -29,6 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
@@ -146,33 +148,36 @@ private fun GroupMemberAvatar(
 
 /**
  * 头像中央三点加载动画（方案四.1：正在回复显示三点）。
+ * 性能：单帧只更新一个 phase 值并用 Canvas 绘制三个点，避免每帧三个组合动画。
  */
 @Composable
 private fun ThreeDotLoading() {
     val transition = rememberInfiniteTransition(label = "three_dot")
-    Row(
+    val phase by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 900, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "dot_phase"
+    )
+    Canvas(
         modifier = Modifier
             .size(44.dp)
-            .background(Color.Black.copy(alpha = 0.35f), CircleShape),
-        horizontalArrangement = Arrangement.spacedBy(3.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .background(Color.Black.copy(alpha = 0.35f), CircleShape)
     ) {
-        repeat(3) { index ->
-            val alpha by transition.animateFloat(
-                initialValue = 0.2f,
-                targetValue = 1f,
-                animationSpec = infiniteRepeatable(
-                    animation = tween(durationMillis = 600, easing = LinearEasing),
-                    repeatMode = RepeatMode.Reverse
-                ),
-                label = "dot_$index"
-            )
-            Box(
-                modifier = Modifier
-                    .size(6.dp)
-                    .alpha(alpha)
-                    .clip(CircleShape)
-                    .background(Color.White)
+        val dotRadius = 4.dp.toPx()
+        val spacing = 15.dp.toPx()
+        val centerY = size.height / 2f
+        val startX = (size.width - spacing * 2) / 2f
+        for (i in 0 until 3) {
+            val t = (phase + i / 3f) % 1f
+            val dotAlpha = if (t < 0.5f) t * 2f else (1f - t) * 2f
+            drawCircle(
+                color = Color.White.copy(alpha = dotAlpha.coerceIn(0.15f, 1f)),
+                radius = dotRadius,
+                center = Offset(startX + spacing * i, centerY)
             )
         }
     }

@@ -3,6 +3,7 @@ package com.quiddity.app.ui.home
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -71,6 +72,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -200,6 +202,26 @@ fun HomeScreen(
         messageHits.filter { it.conversationId in ids }
     }
     val searchScopeConversations = if (currentTab == 0) soloFiltered else groupFiltered
+
+    // ===== 顶部 UI 模式切换"重新加载"动画：纯 alpha 脉动（graphicsLayer 驱动，
+    // 零重组、不整屏闪动，手机端代价极低） =====
+    val topBarReloadAlpha = remember { Animatable(1f) }
+    var firstTopBarRender by remember { mutableStateOf(true) }
+    LaunchedEffect(pagerState.currentPage) {
+        if (firstTopBarRender) {
+            firstTopBarRender = false
+            return@LaunchedEffect
+        }
+        topBarReloadAlpha.snapTo(1f)
+        topBarReloadAlpha.animateTo(
+            0.25f,
+            animationSpec = tween(110, easing = Motion.EasingEmphasizedAccelerate)
+        )
+        topBarReloadAlpha.animateTo(
+            1f,
+            animationSpec = tween(170, easing = Motion.EasingEmphasizedDecelerate)
+        )
+    }
 
     val deleteIdsSaver = remember {
         androidx.compose.runtime.saveable.Saver<List<String>?, String>(
@@ -341,22 +363,28 @@ fun HomeScreen(
                         hasListWallpaper = hasListWallpaper
                     )
                 } else {
-                    // 模式切换（私聊/群聊）为纯滑动切换，不做顶部淡入淡出，
-                    // 避免切换时出现闪动
-                    HomeTopBar(
-                        userAvatarUri = userAvatarUri,
-                        searchQuery = searchQuery,
-                        onSearchQueryChange = { searchQuery = it },
-                        onSettingsClick = { showSettings = true },
-                        onNewConversation = {
-                            if (pagerState.currentPage == 0) {
-                                viewModel.createConversation()
-                            } else {
-                                showNewGroupDialog = true
-                            }
-                        },
-                        hasListWallpaper = hasListWallpaper
-                    )
+                    // 顶部三个 UI（头像/搜索/新建）在模式切换时做一次快速
+                    // 加载脉动（alpha 0.25→1），表达"重新加载"，不整屏闪动
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .graphicsLayer { alpha = topBarReloadAlpha.value }
+                    ) {
+                        HomeTopBar(
+                            userAvatarUri = userAvatarUri,
+                            searchQuery = searchQuery,
+                            onSearchQueryChange = { searchQuery = it },
+                            onSettingsClick = { showSettings = true },
+                            onNewConversation = {
+                                if (pagerState.currentPage == 0) {
+                                    viewModel.createConversation()
+                                } else {
+                                    showNewGroupDialog = true
+                                }
+                            },
+                            hasListWallpaper = hasListWallpaper
+                        )
+                    }
                 }
             }
 
@@ -406,44 +434,32 @@ fun HomeScreen(
                                 state = pagerState,
                                 modifier = Modifier.fillMaxSize()
                             ) { page ->
-                                AnimatedContent(
-                                    targetState = page,
-                                    transitionSpec = {
-                                        fadeIn(
-                                            tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedDecelerate)
-                                        ) togetherWith fadeOut(
-                                            tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate)
-                                        )
-                                    },
-                                    label = "tab_list_switch"
-                                ) { currentPage ->
-                                    if (currentPage == 0) {
-                                        ChatListPage(
-                                            conversations = soloFiltered,
-                                            isMultiSelect = isMultiSelect,
-                                            selectedIds = selectedIds,
-                                            isGroup = false,
-                                            userAvatarUri = userAvatarUri,
-                                            memberResolver = viewModel::memberConversations,
-                                            toggleSelection = ::toggleSelection,
-                                            syncMultiSelect = ::syncMultiSelect,
-                                            onOpenConversation = onOpenConversation,
-                                            hasListWallpaper = hasListWallpaper
-                                        )
-                                    } else {
-                                        ChatListPage(
-                                            conversations = groupFiltered,
-                                            isMultiSelect = isMultiSelect,
-                                            selectedIds = selectedIds,
-                                            isGroup = true,
-                                            userAvatarUri = userAvatarUri,
-                                            memberResolver = viewModel::memberConversations,
-                                            toggleSelection = ::toggleSelection,
-                                            syncMultiSelect = ::syncMultiSelect,
-                                            onOpenConversation = onOpenConversation,
-                                            hasListWallpaper = hasListWallpaper
-                                        )
-                                    }
+                                if (page == 0) {
+                                    ChatListPage(
+                                        conversations = soloFiltered,
+                                        isMultiSelect = isMultiSelect,
+                                        selectedIds = selectedIds,
+                                        isGroup = false,
+                                        userAvatarUri = userAvatarUri,
+                                        memberResolver = viewModel::memberConversations,
+                                        toggleSelection = ::toggleSelection,
+                                        syncMultiSelect = ::syncMultiSelect,
+                                        onOpenConversation = onOpenConversation,
+                                        hasListWallpaper = hasListWallpaper
+                                    )
+                                } else {
+                                    ChatListPage(
+                                        conversations = groupFiltered,
+                                        isMultiSelect = isMultiSelect,
+                                        selectedIds = selectedIds,
+                                        isGroup = true,
+                                        userAvatarUri = userAvatarUri,
+                                        memberResolver = viewModel::memberConversations,
+                                        toggleSelection = ::toggleSelection,
+                                        syncMultiSelect = ::syncMultiSelect,
+                                        onOpenConversation = onOpenConversation,
+                                        hasListWallpaper = hasListWallpaper
+                                    )
                                 }
                             }
                         }
@@ -1261,8 +1277,10 @@ private fun ChatListPage(
     ) {
         items(conversations, key = { it.id }, contentType = { if (isGroup) "group" else "conversation" }) { conv ->
             val cardModifier = Modifier.animateItem(
-                placementSpec = tween(Motion.DurationLong, easing = Motion.EasingEmphasizedDecelerate),
-                fadeInSpec = tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedDecelerate),
+                // 性能：会话每次收到新消息都会按 updatedAt 重排，
+                // 长 placement 动画在手机上明显卡顿——改为原位瞬移，仅保留快速的增删淡入淡出
+                placementSpec = null,
+                fadeInSpec = tween(Motion.DurationShort, easing = Motion.EasingEmphasizedDecelerate),
                 fadeOutSpec = tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate)
             )
             val onTap = {
