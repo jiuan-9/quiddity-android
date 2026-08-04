@@ -89,37 +89,12 @@ class HomeViewModel(
     }
 
     /**
-     * 创建群聊（方案二.6）：先逐个校验成员（用户名 / AI 名 / API 测试），
-     * 通过的角色加入，未通过的返回通知（可重试），至少 1 个通过才建群。
+     * 创建群聊（需求：与创建私聊一致，先创建会话，成员随后在会话设置-成员管理中添加）。
      */
-    fun createGroup(
-        memberIds: List<String>,
-        title: String?,
-        onDone: (Result<String>, List<String>) -> Unit
-    ) {
+    fun createGroupConversation(onDone: (Result<String>) -> Unit) {
         viewModelScope.launch {
-            val members = memberConversations(memberIds)
-            if (members.isEmpty()) {
-                onDone(Result.failure(IllegalStateException("未选择成员")), emptyList())
-                return@launch
-            }
-            val failures = mutableListOf<String>()
-            val passed = mutableListOf<String>()
-            for (member in members) {
-                val result = conversationRepository.validateGroupMember(member)
-                if (result.isFailure) {
-                    val name = member.persona.name.ifBlank { member.title }
-                    failures += "$name：${result.exceptionOrNull()?.message}"
-                } else {
-                    passed += member.id
-                }
-            }
-            if (passed.isEmpty()) {
-                onDone(Result.failure(IllegalStateException(failures.joinToString("\n"))), failures)
-                return@launch
-            }
-            val group = conversationRepository.createGroupConversation(passed, title)
-            onDone(Result.success(group.id), failures)
+            val group = conversationRepository.createGroupConversation(emptyList(), null)
+            onDone(Result.success(group.id))
         }
     }
 

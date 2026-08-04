@@ -25,7 +25,6 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -53,10 +52,8 @@ import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.RemoveDone
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -93,7 +90,6 @@ import com.quiddity.app.ui.settings.SettingsBottomSheet
 import com.quiddity.app.ui.settings.SettingsViewModel
 import com.quiddity.app.ui.theme.Motion
 import com.quiddity.app.util.DateUtils
-import com.quiddity.app.util.QuiddityConstants
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -142,7 +138,6 @@ fun HomeScreen(
     // ===== 私聊 / 群聊双 Tab（方案十四） =====
     val pagerState = rememberPagerState(pageCount = { 2 })
     val pagerScope = rememberCoroutineScope()
-    var showNewGroupDialog by rememberSaveable { mutableStateOf(false) }
     var showGroupTutorial by rememberSaveable { mutableStateOf(false) }
 
     // 首次进入群聊页弹教程（记录已看过，只弹一次，方案十.9）
@@ -388,7 +383,18 @@ fun HomeScreen(
                                 if (pagerState.currentPage == 0) {
                                     viewModel.createConversation()
                                 } else {
-                                    showNewGroupDialog = true
+                                    // 群聊：与私聊一致先创建会话，进入后经设置-成员管理添加成员
+                                    viewModel.createGroupConversation { result ->
+                                        result.onSuccess { groupId ->
+                                            onOpenConversation(groupId)
+                                        }.onFailure { e ->
+                                            android.widget.Toast.makeText(
+                                                context,
+                                                e.message ?: "创建群聊失败",
+                                                android.widget.Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                    }
                                 }
                             },
                             hasListWallpaper = hasListWallpaper
@@ -549,36 +555,6 @@ fun HomeScreen(
         SettingsBottomSheet(
             viewModel = settingsViewModel,
             onDismiss = { showSettings = false }
-        )
-    }
-
-    if (showNewGroupDialog) {
-        NewGroupDialog(
-            soloConversations = soloConversations,
-            hasApiConfig = settings.catalog.isNotEmpty(),
-            onCreate = { memberIds, title ->
-                viewModel.createGroup(memberIds, title) { result, failures ->
-                    showNewGroupDialog = false
-                    if (failures.isNotEmpty()) {
-                        android.widget.Toast.makeText(
-                            context,
-                            "${failures.size} 个成员未通过校验：\n${failures.joinToString("\n")}",
-                            android.widget.Toast.LENGTH_LONG
-                        ).show()
-                    }
-                    result.fold(
-                        onSuccess = { groupId -> onOpenConversation(groupId) },
-                        onFailure = { e ->
-                            android.widget.Toast.makeText(
-                                context,
-                                e.message ?: "创建群聊失败",
-                                android.widget.Toast.LENGTH_LONG
-                            ).show()
-                        }
-                    )
-                }
-            },
-            onDismiss = { showNewGroupDialog = false }
         )
     }
 
@@ -1535,133 +1511,6 @@ private fun GroupAvatarComposite(
             }
         }
     }
-}
-
-/**
- * 新建群聊弹窗（方案二.6）：从私聊列表勾选 1～3 个成员 → 确定执行 API 测试 →
- * 群名可空（自动编号「新群聊 N」）→ 创建后进入群聊。
- */
-@Composable
-private fun NewGroupDialog(
-    soloConversations: List<Conversation>,
-    hasApiConfig: Boolean,
-    onCreate: (List<String>, String?) -> Unit,
-    onDismiss: () -> Unit
-) {
-    var selected by rememberSaveable { mutableStateOf<Set<String>>(emptySet()) }
-    var groupName by rememberSaveable { mutableStateOf("") }
-
-    fun toggle(id: String) {
-        selected = if (id in selected) selected - id else selected + id
-    }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("新建群聊") },
-        text = {
-            Column {
-                OutlinedTextField(
-                    value = groupName,
-                    onValueChange = { groupName = it },
-                    label = { Text("群名称（可留空）") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(modifier = Modifier.size(8.dp))
-                Text(
-                    text = "选择成员（1~${QuiddityConstants.GROUP_MAX_MEMBERS} 个，确定后执行 API 测试）",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.size(8.dp))
-                LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
-                    items(soloConversations, key = { it.id }) { conv ->
-                        val checked = conv.id in selected
-                        val status = when {
-                            !hasApiConfig -> "API 未配置"
-                            conv.userPersona.name.isBlank() -> "用户名未设置"
-                            conv.persona.name.isBlank() -> "AI 名未设置"
-                            else -> "可加入"
-                        }
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .clickable(
-                                    interactionSource = remember { MutableInteractionSource() },
-                                    indication = null
-                                ) { toggle(conv.id) }
-                                .padding(horizontal = 4.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Checkbox(checked = checked, onCheckedChange = { toggle(conv.id) })
-                            Box(
-                                modifier = Modifier
-                                    .size(36.dp)
-                                    .clip(CircleShape)
-                                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                if (conv.persona.aiAvatarUri != null) {
-                                    AsyncImage(
-                                        model = conv.persona.aiAvatarUri,
-                                        contentDescription = null,
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier.fillMaxSize().clip(CircleShape)
-                                    )
-                                } else {
-                                    Icon(
-                                        imageVector = Icons.Filled.Person,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
-                            }
-                            Spacer(modifier = Modifier.size(10.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = conv.title.ifBlank { "未命名会话" },
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    text = "AI：${conv.persona.name.ifBlank { "未设置" }} · $status",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = if (status == "可加入") {
-                                        MaterialTheme.colorScheme.primary
-                                    } else {
-                                        MaterialTheme.colorScheme.error
-                                    }
-                                )
-                            }
-                        }
-                    }
-                }
-                if (selected.size > QuiddityConstants.GROUP_MAX_MEMBERS) {
-                    Text(
-                        text = "最多选择 ${QuiddityConstants.GROUP_MAX_MEMBERS} 个成员",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(top = 6.dp)
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(
-                enabled = selected.isNotEmpty() && selected.size <= QuiddityConstants.GROUP_MAX_MEMBERS,
-                onClick = { onCreate(selected.toList(), groupName.trim()) }
-            ) {
-                Text("确定")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
-        }
-    )
 }
 
 /**

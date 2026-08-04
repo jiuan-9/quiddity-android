@@ -1485,29 +1485,35 @@ class ChatViewModel(
     }
 
     /**
-     * 添加群聊成员（方案十.5）：逐个校验（用户名 / AI 名 / API 测试），
-     * 通过的角色加入，未通过的返回通知可重试；最多 3 个。
+     * 添加群聊成员（方案十.5 + 需求）：逐个校验（用户名 / AI 名 / API 测试），
+     * 通过的角色加入（头像栏/成员列表显示），未通过的返回 (成员id, 原因) 列表，
+     * 供弹窗按成员重试或配置 API；最多 3 个。
      */
-    fun addGroupMembers(ids: List<String>, onDone: (Result<Unit>, List<String>) -> Unit) {
+    fun addGroupMembers(ids: List<String>, onDone: (Result<Unit>, List<Pair<String, String>>) -> Unit) {
         val group = conversation.value ?: return
         if (!isGroup()) return
         viewModelScope.launch {
             val current = group.memberConversationIds
             val newIds = ids.filter { it !in current }
-            val failures = mutableListOf<String>()
+            val failures = mutableListOf<Pair<String, String>>()
             val passed = mutableListOf<String>()
             for (id in newIds) {
                 val member = conversationRepository.getConversation(id) ?: continue
                 val result = conversationRepository.validateGroupMember(member)
                 if (result.isFailure) {
                     val name = member.persona.name.ifBlank { member.title }
-                    failures += "$name：${result.exceptionOrNull()?.message}"
+                    failures += id to "${result.exceptionOrNull()?.message ?: "校验失败"}（$name）"
                 } else {
                     passed += id
                 }
             }
             if (passed.isEmpty()) {
-                onDone(Result.failure(IllegalStateException(failures.joinToString("\n"))), failures)
+                onDone(
+                    Result.failure(IllegalStateException(
+                        failures.joinToString("\n") { (_, reason) -> reason }
+                    )),
+                    failures
+                )
                 return@launch
             }
             val target = (current + passed).distinct()
@@ -1520,6 +1526,16 @@ class ChatViewModel(
             }
             conversationRepository.updateConversation(group.copy(memberConversationIds = target))
             onDone(Result.success(Unit), failures)
+        }
+    }
+
+    /**
+     * 为群聊成员（私聊会话）设置模型配置条目（null = 使用全局激活配置）。
+     */
+    fun setMemberApi(memberId: String, catalogId: String?) {
+        val member = conversationRepository.getConversation(memberId) ?: return
+        viewModelScope.launch {
+            conversationRepository.updateConversation(member.copy(apiCatalogId = catalogId))
         }
     }
 

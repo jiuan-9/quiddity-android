@@ -104,6 +104,7 @@ import com.quiddity.app.ui.chat.components.panels.TokenStatsPanel
 import com.quiddity.app.ui.chat.components.panels.UserPersonaPanel
 import com.quiddity.app.ui.chat.components.panels.WallpaperPanel
 import com.quiddity.app.ui.components.ActiveMessagePermissionCard
+import com.quiddity.app.ui.components.ApiEditBottomSheet
 import com.quiddity.app.ui.components.ApiCatalogEditFormState
 import com.quiddity.app.ui.components.ConfirmDialog
 import com.quiddity.app.util.DateUtils
@@ -1984,8 +1985,26 @@ private fun GroupContextLimitPanel(
 }
 
 /**
- * 群聊成员管理面板（方案十.4-5）：显示当前成员头像；满 3 个显示 3 个，
- * 不足 3 个显示成员 + 加号按钮（添加成员）；移除后历史消息保留。
+ * 成员添加流程状态机（多弹窗稳定切换：同一时刻只显示一个弹窗；
+ * 新增 API 底部面板作为覆盖层叠加在配置弹窗之上）。
+ */
+private sealed interface MemberAddFlow {
+    data object None : MemberAddFlow
+    data object Selecting : MemberAddFlow
+    data class Result(
+        val passedCount: Int,
+        val failed: List<Pair<Conversation, String>>
+    ) : MemberAddFlow
+    data class Config(
+        val member: Conversation,
+        val failed: List<Pair<Conversation, String>>
+    ) : MemberAddFlow
+}
+
+/**
+ * 群聊成员管理面板（方案十.4-5 + 需求）：
+ * 显示当前成员头像（通过的加入后立即显示）；不足 3 个显示加号按钮（添加成员）；
+ * 单个 API 有问题时通过的正常加入，未通过的进入弹窗重试/配置（可现场新增 API）。
  */
 @Composable
 private fun GroupMemberManagePanel(
@@ -1994,16 +2013,74 @@ private fun GroupMemberManagePanel(
     settings: com.quiddity.app.data.model.AppSettings,
     onBack: () -> Unit
 ) {
-    var showAddDialog by remember { mutableStateOf(false) }
+    var addFlow by remember { mutableStateOf<MemberAddFlow>(MemberAddFlow.None) }
+    var showApiCreateSheet by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val conversationRepo = com.quiddity.app.di.ServiceLocator.conversationRepository
+    val settingsRepo = com.quiddity.app.di.ServiceLocator.settingsRepository
+    val apiCatalogManager = com.quiddity.app.di.ServiceLocator.apiCatalogManager
+
     val members = remember(group.memberConversationIds) {
         group.memberConversationIds.mapNotNull { id ->
-            com.quiddity.app.di.ServiceLocator.conversationRepository.getConversation(id)
+            conversationRepo.getConversation(id)
         }
     }
     val soloList = remember(settings.catalog) {
-        com.quiddity.app.di.ServiceLocator.conversationRepository.conversations.value
+        conversationRepo.conversations.value
             .filter { it.type == ConversationType.SOLO }
+    }
+
+    /** 提交添加：通过的正常加入（显示头像），未通过的进入结果弹窗。 */
+    fun submitAdd(ids: List<String>) {
+        if (ids.isEmpty()) {
+            addFlow = MemberAddFlow.None
+            return
+        }
+        viewModel.addGroupMembers(ids) { _, failures ->
+            val failedPairs = failures.mapNotNull { (id, reason) ->
+                conversationRepo.getConversation(id)?.let { it to reason }
+            }
+            val passedCount = ids.size - failures.size
+            if (failures.isEmpty()) {
+                android.widget.Toast.makeText(
+                    context,
+                    "已添加 $passedCount 个成员",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+                addFlow = MemberAddFlow.None
+            } else {
+                addFlow = MemberAddFlow.Result(passedCount, failedPairs)
+            }
+        }
+    }
+
+    /** 配置成员 API 后重新校验；通过则从失败列表移除。 */
+    fun configureMemberAndRevalidate(member: Conversation, catalogId: String?) {
+        scope.launch {
+            val updated = member.copy(apiCatalogId = catalogId)
+            conversationRepo.updateConversation(updated)
+            val result = conversationRepo.validateGroupMember(updated)
+            if (result.isSuccess) {
+                android.widget.Toast.makeText(
+                    context,
+                    "${member.persona.name.ifBlank { "成员" }} 配置成功，已加入",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+                val remaining = (addFlow as? MemberAddFlow.Config)
+                    ?.failed
+                    ?.filterNot { it.first.id == member.id }
+                    .orEmpty()
+                addFlow = if (remaining.isEmpty()) MemberAddFlow.None
+                else MemberAddFlow.Result(0, remaining)
+            } else {
+                android.widget.Toast.makeText(
+                    context,
+                    "仍未通过：${result.exceptionOrNull()?.message ?: "校验失败"}",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
     }
 
     Column(
@@ -2114,7 +2191,7 @@ private fun GroupMemberManagePanel(
                             .clickable(
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null
-                            ) { showAddDialog = true }
+                            ) { addFlow = MemberAddFlow.Selecting }
                             .padding(vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -2143,33 +2220,257 @@ private fun GroupMemberManagePanel(
         }
     }
 
-    if (showAddDialog) {
-        AddGroupMembersDialog(
-            soloList = soloList,
-            currentIds = group.memberConversationIds,
-            hasApiConfig = settings.catalog.isNotEmpty(),
-            onConfirm = { ids ->
-                viewModel.addGroupMembers(ids) { result, failures ->
-                    showAddDialog = false
-                    if (failures.isNotEmpty()) {
-                        android.widget.Toast.makeText(
-                            context,
-                            "${failures.size} 个成员未通过校验：\n${failures.joinToString("\n")}",
-                            android.widget.Toast.LENGTH_LONG
-                        ).show()
+    when (val flow = addFlow) {
+        is MemberAddFlow.Selecting -> {
+            AddGroupMembersDialog(
+                soloList = soloList,
+                currentIds = group.memberConversationIds,
+                hasApiConfig = settings.catalog.isNotEmpty(),
+                onConfirm = { ids -> submitAdd(ids) },
+                onDismiss = { addFlow = MemberAddFlow.None }
+            )
+        }
+        is MemberAddFlow.Result -> {
+            MemberAddResultDialog(
+                passedCount = flow.passedCount,
+                failed = flow.failed,
+                onRetry = { submitAdd(flow.failed.map { it.first.id }) },
+                onConfig = { member ->
+                    addFlow = MemberAddFlow.Config(member, flow.failed)
+                },
+                onDone = { addFlow = MemberAddFlow.None }
+            )
+        }
+        is MemberAddFlow.Config -> {
+            MemberApiConfigDialog(
+                member = flow.member,
+                catalog = settings.catalog,
+                currentId = flow.member.apiCatalogId,
+                onSelect = { catalogId -> configureMemberAndRevalidate(flow.member, catalogId) },
+                onAddNew = { showApiCreateSheet = true },
+                onRetry = {
+                    scope.launch {
+                        val updated = conversationRepo.getConversation(flow.member.id)
+                            ?: return@launch
+                        val result = conversationRepo.validateGroupMember(updated)
+                        if (result.isSuccess) {
+                            android.widget.Toast.makeText(
+                                context,
+                                "${updated.persona.name.ifBlank { "成员" }} 校验通过，已加入",
+                                android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                            val remaining = flow.failed.filterNot { it.first.id == updated.id }
+                            addFlow = if (remaining.isEmpty()) MemberAddFlow.None
+                            else MemberAddFlow.Result(0, remaining)
+                        } else {
+                            android.widget.Toast.makeText(
+                                context,
+                                "仍未通过：${result.exceptionOrNull()?.message ?: "校验失败"}",
+                                android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                        }
                     }
-                    result.onFailure { e ->
-                        android.widget.Toast.makeText(
-                            context,
-                            e.message ?: "添加成员失败",
-                            android.widget.Toast.LENGTH_LONG
-                        ).show()
-                    }
-                }
+                },
+                onBack = { addFlow = MemberAddFlow.Result(0, flow.failed) }
+            )
+        }
+        else -> Unit
+    }
+
+    // 新增模型配置底部面板（叠加在配置弹窗之上，保存后回到配置弹窗继续选择）
+    if (showApiCreateSheet) {
+        ApiEditBottomSheet(
+            initial = null,
+            catalogManager = apiCatalogManager,
+            testConnection = { url, key, model ->
+                apiCatalogManager.testConnection(url, key, model)
             },
-            onDismiss = { showAddDialog = false }
+            onDismiss = { showApiCreateSheet = false },
+            onSave = { state ->
+                val entry = apiCatalogManager.buildEntry(
+                    id = state.id,
+                    name = state.name,
+                    providerId = state.providerId,
+                    apiUrl = state.apiUrl,
+                    apiModel = state.apiModel,
+                    apiKey = state.apiKey
+                )
+                scope.launch { settingsRepo.upsertCatalog(entry) }
+                showApiCreateSheet = false
+            }
         )
     }
+}
+
+/**
+ * 成员添加结果弹窗（需求）：通过的已加入并显示头像；未通过的逐条列出原因，
+ * 可整体重试或对单个成员进入配置。
+ */
+@Composable
+private fun MemberAddResultDialog(
+    passedCount: Int,
+    failed: List<Pair<Conversation, String>>,
+    onRetry: () -> Unit,
+    onConfig: (Conversation) -> Unit,
+    onDone: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDone,
+        title = { Text("添加成员结果") },
+        text = {
+            Column {
+                Text(
+                    text = if (passedCount > 0) "已加入 $passedCount 个成员（头像已显示）" else "没有成员通过校验",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                if (failed.isNotEmpty()) {
+                    Spacer(modifier = Modifier.size(10.dp))
+                    Text(
+                        text = "以下 ${failed.size} 个未通过：",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                    Spacer(modifier = Modifier.size(6.dp))
+                    LazyColumn(modifier = Modifier.heightIn(max = 240.dp)) {
+                        items(failed, key = { it.first.id }) { (member, reason) ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = member.persona.name.ifBlank { member.title },
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = reason,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                }
+                                TextButton(onClick = { onConfig(member) }) {
+                                    Text("配置", color = MaterialTheme.colorScheme.primary)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDone) { Text("完成") }
+        },
+        dismissButton = {
+            if (failed.isNotEmpty()) {
+                TextButton(onClick = onRetry) { Text("重试") }
+            }
+        }
+    )
+}
+
+/**
+ * 成员模型配置弹窗（需求：未配置 API 的成员可直接在此页面配置）。
+ * 选择已有配置 / 使用默认（跟随全局）/ 新增配置；配置后自动重新校验。
+ */
+@Composable
+private fun MemberApiConfigDialog(
+    member: Conversation,
+    catalog: List<com.quiddity.app.data.model.ApiCatalogEntry>,
+    currentId: String?,
+    onSelect: (String?) -> Unit,
+    onAddNew: () -> Unit,
+    onRetry: () -> Unit,
+    onBack: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onBack,
+        title = { Text("配置 ${member.persona.name.ifBlank { "成员" }} 的模型") },
+        text = {
+            Column {
+                Text(
+                    text = "成员回复使用各自私聊的模型配置，选择后自动重新校验：",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.size(8.dp))
+                LazyColumn(modifier = Modifier.heightIn(max = 300.dp)) {
+                    items(catalog, key = { it.id }) { entry ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null
+                                ) { onSelect(entry.id) }
+                                .padding(horizontal = 4.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            androidx.compose.material3.RadioButton(
+                                selected = entry.id == currentId,
+                                onClick = { onSelect(entry.id) }
+                            )
+                            Spacer(modifier = Modifier.size(8.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = entry.name,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = entry.apiModel,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                    item(key = "use_default") {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null
+                                ) { onSelect(null) }
+                                .padding(horizontal = 4.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            androidx.compose.material3.RadioButton(
+                                selected = currentId == null,
+                                onClick = { onSelect(null) }
+                            )
+                            Spacer(modifier = Modifier.size(8.dp))
+                            Text(
+                                text = "使用默认（跟随全局激活配置）",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                    item(key = "add_new") {
+                        TextButton(
+                            onClick = onAddNew,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("+ 新增模型配置")
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onBack) { Text("返回") }
+        },
+        dismissButton = {
+            TextButton(onClick = onRetry) { Text("重试") }
+        }
+    )
 }
 
 /**
