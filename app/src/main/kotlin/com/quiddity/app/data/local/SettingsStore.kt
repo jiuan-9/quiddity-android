@@ -102,6 +102,9 @@ class SettingsStore(private val context: Context) {
         val FONT_SCALE = floatPreferencesKey("font_scale")
         val PROACTIVE_MESSAGE_ENABLED = booleanPreferencesKey("proactive_message_enabled")
         val PROACTIVE_MESSAGE_LAST_RESET_DATE = stringPreferencesKey("proactive_message_last_reset_date")
+        val GROUP_TUTORIAL_SEEN = booleanPreferencesKey("group_tutorial_seen")
+        val SOLO_CHAT_COUNTER = intPreferencesKey("solo_chat_counter")
+        val GROUP_CHAT_COUNTER = intPreferencesKey("group_chat_counter")
     }
 
     /** 从 Preferences 还原 [AppSettings]，缺省值统一来自 [AppSettings.Default]。 */
@@ -128,7 +131,10 @@ class SettingsStore(private val context: Context) {
             fontScale = this[Keys.FONT_SCALE] ?: d.fontScale,
             proactiveMessageEnabled = this[Keys.PROACTIVE_MESSAGE_ENABLED] ?: d.proactiveMessageEnabled,
             proactiveMessageLastResetDate =
-                this[Keys.PROACTIVE_MESSAGE_LAST_RESET_DATE] ?: d.proactiveMessageLastResetDate
+                this[Keys.PROACTIVE_MESSAGE_LAST_RESET_DATE] ?: d.proactiveMessageLastResetDate,
+            groupTutorialSeen = this[Keys.GROUP_TUTORIAL_SEEN] ?: d.groupTutorialSeen,
+            soloChatCounter = this[Keys.SOLO_CHAT_COUNTER] ?: d.soloChatCounter,
+            groupChatCounter = this[Keys.GROUP_CHAT_COUNTER] ?: d.groupChatCounter
         )
     }
 
@@ -159,6 +165,9 @@ class SettingsStore(private val context: Context) {
             prefs[Keys.FONT_SCALE] = next.fontScale
             prefs[Keys.PROACTIVE_MESSAGE_ENABLED] = next.proactiveMessageEnabled
             prefs[Keys.PROACTIVE_MESSAGE_LAST_RESET_DATE] = next.proactiveMessageLastResetDate
+            prefs[Keys.GROUP_TUTORIAL_SEEN] = next.groupTutorialSeen
+            prefs[Keys.SOLO_CHAT_COUNTER] = next.soloChatCounter
+            prefs[Keys.GROUP_CHAT_COUNTER] = next.groupChatCounter
             // JSON 序列化失败不应让整个 edit 事务失败；失败时记录到 logcat。
             runCatching {
                 json.encodeToString(

@@ -279,7 +279,15 @@ data class Conversation(
     /**
      * 群聊小本本（成员视角，6.7；1.3.0 仅预留字段）。
      */
-    val groupMemory: String = ""
+    val groupMemory: String = "",
+    /**
+     * 群聊上下文条数 N（仅 type=GROUP 使用；默认 50，范围 1～200）。
+     */
+    val groupContextLimit: Int = QuiddityConstants.GROUP_DEFAULT_CONTEXT_LIMIT,
+    /**
+     * 群聊停止模式（仅 type=GROUP 使用）：A=只停止当前、B=清空整个队列（默认）。
+     */
+    val stopMode: String = QuiddityConstants.GROUP_DEFAULT_STOP_MODE
 )
 
 /**
@@ -409,7 +417,19 @@ data class AppSettings(
      * - 若不同，将所有会话时间库的 done 重置为 pending
      * - 空字符串表示从未重置过
      */
-    val proactiveMessageLastResetDate: String = ""
+    val proactiveMessageLastResetDate: String = "",
+    /**
+     * 群聊教程弹窗是否已看过（首次进入群聊模式列表页弹一次，方案十.9）。
+     */
+    val groupTutorialSeen: Boolean = false,
+    /**
+     * 私聊默认名计数器：新会话 1、2、3…，删除不补号（方案二.4）。
+     */
+    val soloChatCounter: Int = 0,
+    /**
+     * 群聊默认名计数器：新群聊 1、2、3…，删除不补号（方案二.4）。
+     */
+    val groupChatCounter: Int = 0
 ) {
     companion object {
         val Default = AppSettings()

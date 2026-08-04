@@ -97,6 +97,27 @@ object QuiddityConstants {
     /** v1 群聊人数上限建议（5.2）。 */
     const val GROUP_MEMBER_LIMIT = 4
 
+    // ===== 群聊 =====
+    /** 群聊上下文条数默认值（方案六.2：最近 N 条，默认 50）。 */
+    const val GROUP_DEFAULT_CONTEXT_LIMIT = 50
+    /** 群聊上下文条数下界。 */
+    const val GROUP_MIN_CONTEXT_LIMIT = 1
+    /** 群聊上下文条数上界。 */
+    const val GROUP_MAX_CONTEXT_LIMIT = 200
+    /** 群聊 AI 成员数量上限（方案二.2：最多 3 个 LLM 成员）。 */
+    const val GROUP_MAX_MEMBERS = 3
+    /** 成员回复失败重试次数（方案十三.1：重试 5 次）。 */
+    const val GROUP_RETRY_COUNT = 5
+    /** 停止模式 A：只停止当前正在回复的成员（方案四.7）。 */
+    const val GROUP_STOP_MODE_A = "A"
+    /** 停止模式 B：停止时同时清空整个队列（默认，方案四.7）。 */
+    const val GROUP_STOP_MODE_B = "B"
+    const val GROUP_DEFAULT_STOP_MODE = GROUP_STOP_MODE_B
+    /** 私聊默认名前缀（新会话 1、2、3…，方案二.4）。 */
+    const val SOLO_DEFAULT_TITLE_PREFIX = "新会话"
+    /** 群聊默认名前缀（新群聊 1、2、3…，方案二.4）。 */
+    const val GROUP_DEFAULT_TITLE_PREFIX = "新群聊"
+
     // ===== 快速设定 =====
     /** 快速设定的 max_tokens 上限（全面档 5000 汉字，按 ~1.6 token/字 预留余量）。 */
     const val QUICK_SETUP_MAX_TOKENS = 8_000

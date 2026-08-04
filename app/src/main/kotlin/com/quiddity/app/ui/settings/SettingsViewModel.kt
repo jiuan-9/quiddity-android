@@ -153,6 +153,17 @@ class SettingsViewModel(
         settingsRepository.setProactiveMessageEnabled(enabled)
     }
 
+    /** 群聊教程弹窗已看标记（首次进入群聊列表页弹一次后置 true）。 */
+    fun setGroupTutorialSeen(seen: Boolean) = viewModelScope.launch {
+        settingsRepository.setGroupTutorialSeen(seen)
+    }
+
+    /** 下一个群聊默认名（新群聊 N）。 */
+    suspend fun nextGroupTitle(): String = settingsRepository.nextGroupTitle()
+
+    /** 下一个私聊默认名（新会话 N）。 */
+    suspend fun nextSoloTitle(): String = settingsRepository.nextSoloTitle()
+
     fun setFontScale(value: Float) = viewModelScope.launch {
         settingsRepository.setFontScale(value)
     }

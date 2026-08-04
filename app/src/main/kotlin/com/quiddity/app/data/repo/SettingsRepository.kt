@@ -4,6 +4,7 @@ import com.quiddity.app.data.local.SettingsStore
 import com.quiddity.app.data.model.AppSettings
 import com.quiddity.app.data.model.ApiCatalogEntry
 import com.quiddity.app.util.CryptoUtils
+import com.quiddity.app.util.QuiddityConstants
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -192,6 +193,24 @@ class SettingsRepository(private val store: SettingsStore) {
 
     suspend fun setProactiveMessageLastResetDate(date: String) = update {
         it.copy(proactiveMessageLastResetDate = date)
+    }
+
+    suspend fun setGroupTutorialSeen(seen: Boolean) = update {
+        it.copy(groupTutorialSeen = seen)
+    }
+
+    /** 下一个私聊默认名（新会话 N），计数器递增、删除不补号。 */
+    suspend fun nextSoloTitle(): String {
+        val n = currentSnapshot().soloChatCounter + 1
+        update { it.copy(soloChatCounter = n) }
+        return QuiddityConstants.SOLO_DEFAULT_TITLE_PREFIX + " " + n
+    }
+
+    /** 下一个群聊默认名（新群聊 N），计数器递增、删除不补号。 */
+    suspend fun nextGroupTitle(): String {
+        val n = currentSnapshot().groupChatCounter + 1
+        update { it.copy(groupChatCounter = n) }
+        return QuiddityConstants.GROUP_DEFAULT_TITLE_PREFIX + " " + n
     }
 
     suspend fun upsertCatalog(entry: ApiCatalogEntry) = update { s ->
