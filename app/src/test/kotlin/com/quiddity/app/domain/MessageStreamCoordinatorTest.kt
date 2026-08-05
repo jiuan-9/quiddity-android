@@ -74,6 +74,19 @@ class MessageStreamCoordinatorTest {
     }
 
     @Test
+    fun `action bracket followed by speech keeps both messages`() {
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("（把脸埋在你胸口，声音闷闷的）")
+        coord.accept("我真的好想你。")
+        val contents = coord.snapshot().map { it.content }
+        assertEquals(
+            listOf("（把脸埋在你胸口，声音闷闷的）", "我真的好想你。"),
+            contents,
+            "动作+台词连续流不应丢字：$contents"
+        )
+    }
+
+    @Test
     fun `single chinese period splits into one completed message`() {
         val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
         val signals = coord.accept("你好。")
