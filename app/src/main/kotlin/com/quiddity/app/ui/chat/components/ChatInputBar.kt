@@ -38,7 +38,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 /*
@@ -82,9 +85,21 @@ fun ChatInputBar(
     onTextChange: ((String) -> Unit)? = null,
     isCompressing: Boolean = false,
     // 输入框容器内的顶部内容（群聊成员头像栏，随输入框一起动）
-    header: (@Composable () -> Unit)? = null
+    header: (@Composable () -> Unit)? = null,
+    maxLines: Int = 4,
+    maxFieldHeight: Dp? = null,
+    onContentHeightChanged: ((Int) -> Unit)? = null
 ) {
     var text by rememberSaveable { mutableStateOf("") }
+
+    val density = LocalDensity.current
+    val effectiveMaxLines = if (maxFieldHeight != null) {
+        val lineHeightPx = with(density) { MaterialTheme.typography.bodyMedium.lineHeight.roundToPx() }
+        val availablePx = with(density) { (maxFieldHeight - 24.dp).roundToPx() }
+        (availablePx / lineHeightPx).coerceAtLeast(1)
+    } else {
+        maxLines
+    }
 
     fun trySend() {
         if (!enabled) return
@@ -114,6 +129,7 @@ fun ChatInputBar(
                         MaterialTheme.colorScheme.surfaceContainerLow
                     }
                 )
+                .onSizeChanged { onContentHeightChanged?.invoke(it.height) }
         ) {
             if (header != null) {
                 Box(
@@ -137,7 +153,7 @@ fun ChatInputBar(
                     enabled = enabled,
                     modifier = Modifier
                         .weight(1f)
-                        .heightIn(min = 48.dp, max = 140.dp),
+                        .heightIn(min = 48.dp, max = maxFieldHeight ?: 140.dp),
                     placeholder = {
                         Text(
                             text = "输入消息…",
@@ -145,7 +161,7 @@ fun ChatInputBar(
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                         )
                     },
-                    maxLines = 4,
+                    maxLines = effectiveMaxLines,
                     colors = TextFieldDefaults.colors(
                         focusedContainerColor = Color.Transparent,
                         unfocusedContainerColor = Color.Transparent,

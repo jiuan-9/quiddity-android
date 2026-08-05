@@ -63,6 +63,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -312,6 +313,8 @@ fun ChatScreen(
     }
     val density = LocalDensity.current
     val imeBottom = imeHeight.floatValue
+    // 群聊输入栏整体内容高度（含成员头像栏），用于换算私聊输入框可容纳行数
+    var groupInputBarContentHeightPx by remember { mutableIntStateOf(0) }
     LaunchedEffect(imeHeight.floatValue) {
         val current = imeHeight.floatValue
         if (current == lastImeHeight) return@LaunchedEffect
@@ -918,6 +921,17 @@ fun ChatScreen(
                         transparent = wallpaperUri != null,
                         onTextChange = { text -> viewModel.updateInputText(text) },
                         isCompressing = isCompressing,
+                        maxLines = if (isGroupChat) 2 else 4,
+                        maxFieldHeight = if (!isGroupChat && groupInputBarContentHeightPx > 0) {
+                            with(density) { (groupInputBarContentHeightPx.toDp() - 16.dp) }
+                        } else {
+                            null
+                        },
+                        onContentHeightChanged = if (isGroupChat) {
+                            { px -> groupInputBarContentHeightPx = px }
+                        } else {
+                            null
+                        },
                         // 群聊成员头像栏（方案十一：并入输入框容器、靠左、随键盘一起动）
                         header = if (isGroupChat) {
                             {
