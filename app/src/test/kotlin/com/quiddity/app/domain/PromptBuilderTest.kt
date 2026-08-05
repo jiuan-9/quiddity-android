@@ -317,4 +317,23 @@ class PromptBuilderTest {
         assertEquals("小明：早上好", labeled[0].content)
         assertEquals("小B：你好呀", labeled[1].content)
     }
+
+    // ============================================================
+    // 对话纪律（回复认知 + 台词完整性）
+    // ============================================================
+
+    @Test
+    fun `system prompt includes reply discipline exactly once and at top`() {
+        val system = PromptBuilder.buildSystemPrompt(conv())
+        assertTrue(system.startsWith("【回复纪律（最高优先级）】"), system.take(40))
+        assertEquals(1, "【回复纪律（最高优先级）】".toRegex().findAll(system).count())
+        assertTrue(system.contains("只以人设身份对用户说话"))
+        assertTrue(system.contains("不要回答自己上一句提出的问题"))
+        assertTrue(system.contains("每次回复必须包含实际说出口的台词"))
+    }
+
+    @Test
+    fun `group rules require actual speech lines`() {
+        assertTrue(PromptBuilder.GROUP_RULES.contains("每次发言必须包含至少一句实际台词"))
+    }
 }
