@@ -1124,6 +1124,33 @@ class ChatViewModel(
         }
     }
 
+    // ===== 快速设定草稿 =====
+    private var quickSetupDraftJob: Job? = null
+
+    /**
+     * 更新快速设定描述草稿：500ms 防抖落盘，供面板关闭后回看/重新生成。
+     */
+    fun updateQuickSetupDraft(draft: String) {
+        val conv = conversation.value ?: return
+        if (conv.quickSetupDraft == draft) return
+        quickSetupDraftJob?.cancel()
+        quickSetupDraftJob = viewModelScope.launch {
+            kotlinx.coroutines.delay(500)
+            persistQuickSetupDraft(conversation.value ?: conv, draft)
+        }
+    }
+
+    private fun persistQuickSetupDraft(
+        conv: com.quiddity.app.data.model.Conversation,
+        draft: String
+    ) {
+        viewModelScope.launch {
+            withContext(NonCancellable) {
+                conversationRepository.updateConversation(conv.copy(quickSetupDraft = draft))
+            }
+        }
+    }
+
     /**
      * 构造快速设定提示气泡内容：世界类型 + 场景。
      * - 世界类型为世界背景前4个汉字（LLM 按规则在 [世界背景] 字段首写4字世界类型）；

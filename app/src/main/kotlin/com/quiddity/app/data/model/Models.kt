@@ -151,6 +151,11 @@ data class Conversation(
      */
     val sceneInjected: Boolean = false,
     val memory: String = "",
+    /**
+     * 快速设定面板的用户描述草稿（持久化以便回看/重新生成）。
+     * 每次输入防抖写入；空字符串表示从未填写。
+     */
+    val quickSetupDraft: String = "",
     val apiCatalogId: String? = null,
     val maxTokens: Int? = null,
     val singleMessageTokens: Int? = null,

@@ -99,6 +99,8 @@ import kotlinx.coroutines.launch
 fun QuickSetupPanel(
     currentTier: ApiCatalogManager.ModelTier,
     hasExistingContent: Boolean,
+    initialDraft: String = "",
+    onDraftChange: (String) -> Unit = {},
     onGenerate: suspend (String, QuickSetupTier) -> String,
     onApply: (String, QuickSetupTier) -> Unit,
     onBack: () -> Unit
@@ -110,7 +112,7 @@ fun QuickSetupPanel(
     val availableTiers = remember(currentTier) { QuickSetupTier.availableTiers(currentTier) }
     val defaultTier = remember(currentTier) { QuickSetupTier.defaultForTier(currentTier) }
     var selectedTier by rememberSaveable(currentTier) { mutableStateOf(defaultTier) }
-    var description by rememberSaveable { mutableStateOf("") }
+    var description by rememberSaveable(initialDraft) { mutableStateOf(initialDraft) }
     var isGenerating by remember { mutableStateOf(false) }
     var resultText by rememberSaveable { mutableStateOf<String?>(null) }
     var toastMsg by remember { mutableStateOf<String?>(null) }
@@ -233,7 +235,10 @@ fun QuickSetupPanel(
         Spacer(modifier = Modifier.size(12.dp))
         QuiddityTextField(
             value = description,
-            onValueChange = { description = it },
+            onValueChange = {
+                description = it
+                onDraftChange(it)
+            },
             label = "人设描述",
             placeholder = "如：一个温柔的学姐，叫林夕，喜欢读书；我是大一新生小明",
             singleLine = false,

@@ -551,6 +551,10 @@ fun HamburgerMenu(
                                 QuickSetupPanel(
                                     currentTier = tier,
                                     hasExistingContent = hasExisting,
+                                    initialDraft = conv.quickSetupDraft,
+                                    onDraftChange = { draft ->
+                                        viewModel.updateQuickSetupDraft(draft)
+                                    },
                                     onGenerate = { description, selectedTier ->
                                         viewModel.quickSetupGenerate(description, selectedTier)
                                     },
