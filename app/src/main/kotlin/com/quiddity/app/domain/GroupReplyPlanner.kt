@@ -83,7 +83,8 @@ object GroupReplyPlanner {
         val apiMessages = PromptBuilder.toApiMessages(systemPrompt, transcript, senderNames, userName)
         val maxTokens = member.maxTokens ?: settings.globalMaxTokens
         val singleMsgTokens = member.singleMessageTokens ?: settings.globalSingleMessageTokens
-        val useSearchTool = tier == ApiCatalogManager.ModelTier.FULL
+        // 方案六.3：基础级只带最近 N 条；进阶级/完整级可自行用工具检索完整群聊消息。
+        val useSearchTool = tier != ApiCatalogManager.ModelTier.BASIC
         val request = ChatCompletionRequest(
             model = access.model,
             messages = apiMessages,

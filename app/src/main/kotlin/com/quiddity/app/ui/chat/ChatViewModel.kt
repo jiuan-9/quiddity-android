@@ -244,6 +244,12 @@ class ChatViewModel(
                         break
                     }
                 }
+            } catch (t: Throwable) {
+                if (t is kotlinx.coroutines.CancellationException) throw t
+                // 群聊队列异常兜底：清空队列、恢复头像，不让未捕获异常崩掉应用
+                groupQueueEngine.clear()
+                syncGroupQueue()
+                _errorEvent.value = "群聊回复出错：${t.message ?: "未知错误"}，队列已取消"
             } finally {
                 _isGenerating.value = false
                 notifyIdleIfNoWork()
@@ -265,24 +271,31 @@ class ChatViewModel(
             var failed = false
             replyRunStart = System.currentTimeMillis()
             replyRunChars = 0
-            chatRepository.streamGroupMemberReply(
-                member = member,
-                group = group,
-                transcript = item.frozenMessages,
-                senderId = item.memberId
-            ) { event ->
-                when (event) {
-                    is ChatRepository.Event.Error -> {
-                        failed = true
-                        if (attempt < QuiddityConstants.GROUP_RETRY_COUNT) {
-                            _errorEvent.value = "网络错误，重试中 $attempt/${QuiddityConstants.GROUP_RETRY_COUNT}"
-                        } else {
-                            _errorEvent.value =
-                                "成员 ${member.persona.name.ifBlank { "AI" }} 回复失败"
+            try {
+                chatRepository.streamGroupMemberReply(
+                    member = member,
+                    group = group,
+                    transcript = item.frozenMessages,
+                    senderId = item.memberId
+                ) { event ->
+                    when (event) {
+                        is ChatRepository.Event.Error -> {
+                            failed = true
+                            if (attempt < QuiddityConstants.GROUP_RETRY_COUNT) {
+                                _errorEvent.value =
+                                    "网络错误，重试中 $attempt/${QuiddityConstants.GROUP_RETRY_COUNT}"
+                            } else {
+                                _errorEvent.value =
+                                    "成员 ${member.persona.name.ifBlank { "AI" }} 回复失败"
+                            }
                         }
+                        else -> handleStreamEvent(event)
                     }
-                    else -> handleStreamEvent(event)
                 }
+            } catch (t: Throwable) {
+                if (t is kotlinx.coroutines.CancellationException) throw t
+                failed = true
+                _errorEvent.value = "成员回复出错：${t.message ?: "未知错误"}"
             }
             if (!failed) return true
         }
@@ -665,6 +678,9 @@ class ChatViewModel(
                 ) { event ->
                     handleStreamEvent(event)
                 }
+            } catch (t: Throwable) {
+                if (t is kotlinx.coroutines.CancellationException) throw t
+                _errorEvent.value = "重说失败：${t.message ?: "未知错误"}"
             } finally {
                 _isGenerating.value = false
                 notifyIdleIfNoWork()
@@ -1215,15 +1231,37 @@ class ChatViewModel(
     fun clearConversationMessages() {
         if (_isGenerating.value) return
         val conv = conversation.value ?: return
+        val isGroupConv = conv.type == ConversationType.GROUP
         viewModelScope.launch {
             conversationRepository.replaceMessages(conversationId, emptyList())
             conversationRepository.updateConversation(
-                conv.copy(
-                    compressedMemory = "",
-                    memoryIndex = "",
-                    lastCompressedAtRound = 0
-                )
+                if (isGroupConv) {
+                    // 群聊：清除聊天记录并重置群聊小本本
+                    conv.copy(groupMemory = "")
+                } else {
+                    conv.copy(
+                        compressedMemory = "",
+                        memoryIndex = "",
+                        lastCompressedAtRound = 0
+                    )
+                }
             )
+        }
+    }
+
+    /** 删除当前会话（含全部消息与设置），供群聊菜单「删除该会话」使用。 */
+    fun deleteCurrentConversation() {
+        val id = conversationId
+        groupStreamJob?.cancel()
+        groupStreamJob = null
+        streamJob?.cancel()
+        streamJob = null
+        cancelPendingSend()
+        viewModelScope.launch {
+            // NonCancellable：页面即将返回销毁 ViewModel，删除必须完整落盘后再释放
+            withContext(NonCancellable) {
+                conversationRepository.deleteConversation(id)
+            }
         }
     }
 

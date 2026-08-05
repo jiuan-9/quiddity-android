@@ -104,6 +104,7 @@ import com.quiddity.app.ui.chat.components.panels.TokenStatsPanel
 import com.quiddity.app.ui.chat.components.panels.UserPersonaPanel
 import com.quiddity.app.ui.chat.components.panels.WallpaperPanel
 import com.quiddity.app.ui.components.ActiveMessagePermissionCard
+import com.quiddity.app.ui.components.AiAvatar
 import com.quiddity.app.ui.components.ApiEditBottomSheet
 import com.quiddity.app.ui.components.ApiCatalogEditFormState
 import com.quiddity.app.ui.components.ConfirmDialog
@@ -159,6 +160,8 @@ fun HamburgerMenu(
     viewModel: ChatViewModel,
     settingsViewModel: SettingsViewModel,
     onDismiss: () -> Unit,
+    // 群聊菜单「删除该会话」确认后回调（由 ChatScreen 执行删除并返回首页）
+    onDeleteConversation: () -> Unit = {},
     onJumpToMessage: ((String) -> Unit)? = null
 ) {
     val context = LocalContext.current
@@ -178,6 +181,7 @@ fun HamburgerMenu(
     var currentPanel by remember { mutableStateOf<HamburgerPanel?>(null) }
     var pendingClearSettings by remember { mutableStateOf(false) }
     var pendingClearMessages by remember { mutableStateOf(false) }
+    var pendingDeleteConversation by remember { mutableStateOf(false) }
     var toastMsg by remember { mutableStateOf<String?>(null) }
     // JSON 全量导入时暂存 payload，已有数据则弹窗让用户抉择替换/合并/取消
     var pendingImportPayload by remember { mutableStateOf<ExportPayload?>(null) }
@@ -465,7 +469,10 @@ fun HamburgerMenu(
                                     },
                                     onManageMembers = {
                                         currentPanel = HamburgerPanel.GroupMembers
-                                    }
+                                    },
+                                    onSearchChat = { currentPanel = HamburgerPanel.SearchChat },
+                                    onClearMessages = { pendingClearMessages = true },
+                                    onDeleteConversation = { pendingDeleteConversation = true }
                                 )
                             } else {
                                 MainMenuContent(
@@ -755,9 +762,14 @@ fun HamburgerMenu(
     }
 
     if (pendingClearMessages) {
+        val isGroupConv = conversation?.type == ConversationType.GROUP
         ConfirmDialog(
-            title = "清空会话记录（含压缩对话）",
-            message = "将删除当前会话的所有消息，并重置压缩记忆（compressedMemory / lastCompressedAtRound）。AI 人设 / 用户 / 场景 / 记忆 / 壁纸保留。此操作不可撤销。",
+            title = if (isGroupConv) "清除群聊记录" else "清空会话记录（含压缩对话）",
+            message = if (isGroupConv) {
+                "将删除本群聊的所有消息，并重置群聊小本本（groupMemory）。群聊设置与成员保持不变。此操作不可撤销。"
+            } else {
+                "将删除当前会话的所有消息，并重置压缩记忆（compressedMemory / lastCompressedAtRound）。AI 人设 / 用户 / 场景 / 记忆 / 壁纸保留。此操作不可撤销。"
+            },
             confirmText = "清空",
             onConfirm = {
                 viewModel.clearConversationMessages()
@@ -765,6 +777,19 @@ fun HamburgerMenu(
                 toastMsg = "会话记录已清空"
             },
             onDismiss = { pendingClearMessages = false }
+        )
+    }
+
+    if (pendingDeleteConversation) {
+        ConfirmDialog(
+            title = "删除该会话",
+            message = "将删除当前群聊及其全部消息记录，成员私聊不受影响。此操作不可撤销。",
+            confirmText = "删除",
+            onConfirm = {
+                pendingDeleteConversation = false
+                onDeleteConversation()
+            },
+            onDismiss = { pendingDeleteConversation = false }
         )
     }
 
@@ -1693,6 +1718,7 @@ private fun MenuRow(
     expandableSubtitle: Boolean = false,
     trailingIcon: ImageVector? = null,
     trailingTint: androidx.compose.ui.graphics.Color? = null,
+    titleColor: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.onSurface,
     subtitleColor: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
 ) {
     // Box 替代 Surface：行内无 elevation 需求，Box+background+clip 跳过 Surface 的 CompositionLocalProvider 开销
@@ -1720,7 +1746,7 @@ private fun MenuRow(
                     title,
                     style = MaterialTheme.typography.bodyLarge,
                     fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = titleColor
                 )
                 if (subtitle.isNotEmpty()) {
                     if (expandableSubtitle) {
@@ -1763,7 +1789,10 @@ private fun GroupMenuContent(
     onRename: () -> Unit,
     onContextLimit: () -> Unit,
     onStopModeChange: (String) -> Unit,
-    onManageMembers: () -> Unit
+    onManageMembers: () -> Unit,
+    onSearchChat: () -> Unit,
+    onClearMessages: () -> Unit,
+    onDeleteConversation: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -1808,6 +1837,12 @@ private fun GroupMenuContent(
         ) {
             MenuSectionCard(title = "群聊") {
                 MenuRow(
+                    title = "查找聊天记录",
+                    subtitle = "搜索本群历史消息",
+                    onClick = onSearchChat,
+                    trailingIcon = Icons.Filled.ChevronRight
+                )
+                MenuRow(
                     title = "群名称",
                     subtitle = conversation?.title?.ifBlank { "新群聊" } ?: "新群聊",
                     onClick = onRename
@@ -1837,6 +1872,19 @@ private fun GroupMenuContent(
                     subtitle = "当前 ${conversation?.memberConversationIds?.size ?: 0}/3 个",
                     onClick = onManageMembers,
                     trailingIcon = Icons.Filled.ChevronRight
+                )
+            }
+            MenuSectionCard(title = "危险操作") {
+                MenuRow(
+                    title = "清除聊天记录",
+                    subtitle = "删除本群所有消息，不可恢复",
+                    onClick = onClearMessages
+                )
+                MenuRow(
+                    title = "删除该会话",
+                    subtitle = "删除群聊及其全部消息，成员私聊不受影响",
+                    onClick = onDeleteConversation,
+                    titleColor = MaterialTheme.colorScheme.error
                 )
             }
         }
@@ -2139,21 +2187,11 @@ private fun GroupMemberManagePanel(
                             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
                         contentAlignment = Alignment.Center
                     ) {
-                        if (member.persona.aiAvatarUri != null) {
-                            AsyncImage(
-                                model = member.persona.aiAvatarUri,
-                                contentDescription = null,
-                                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                                modifier = Modifier.fillMaxSize().clip(CircleShape)
-                            )
-                        } else {
-                            Icon(
-                                imageVector = Icons.Filled.Person,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(22.dp)
-                            )
-                        }
+                        AiAvatar(
+                            avatarUri = member.persona.aiAvatarUri,
+                            name = member.persona.name,
+                            size = 40.dp
+                        )
                     }
                     Spacer(modifier = Modifier.size(10.dp))
                     Column(modifier = Modifier.weight(1f)) {
@@ -2536,25 +2574,12 @@ private fun AddGroupMembersDialog(
                             Box(
                                 modifier = Modifier
                                     .size(36.dp)
-                                    .clip(CircleShape)
-                                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
-                                contentAlignment = Alignment.Center
                             ) {
-                                if (conv.persona.aiAvatarUri != null) {
-                                    AsyncImage(
-                                        model = conv.persona.aiAvatarUri,
-                                        contentDescription = null,
-                                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                                        modifier = Modifier.fillMaxSize().clip(CircleShape)
-                                    )
-                                } else {
-                                    Icon(
-                                        imageVector = Icons.Filled.Person,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
+                                AiAvatar(
+                                    avatarUri = conv.persona.aiAvatarUri,
+                                    name = conv.persona.name,
+                                    size = 36.dp
+                                )
                             }
                             Spacer(modifier = Modifier.size(10.dp))
                             Column(modifier = Modifier.weight(1f)) {

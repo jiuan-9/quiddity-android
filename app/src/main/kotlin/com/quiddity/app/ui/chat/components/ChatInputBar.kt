@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -39,6 +40,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+
 /*
  * ============================================================================
  * 开发规范 (Development Specifications)
@@ -65,8 +67,8 @@ import androidx.compose.ui.unit.dp
  * ============================================================================
  */
 
-
-// 当前规则：圆角 24dp 输入框；最大 4 行；回车发送策略由 enterToSend 决定；壁纸模式下玻璃质感；发送按钮三态（正常/停止/压缩置灰）。
+// 当前规则：圆角 24dp 输入框；最大 4 行；回车发送策略由 enterToSend 决定；壁纸模式下玻璃质感；
+// 发送按钮三态（正常/停止/压缩置灰）；群聊成员头像栏并入输入框容器顶部（方案十一）。
 @Composable
 fun ChatInputBar(
     enterToSend: Boolean,
@@ -78,7 +80,9 @@ fun ChatInputBar(
     enabled: Boolean = true,
     transparent: Boolean = false,
     onTextChange: ((String) -> Unit)? = null,
-    isCompressing: Boolean = false
+    isCompressing: Boolean = false,
+    // 输入框容器内的顶部内容（群聊成员头像栏，随输入框一起动）
+    header: (@Composable () -> Unit)? = null
 ) {
     var text by rememberSaveable { mutableStateOf("") }
 
@@ -98,7 +102,7 @@ fun ChatInputBar(
             .windowInsetsPadding(WindowInsets.navigationBars),
         color = if (transparent) Color.Transparent else MaterialTheme.colorScheme.background
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 8.dp)
@@ -109,99 +113,104 @@ fun ChatInputBar(
                     } else {
                         MaterialTheme.colorScheme.surfaceContainerLow
                     }
-                ),
-            verticalAlignment = Alignment.CenterVertically
+                )
         ) {
-            // ===== 三条开发规范（位于文件中间位置） =====
-            // 1. 问题修复规范：所有代码问题修复必须采用系统性解决方案，严禁使用临时性补丁或 hack 手段。
-            //    修复内容需完全融入现有代码架构，确保代码逻辑的连贯性、可维护性和可扩展性。
-            // 2. 代码注释规范：文件内仅允许保留两类注释——当前规则说明注释与模块划分注释（// ===== xxx =====）。
-            //    除此之外，禁止出现任何形式的代码注释（包括单行 / 多行 / 临时调试注释）。
-            // 3. 构建交付要求：完成所有开发任务并通过单元测试和集成测试后，必须将项目打包为标准 APK。
-            //    APK 需满足：签名有效且符合发布标准、包含完整功能模块、经过基础性能与兼容性测试。
-
-            TextField(
-                value = text,
-                onValueChange = {
-                    text = it
-                    onTextChange?.invoke(it)
-                },
-                enabled = enabled,
-                modifier = Modifier
-                    .weight(1f)
-                    .heightIn(min = 48.dp, max = 140.dp),
-                placeholder = {
-                    Text(
-                        text = "输入消息…",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                    )
-                },
-                maxLines = 4,
-                colors = TextFieldDefaults.colors(
-                    focusedContainerColor = Color.Transparent,
-                    unfocusedContainerColor = Color.Transparent,
-                    disabledContainerColor = Color.Transparent,
-                    focusedIndicatorColor = Color.Transparent,
-                    unfocusedIndicatorColor = Color.Transparent,
-                    focusedTextColor = MaterialTheme.colorScheme.onSurface,
-                    unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
-                    cursorColor = MaterialTheme.colorScheme.primary
-                ),
-                keyboardOptions = KeyboardOptions(
-                    imeAction = if (enterToSend) ImeAction.Send else ImeAction.Default
-                ),
-                keyboardActions = KeyboardActions(
-                    onSend = { trySend() }
-                ),
-                textStyle = MaterialTheme.typography.bodyMedium
-            )
-
-            Spacer(modifier = Modifier.size(4.dp))
-
-            // ===== 发送按钮三态：isGenerating→停止(红)/isCompressing→置灰不可点/否则→正常发送 =====
-            val buttonColor = when {
-                isGenerating -> MaterialTheme.colorScheme.error
-                isCompressing -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
-                text.isNotBlank() -> MaterialTheme.colorScheme.primary
-                else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            if (header != null) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 8.dp, end = 8.dp, bottom = 4.dp)
+                ) {
+                    header()
+                }
             }
-            Box(
-                modifier = Modifier
-                    .padding(end = 6.dp)
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .background(buttonColor)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) {
-                        when {
-                            isGenerating -> onStop()
-                            isCompressing -> { /* 压缩中：禁用发送，no-op */ }
-                            else -> trySend()
-                        }
-                    },
-                contentAlignment = Alignment.Center
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                if (isGenerating) {
-                    Icon(
-                        imageVector = Icons.Filled.Stop,
-                        contentDescription = "停止",
-                        tint = MaterialTheme.colorScheme.onError,
-                        modifier = Modifier.size(20.dp)
-                    )
-                } else {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.Send,
-                        contentDescription = "发送",
-                        tint = when {
-                            isCompressing -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
-                            text.isNotBlank() -> MaterialTheme.colorScheme.onPrimary
-                            else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                TextField(
+                    value = text,
+                    onValueChange = {
+                        text = it
+                        onTextChange?.invoke(it)
+                    },
+                    enabled = enabled,
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 48.dp, max = 140.dp),
+                    placeholder = {
+                        Text(
+                            text = "输入消息…",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        )
+                    },
+                    maxLines = 4,
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        disabledContainerColor = Color.Transparent,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                        unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+                        cursorColor = MaterialTheme.colorScheme.primary
+                    ),
+                    keyboardOptions = KeyboardOptions(
+                        imeAction = if (enterToSend) ImeAction.Send else ImeAction.Default
+                    ),
+                    keyboardActions = KeyboardActions(
+                        onSend = { trySend() }
+                    ),
+                    textStyle = MaterialTheme.typography.bodyMedium
+                )
+
+                Spacer(modifier = Modifier.size(4.dp))
+
+                // ===== 发送按钮三态：isGenerating→停止(红)/isCompressing→置灰不可点/否则→正常发送 =====
+                val buttonColor = when {
+                    isGenerating -> MaterialTheme.colorScheme.error
+                    isCompressing -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+                    text.isNotBlank() -> MaterialTheme.colorScheme.primary
+                    else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                }
+                Box(
+                    modifier = Modifier
+                        .padding(end = 6.dp)
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(buttonColor)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) {
+                            when {
+                                isGenerating -> onStop()
+                                isCompressing -> { /* 压缩中：禁用发送，no-op */ }
+                                else -> trySend()
+                            }
                         },
-                        modifier = Modifier.size(18.dp)
-                    )
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (isGenerating) {
+                        Icon(
+                            imageVector = Icons.Filled.Stop,
+                            contentDescription = "停止",
+                            tint = MaterialTheme.colorScheme.onError,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.Send,
+                            contentDescription = "发送",
+                            tint = when {
+                                isCompressing -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                                text.isNotBlank() -> MaterialTheme.colorScheme.onPrimary
+                                else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                            },
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
             }
         }

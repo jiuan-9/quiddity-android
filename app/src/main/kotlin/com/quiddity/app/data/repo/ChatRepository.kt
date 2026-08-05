@@ -253,14 +253,19 @@ class ChatRepository(
     ) {
         val firstRoundCalls = runSingleStream(api, apiUrl, apiKey, request, coordinator, onEvent) ?: return
         if (firstRoundCalls.isNotEmpty()) {
-            val toolMessages = buildToolResultMessages(request.messages, conv, firstRoundCalls)
-            val secondRequest = request.copy(
-                messages = toolMessages,
-                tools = null,
-                tool_choice = null
-            )
-            // 第二轮不再聚合工具调用（模型若再次请求工具则忽略），直接流式输出最终答复
-            runSingleStream(api, apiUrl, apiKey, secondRequest, coordinator, onEvent)
+            try {
+                val toolMessages = buildToolResultMessages(request.messages, conv, firstRoundCalls)
+                val secondRequest = request.copy(
+                    messages = toolMessages,
+                    tools = null,
+                    tool_choice = null
+                )
+                // 第二轮不再聚合工具调用（模型若再次请求工具则忽略），直接流式输出最终答复
+                runSingleStream(api, apiUrl, apiKey, secondRequest, coordinator, onEvent)
+            } catch (t: Throwable) {
+                // 工具回填失败不影响主流程：派发错误并结束本轮，避免异常上抛导致崩溃
+                emitError(onEvent, t, coordinator.snapshot().joinToString("\n") { it.content })
+            }
         }
         onEvent(Event.Done)
     }
@@ -526,17 +531,43 @@ class ChatRepository(
         onEvent: suspend (Event) -> Unit
     ) {
         val settings = settingsRepo.currentSnapshot()
-        val senderNames = resolveSenderNames(transcript)
+        // 方案六.2：群聊记录只取最近 N 条（默认 50，范围 1～200），在点击定格快照上截断。
+        val trimmed = if (group.groupContextLimit > 0 && transcript.size > group.groupContextLimit) {
+            transcript.takeLast(group.groupContextLimit)
+        } else {
+            transcript
+        }
+        val senderNames = resolveSenderNames(trimmed)
         val plan = GroupReplyPlanner.buildPlan(
             settings = settings,
             member = member,
             group = group,
-            transcript = transcript,
+            transcript = trimmed,
             senderId = senderId,
             tier = resolveMemberTier(member, settings),
             senderNames = senderNames,
             userName = member.userPersona.name.takeIf { it.isNotBlank() }
         )
+        // 模型有时会误输出「名字：」前缀（如回复开头带其他成员名），
+        // 在事件派发前剥掉，保证落库/展示内容不带任何名字前缀（方案五）。
+        val prefixNames = buildList {
+            member.persona.name.takeIf { it.isNotBlank() }?.let(::add)
+            member.userPersona.name.takeIf { it.isNotBlank() }?.let(::add)
+            addAll(senderNames.values)
+        }
+        val sanitizer = GroupReplyPrefixSanitizer(prefixNames)
+        val cleanEvent: suspend (Event) -> Unit = { event ->
+            when (event) {
+                is Event.NewMessage ->
+                    onEvent(Event.NewMessage(event.message.copy(content = sanitizer.clean(event.message.content))))
+                is Event.UpdateMessage ->
+                    onEvent(Event.UpdateMessage(event.message.copy(content = sanitizer.clean(event.message.content))))
+                is Event.CompleteMessage ->
+                    onEvent(Event.CompleteMessage(event.message.copy(content = sanitizer.clean(event.message.content))))
+                is Event.Done -> onEvent(event)
+                is Event.Error -> onEvent(event)
+            }
+        }
         plan.fold(
             onSuccess = { p ->
                 val coordinator = coordinatorFactory(
@@ -546,7 +577,7 @@ class ChatRepository(
                     p.singleMessageTokens,
                     p.senderId
                 )
-                runWithToolRound(api, p.apiUrl, p.apiKey, p.request, coordinator, group, onEvent)
+                runWithToolRound(api, p.apiUrl, p.apiKey, p.request, coordinator, group, cleanEvent)
             },
             onFailure = { emitError(onEvent, it, "") }
         )
@@ -823,5 +854,24 @@ class ChatRepository(
         if (startRound >= userIndices.size) return emptyList()
         val startIdx = userIndices[startRound]
         return messages.subList(startIdx, messages.size)
+    }
+}
+
+/**
+ * 群聊回复前缀剥离器：模型误输出「名字：」前缀（含其他成员名/用户名/本人名）时，
+ * 从消息内容开头连续剥掉。内容流式累计，每次事件都对完整内容重新判定，无需维护状态。
+ */
+internal class GroupReplyPrefixSanitizer(names: List<String>) {
+    private val known = names.filter { it.isNotBlank() }.distinct().sortedByDescending { it.length }
+
+    fun clean(content: String): String {
+        var text = content
+        while (true) {
+            val name = known.firstOrNull {
+                text.startsWith("$it：") || text.startsWith("$it:")
+            } ?: break
+            text = text.substring(name.length + 1).trimStart()
+        }
+        return text
     }
 }

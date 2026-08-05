@@ -3,8 +3,10 @@ package com.quiddity.app.ui.chat.components
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
@@ -29,7 +31,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Icon
@@ -46,15 +47,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
 import com.quiddity.app.data.model.Message
 import com.quiddity.app.data.model.Role
+import com.quiddity.app.ui.components.AiAvatar
 import com.quiddity.app.ui.theme.Motion
 import com.quiddity.app.util.DateUtils
 import com.quiddity.app.util.MarkdownParser
@@ -102,8 +102,10 @@ private fun BubbleShape(isUser: Boolean) =
 @Composable
 fun MessageBubble(
     message: Message,
+    isGroupChat: Boolean = false,
     userAvatarUri: String?,
     aiAvatarUri: String?,
+    aiName: String? = null,
     senderName: String? = null,
     senderAvatarUri: String? = null,
     bracketGrayEnabled: Boolean = false,
@@ -115,11 +117,11 @@ fun MessageBubble(
     onBubbleClick: (() -> Unit)? = null,
     // 长按气泡时触发，进入多选模式
     onLongClick: (() -> Unit)? = null,
-    // 单击气泡时触发，用于切换"改写"按钮的显示状态
-    onRewriteTrigger: (() -> Unit)? = null,
+    // 单击 AI 气泡展开/收起操作面板（重说/继续说/改写/删除），全局只保留一个展开项
+    isActionsExpanded: Boolean = false,
+    onToggleActions: (() -> Unit)? = null,
     // 点击"改写"按钮时触发，进入改写界面
     onRewrite: (() -> Unit)? = null,
-    isRewriting: Boolean = false,
     // 查找聊天记录跳转高亮：命中消息气泡短暂变色
     isHighlighted: Boolean = false,
     // 打字机效果：UI 层逐字渲染（仅对 streaming AI 消息生效）
@@ -155,8 +157,6 @@ fun MessageBubble(
     val grayColor = remember(textColor) { textColor.copy(alpha = 0.55f) }
 
     val avatarUri = if (isUser) userAvatarUri else (senderAvatarUri ?: aiAvatarUri)
-    val avatarIcon = Icons.Filled.Person
-
     // ===== 1.5.0 延迟输出定义：不再逐字停顿流式文字，回复内容自然流式显示；
     // 加载动画时长由 ViewModel 按回复字数 × 每字毫秒数控制（isStreaming 状态持续） =====
     val fullContent = message.content
@@ -176,8 +176,8 @@ fun MessageBubble(
         label = "bubble_press_scale"
     )
 
-    val aiBubbleClick = if (!isUser && isAiNotStreaming && onRewriteTrigger != null) {
-        onRewriteTrigger
+    val aiBubbleClick = if (!isUser && isAiNotStreaming && onToggleActions != null) {
+        onToggleActions
     } else null
 
     val showWithdraw = isWithdrawing
@@ -248,7 +248,8 @@ fun MessageBubble(
                 textAlign = if (isUser) TextAlign.End else TextAlign.Start,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .then(if (isUser) Modifier.padding(end = 0.dp) else Modifier.padding(start = 48.dp))
+                    // 群聊用户消息的「我」对齐到气泡右缘，不落在右侧头像上方
+                    .then(if (isUser) Modifier.padding(end = 48.dp) else Modifier.padding(start = 48.dp))
                     .padding(bottom = 2.dp)
             )
         }
@@ -268,7 +269,7 @@ fun MessageBubble(
             }
 
             if (!isUser) {
-                AvatarSlot(avatarUri, avatarIcon)
+                AvatarSlot(avatarUri, name = senderName ?: aiName)
                 Spacer(modifier = Modifier.size(8.dp))
             }
 
@@ -280,7 +281,7 @@ fun MessageBubble(
                 ) {
                     Box(
                         modifier = Modifier
-                            .align(Alignment.Top)
+                            .align(Alignment.CenterVertically)
                             .padding(end = 8.dp)
                     ) {
                         BubbleActionChip(
@@ -305,14 +306,30 @@ fun MessageBubble(
                                 scaleY = bubbleScaleState.value
                             }
                             .let { mod ->
-                                if (multiSelectMode && onSelectToggle != null) {
-                                    mod.clickable(
-                                        interactionSource = bubbleInteractionSource,
-                                        indication = null,
-                                        onClick = onSelectToggle
-                                    )
-                                } else {
-                                    mod
+                                when {
+                                    multiSelectMode && onSelectToggle != null -> {
+                                        mod.clickable(
+                                            interactionSource = bubbleInteractionSource,
+                                            indication = null,
+                                            onClick = onSelectToggle
+                                        )
+                                    }
+                                    isUser && onBubbleClick != null -> {
+                                        mod.clickable(
+                                            interactionSource = bubbleInteractionSource,
+                                            indication = null,
+                                            onClick = onBubbleClick
+                                        )
+                                    }
+                                    aiBubbleClick != null -> {
+                                        mod.combinedClickable(
+                                            interactionSource = bubbleInteractionSource,
+                                            indication = null,
+                                            onClick = aiBubbleClick,
+                                            onLongClick = onLongClick
+                                        )
+                                    }
+                                    else -> mod
                                 }
                             }
                     ) {
@@ -389,7 +406,7 @@ fun MessageBubble(
                                                 text = textAnnotated,
                                                 textColor = textColor,
                                                 onBubbleClick = if (multiSelectMode) onSelectToggle else (if (isUser) onBubbleClick else null),
-                                                onLongClick = if (multiSelectMode) null else onLongClick,
+                                                onLongClick = if (multiSelectMode || !isUser) null else onLongClick,
                                                 modifier = Modifier.widthIn(max = BubbleInnerMaxWidth)
                                             )
                                         }
@@ -460,7 +477,7 @@ fun MessageBubble(
                                     text = effectiveAnnotated,
                                     textColor = textColor,
                                     onBubbleClick = if (multiSelectMode) onSelectToggle else (if (isUser) onBubbleClick else null),
-                                    onLongClick = if (multiSelectMode) null else onLongClick,
+                                    onLongClick = if (multiSelectMode || !isUser) null else onLongClick,
                                     modifier = Modifier.widthIn(max = BubbleInnerMaxWidth)
                                 )
                                 if (isStreaming) {
@@ -473,10 +490,10 @@ fun MessageBubble(
                 }
             }
 
-            // ===== 改写按钮（AI 消息）：与"撤回"对称，位于气泡另一端（AI 头像对侧） =====
-            if (!isUser && onRewrite != null && !multiSelectMode) {
+            // ===== 私聊改写按钮（点击 AI 气泡展开；全局只保留一个展开项） =====
+            if (!isGroupChat && !isUser) {
                 AnimatedVisibility(
-                    visible = isRewriting,
+                    visible = isActionsExpanded && !multiSelectMode && onRewrite != null,
                     enter = fadeIn(
                         animationSpec = tween(Motion.DurationShort, easing = Motion.EasingEmphasizedDecelerate)
                     ) + slideInHorizontally(
@@ -492,13 +509,13 @@ fun MessageBubble(
                 ) {
                     Box(
                         modifier = Modifier
-                            .align(Alignment.Top)
+                            .align(Alignment.CenterVertically)
                             .padding(start = 8.dp)
                     ) {
                         BubbleActionChip(
                             icon = Icons.Filled.Edit,
                             label = "改写",
-                            onClick = onRewrite
+                            onClick = { onRewrite?.invoke() }
                         )
                     }
                 }
@@ -506,7 +523,7 @@ fun MessageBubble(
 
             if (isUser) {
                 Spacer(modifier = Modifier.size(8.dp))
-                AvatarSlot(avatarUri, avatarIcon)
+                AvatarSlot(avatarUri)
             }
 
             // ===== 多选模式：用户消息右侧显示选择圈 =====
@@ -538,11 +555,26 @@ fun MessageBubble(
             )
         }
 
-        // AI 消息（非 streaming）的"继续说 / 重说"操作栏（多选模式下隐藏）；
-        // "改写"按钮已移至气泡另一端，与"撤回"对称
-        if (!multiSelectMode && isAiNotStreaming && (onRegenerate != null || onContinue != null)) {
+        // ===== 私聊：重说 / 继续说 常驻在最后一条 AI 消息下方（淡入 + 撑开动画） =====
+        AnimatedVisibility(
+            visible = !isGroupChat && !isUser && !multiSelectMode && isAiNotStreaming &&
+                (onRegenerate != null || onContinue != null),
+            enter = fadeIn(
+                animationSpec = tween(Motion.DurationShort, easing = Motion.EasingEmphasizedDecelerate)
+            ) + expandVertically(
+                animationSpec = tween(Motion.DurationShort, easing = Motion.EasingEmphasizedDecelerate),
+                expandFrom = Alignment.Top
+            ),
+            exit = fadeOut(
+                animationSpec = tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate)
+            ) + shrinkVertically(
+                animationSpec = tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate),
+                shrinkTowards = Alignment.Top
+            )
+        ) {
             Row(
                 modifier = Modifier
+                    .fillMaxWidth()
                     .padding(start = 48.dp, top = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -559,6 +591,48 @@ fun MessageBubble(
                         icon = Icons.Filled.PlayArrow,
                         label = "继续说",
                         onClick = onContinue
+                    )
+                }
+            }
+        }
+
+        // ===== 群聊：AI 操作面板（点击气泡展开；全局只保留一个展开项） =====
+        // 面板参与布局，展开/收起时把后面的消息平滑挤下去/收上来，不与气泡重叠。
+        AnimatedVisibility(
+            visible = isGroupChat && !isUser && isActionsExpanded && !multiSelectMode && isAiNotStreaming &&
+                (onRegenerate != null || onRewrite != null),
+            enter = fadeIn(
+                animationSpec = tween(Motion.DurationShort, easing = Motion.EasingEmphasizedDecelerate)
+            ) + expandVertically(
+                animationSpec = tween(Motion.DurationShort, easing = Motion.EasingEmphasizedDecelerate),
+                expandFrom = Alignment.Top
+            ),
+            exit = fadeOut(
+                animationSpec = tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate)
+            ) + shrinkVertically(
+                animationSpec = tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate),
+                shrinkTowards = Alignment.Top
+            )
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 48.dp, top = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (onRegenerate != null) {
+                    BubbleActionChip(
+                        icon = Icons.Filled.Refresh,
+                        label = "重说",
+                        onClick = onRegenerate
+                    )
+                }
+                if (onRewrite != null) {
+                    BubbleActionChip(
+                        icon = Icons.Filled.Edit,
+                        label = "改写",
+                        onClick = onRewrite
                     )
                 }
             }
@@ -634,31 +708,13 @@ private fun BubbleActionChip(
 @Composable
 private fun AvatarSlot(
     avatarUri: String?,
-    fallbackIcon: androidx.compose.ui.graphics.vector.ImageVector
+    name: String? = null
 ) {
-    Box(
-        modifier = Modifier
-            .size(40.dp)
-            .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.surfaceContainerLow),
-        contentAlignment = Alignment.Center
-    ) {
-        if (avatarUri != null) {
-            AsyncImage(
-                model = avatarUri,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize().clip(CircleShape)
-            )
-        } else {
-            Icon(
-                imageVector = fallbackIcon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(22.dp)
-            )
-        }
-    }
+    AiAvatar(
+        avatarUri = avatarUri,
+        name = name.orEmpty(),
+        size = 40.dp
+    )
 }
 
 /**

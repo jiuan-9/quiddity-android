@@ -16,6 +16,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -66,8 +67,10 @@ fun ActiveMessagePermissionCard(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val exactGranted = ActiveMessageSystem.exactAlarmGranted(context)
-    val batteryIgnored = ActiveMessageSystem.batteryOptimizationIgnored(context)
+    // 系统 API 查询（binder 调用）在组合期间执行较慢，缓存到 remember 中，
+    // 避免滚动/动画/状态变化引起的每次重组都重复查询。
+    val exactGranted = remember(context) { ActiveMessageSystem.exactAlarmGranted(context) }
+    val batteryIgnored = remember(context) { ActiveMessageSystem.batteryOptimizationIgnored(context) }
 
     Column(
         modifier = modifier

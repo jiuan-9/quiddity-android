@@ -35,12 +35,14 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AddComment
@@ -85,6 +87,7 @@ import coil.compose.AsyncImage
 import com.quiddity.app.data.model.Conversation
 import com.quiddity.app.data.model.ConversationType
 import com.quiddity.app.domain.GlobalChatSearch
+import com.quiddity.app.ui.components.AiAvatar
 import com.quiddity.app.ui.components.ConfirmDialog
 import com.quiddity.app.ui.settings.SettingsBottomSheet
 import com.quiddity.app.ui.settings.SettingsViewModel
@@ -878,29 +881,12 @@ private fun ConversationCard(
                 }
                 Spacer(modifier = Modifier.size(14.dp))
             } else {
-                Box(
-                    modifier = Modifier
-                        .size(48.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (aiAvatarUri != null) {
-                        AsyncImage(
-                            model = aiAvatarUri,
-                            contentDescription = "AI 头像",
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize().clip(CircleShape)
-                        )
-                    } else {
-                        Icon(
-                            imageVector = Icons.Filled.Person,
-                            contentDescription = "默认头像",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
-                }
+                // 名字首字头像兜底：未设置头像但有 AI 名时显示首字（方案二十一）
+                AiAvatar(
+                    avatarUri = aiAvatarUri,
+                    name = conversation.persona?.name.orEmpty(),
+                    size = 48.dp
+                )
                 Spacer(modifier = Modifier.size(14.dp))
             }
 
@@ -1468,42 +1454,50 @@ private fun GroupAvatarComposite(
     userAvatarUri: String?,
     members: List<Conversation>
 ) {
-    val avatarUris = buildList<String?> {
-        add(userAvatarUri)
-        members.take(3).forEach { add(it.persona?.aiAvatarUri) }
-    }
+    val memberList = members.take(3)
     val overlap = 16.dp
     Box(
         modifier = Modifier.size(
-            width = (28.dp.value + (avatarUris.size - 1) * overlap.value).dp,
+            width = (28.dp.value + memberList.size * overlap.value).dp,
             height = 28.dp
         )
     ) {
-        avatarUris.forEachIndexed { index, uri ->
+        Box(
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .size(28.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+            contentAlignment = Alignment.Center
+        ) {
+            if (userAvatarUri != null) {
+                AsyncImage(
+                    model = userAvatarUri,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize().clip(CircleShape)
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Filled.Person,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+        memberList.forEachIndexed { index, member ->
             Box(
                 modifier = Modifier
                     .align(Alignment.CenterStart)
-                    .offset(x = (index * overlap.value).dp)
+                    .offset(x = ((index + 1) * overlap.value).dp)
                     .size(28.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
-                contentAlignment = Alignment.Center
             ) {
-                if (uri != null) {
-                    AsyncImage(
-                        model = uri,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize().clip(CircleShape)
-                    )
-                } else {
-                    Icon(
-                        imageVector = Icons.Filled.Person,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
+                AiAvatar(
+                    avatarUri = member.persona?.aiAvatarUri,
+                    name = member.persona?.name.orEmpty(),
+                    size = 28.dp
+                )
             }
         }
     }
@@ -1520,13 +1514,20 @@ private fun GroupTutorialDialog(onDismiss: () -> Unit) {
         "不点头像就没人回；想听谁说，就点谁",
         "成员管理、上下文条数等都可以在群聊设置里调整",
         "用户名、AI 名没设置或 API 测试没通过的角色不能加入群聊，会收到通知，可重试",
-        "点头像没反应的可能原因：成员已被踢出、群聊没有成员、或已到排队上限"
+        "点头像没反应的可能原因：成员已被踢出、群聊没有成员、或已到排队上限",
+        "私聊没设置用户名就无法聊天，也不能加入群聊",
+        "输入框里没发送的文字不参与回复，成员只基于已发送的群聊记录回答",
+        "回复失败会自动重试 5 次并逐次提示；任一成员 5 次失败后整个队列取消",
+        "成员回复的上下文在点头像那一刻定格，之后的新消息不影响正在进行的回复"
     )
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("群聊玩法") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 lines.forEachIndexed { index, line ->
                     Text(
                         text = "${index + 1}. $line",

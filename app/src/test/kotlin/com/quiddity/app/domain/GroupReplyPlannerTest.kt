@@ -139,6 +139,21 @@ class GroupReplyPlannerTest {
     }
 
     @Test
+    fun `advanced tier members get search chat tool`() {
+        val settings = AppSettings.Default.copy(catalog = listOf(catalogEntry("cat_a")))
+        val plan = GroupReplyPlanner.buildPlan(
+            settings = settings,
+            member = member(),
+            group = group(),
+            transcript = emptyList(),
+            senderId = "member_a",
+            tier = ApiCatalogManager.ModelTier.ADVANCED
+        ).getOrThrow()
+        assertTrue(plan.useSearchTool)
+        assertEquals("search_chat", plan.request.tools?.first()?.function?.name)
+    }
+
+    @Test
     fun `basic tier members have no tools`() {
         val settings = AppSettings.Default.copy(catalog = listOf(catalogEntry("cat_a")))
         val plan = GroupReplyPlanner.buildPlan(

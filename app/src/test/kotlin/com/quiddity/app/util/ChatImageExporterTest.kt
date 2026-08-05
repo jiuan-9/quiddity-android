@@ -115,4 +115,16 @@ class ChatImageExporterTest {
         assertTrue(result.segments.isEmpty())
         assertFalse(result.truncated)
     }
+
+    @Test
+    fun `segment row height reserves space for timestamp below bubble`() {
+        val bubbleH = 320
+        val rowH = ChatImageExporter.segmentRowHeight(bubbleH)
+        // 时间绘制在气泡底部下方 TIME_V_OFFSET 处，占用 TIME_TEXT_HEIGHT 高度，
+        // 行高必须不小于两者之和，否则会与下一个气泡重叠
+        assertTrue(
+            rowH >= bubbleH + ChatImageExporter.TIME_V_OFFSET + ChatImageExporter.TIME_TEXT_HEIGHT,
+            "行高 $rowH 未给时间戳预留足够空间"
+        )
+    }
 }

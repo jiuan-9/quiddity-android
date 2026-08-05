@@ -14,12 +14,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Person
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -27,15 +25,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
 import com.quiddity.app.data.model.Conversation
 import com.quiddity.app.domain.GroupReplyQueue
+import com.quiddity.app.ui.components.AiAvatar
 
 /*
  * ============================================================================
@@ -81,7 +77,7 @@ fun GroupAvatarBar(
 ) {
     Row(
         modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.End,
+        horizontalArrangement = Arrangement.Start,
         verticalAlignment = Alignment.CenterVertically
     ) {
         members.take(3).forEach { member ->
@@ -104,13 +100,9 @@ private fun GroupMemberAvatar(
 ) {
     val isReplying = position == 0
     val isQueued = position > 0
-    val dimmed = isReplying || isQueued
     Box(
         modifier = Modifier
             .size(44.dp)
-            .alpha(if (dimmed) 0.55f else 1f)
-            .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.surfaceContainerLow)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -118,30 +110,27 @@ private fun GroupMemberAvatar(
             ),
         contentAlignment = Alignment.Center
     ) {
-        val avatarUri = member.persona?.aiAvatarUri
-        if (avatarUri != null) {
-            AsyncImage(
-                model = avatarUri,
-                contentDescription = member.persona?.name ?: "成员",
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.size(44.dp).clip(CircleShape)
-            )
-        } else {
-            Icon(
-                imageVector = Icons.Filled.Person,
-                contentDescription = member.persona?.name ?: "成员",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(24.dp)
-            )
-        }
+        AiAvatar(
+            avatarUri = member.persona?.aiAvatarUri,
+            name = member.persona?.name.orEmpty(),
+            size = 44.dp
+        )
         when {
             isReplying -> ThreeDotLoading()
-            isQueued -> Text(
-                text = position.toString(),
-                style = MaterialTheme.typography.titleMedium,
-                color = Color.White,
-                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
-            )
+            isQueued -> Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.4f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = position.toString(),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = Color.White,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                )
+            }
         }
     }
 }

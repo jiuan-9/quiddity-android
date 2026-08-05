@@ -3,8 +3,13 @@ package com.quiddity.app.ui.chat
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.graphics.Rect
+import android.os.Build
 import android.widget.Toast
+import android.view.ViewTreeObserver
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -20,8 +25,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.ime
-import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
@@ -58,6 +62,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -70,10 +75,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -177,8 +184,9 @@ fun ChatScreen(
         }
     }
 
-    var withdrawTargetId by rememberSaveable { mutableStateOf<String?>(null) }
-    var rewriteTargetId by rememberSaveable { mutableStateOf<String?>(null) }
+    // 当前展开操作项的消息 id（用户消息=撤回；AI 消息=重说/继续说/改写/删除面板）。
+    // 全局只保留一个展开项，点击其他气泡自动切换。
+    var expandedActionId by rememberSaveable { mutableStateOf<String?>(null) }
     var rewritingMessageId by rememberSaveable { mutableStateOf<String?>(null) }
 
     // ===== 多选模式状态 =====
@@ -214,10 +222,21 @@ fun ChatScreen(
         }
     }
 
+    // 展开操作项/面板时，把对应消息滚到可见位置，避免被输入法键盘或输入栏遮住
+    LaunchedEffect(expandedActionId) {
+        val id = expandedActionId ?: return@LaunchedEffect
+        val index = messages.indexOfFirst { it.id == id }
+        if (index >= 0) {
+            // reverseLayout：原始 index 需映射到反转列表的 index
+            listState.animateScrollToItem(messages.size - 1 - index)
+        }
+    }
+
     // ===== 多选模式：辅助函数 =====
     fun enterMultiSelect(messageId: String) {
         multiSelectMode = true
         selectedMessageIds = setOf(messageId)
+        expandedActionId = null
     }
     fun toggleSelection(messageId: String) {
         selectedMessageIds = if (selectedMessageIds.contains(messageId)) {
@@ -263,9 +282,53 @@ fun ChatScreen(
         exitMultiSelect()
     }
 
-    // ===== 键盘感知：IME 弹起时滚动到底部 =====
+    // ===== 键盘感知：窗口可见区域测量键盘高度 + 消息列表/输入栏平滑跟随 =====
+    // edge-to-edge 下窗口不被系统压缩，键盘高度用窗口可见区域测量（不依赖 IME insets 派发）。
+    // 键盘弹起时消息列表与输入栏从原位平滑升到键盘上方，收起时降回；顶栏与背景不参与偏移。
+    val composeView = LocalView.current
+    val imeHeight = remember { mutableFloatStateOf(0f) }
+    val keyboardOffset = remember { Animatable(0f) }
+    var lastImeHeight by remember { mutableFloatStateOf(0f) }
+    DisposableEffect(composeView) {
+        val frame = Rect()
+        val listener = ViewTreeObserver.OnGlobalLayoutListener {
+            composeView.getWindowVisibleDisplayFrame(frame)
+            val fullHeight = composeView.rootView.height
+            val frameKeyboardHeight = (fullHeight - frame.bottom).coerceAtLeast(0)
+            val insetKeyboardHeight = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                composeView.rootWindowInsets
+                    ?.getInsets(android.view.WindowInsets.Type.ime())
+                    ?.bottom ?: 0
+            } else {
+                0
+            }
+            val keyboardHeight = maxOf(frameKeyboardHeight, insetKeyboardHeight)
+            imeHeight.floatValue = keyboardHeight.toFloat()
+        }
+        composeView.viewTreeObserver.addOnGlobalLayoutListener(listener)
+        onDispose {
+            composeView.viewTreeObserver.removeOnGlobalLayoutListener(listener)
+        }
+    }
     val density = LocalDensity.current
-    val imeBottom = WindowInsets.ime.getBottom(density)
+    val imeBottom = imeHeight.floatValue
+    LaunchedEffect(imeHeight.floatValue) {
+        val current = imeHeight.floatValue
+        if (current == lastImeHeight) return@LaunchedEffect
+        val prev = lastImeHeight
+        lastImeHeight = current
+        if (current > prev) {
+            keyboardOffset.animateTo(
+                targetValue = -current,
+                animationSpec = tween(durationMillis = 250, easing = FastOutSlowInEasing)
+            )
+        } else {
+            keyboardOffset.animateTo(
+                targetValue = 0f,
+                animationSpec = tween(durationMillis = 250, easing = FastOutSlowInEasing)
+            )
+        }
+    }
     // 仅在 IME 由隐藏变为可见时触发一次，避免 IME 收起动画期间反复把列表拉回底部，
     // 覆盖搜索结果的跳转定位（“还没划上去就又回到最底下”的根因）。
     var wasImeVisible by remember { mutableStateOf(false) }
@@ -274,9 +337,9 @@ fun ChatScreen(
         wasImeVisible = imeBottom > 0
         // 当前规则：仅有 isNotice 提示气泡时不滚动（LazyColumn 未渲染）
         if (opened && messages.any { !it.isNotice }) {
-            listState.scrollToItem(messages.size - 1)
+            listState.scrollToItem(0)
             kotlinx.coroutines.delay(300)
-            listState.animateScrollToItem(messages.size - 1)
+            listState.animateScrollToItem(0)
         }
     }
 
@@ -291,8 +354,8 @@ fun ChatScreen(
             val info = listState.layoutInfo
             val totalItems = info.totalItemsCount
             if (totalItems == 0) return@derivedStateOf true
-            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
-            lastVisible >= totalItems - 3
+            // reverseLayout：底部（最新一条）对应 index 0，贴底 = 可见项包含 0/1
+            info.visibleItemsInfo.any { it.index <= 1 }
         }
     }
     var initialScrollDone by rememberSaveable { mutableStateOf(false) }
@@ -311,7 +374,8 @@ fun ChatScreen(
             if (index >= 0) {
                 highlightMessageId = jumpId
                 withFrameNanos { }
-                listState.scrollToItem(index)
+                // reverseLayout：映射到反转列表的 index
+                listState.scrollToItem(messages.size - 1 - index)
             }
             return@LaunchedEffect
         }
@@ -319,14 +383,14 @@ fun ChatScreen(
         lastSeenMessageId = lastMessageId
         if (isNewMessage) {
             if (!initialScrollDone) {
-                listState.scrollToItem(messages.size - 1)
+                listState.scrollToItem(0)
                 initialScrollDone = true
             } else {
                 withFrameNanos { }
-                listState.animateScrollToItem(messages.size - 1)
+                listState.animateScrollToItem(0)
             }
         } else if (isAtBottom) {
-            listState.scrollToItem(messages.size - 1)
+            listState.scrollToItem(0)
         }
     }
 
@@ -530,7 +594,6 @@ fun ChatScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .imePadding()
         ) {
             // ===== 顶部栏（多选模式下切换为多选操作栏） =====
             if (multiSelectMode) {
@@ -538,10 +601,7 @@ fun ChatScreen(
                     selectedCount = selectedMessageIds.size,
                     allSelected = selectedMessageIds == allSelectableIds && allSelectableIds.isNotEmpty(),
                     onClose = { exitMultiSelect() },
-                    onSelectAll = { toggleSelectAll() },
-                    onCopy = { copySelectedMessages() },
-                    onExportImage = ::exportSelectedAsImage,
-                    onDelete = { deleteSelectedMessages() }
+                    onSelectAll = { toggleSelectAll() }
                 )
             } else {
                 Row(
@@ -582,27 +642,7 @@ fun ChatScreen(
                         modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
                         textAlign = TextAlign.Center
                     )
-                    Box(
-                        modifier = Modifier
-                            .size(48.dp)
-                            .clip(RoundedCornerShape(50))
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null
-                            ) { searchActive = !searchActive },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Search,
-                            contentDescription = "搜索聊天记录",
-                            tint = if (searchActive) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurface
-                            },
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
+                    // 头部不显示放大镜（私聊/群聊均无），查找聊天记录入口统一在会话设置内
                     Box(
                         modifier = Modifier
                             .size(48.dp)
@@ -660,6 +700,8 @@ fun ChatScreen(
             Box(
                 modifier = Modifier
                     .weight(1f)
+                    // 键盘弹起时列表区域收缩（底部让位给键盘），气泡不进入顶栏、不与输入栏脱节
+                    .padding(bottom = with(density) { (-keyboardOffset.value).coerceAtLeast(0f).toDp() })
             ) {
                 when {
                     searchActive && searchQuery.isNotBlank() -> {
@@ -739,20 +781,49 @@ fun ChatScreen(
                         LazyColumn(
                             state = listState,
                             modifier = Modifier.fillMaxSize(),
+                            // 消息从底部排列：最新一条贴近输入栏，消息少时气泡不挤在顶部
+                            reverseLayout = true,
                             contentPadding = PaddingValues(vertical = 12.dp),
                             verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
                             items(
-                                items = messages,
+                                items = messages.asReversed(),
                                 key = { it.id },
                                 contentType = { if (it.isNotice) "notice" else it.role.name }
                             ) { message ->
                                 // 关键性能优化：key(message.id) + 独立 composable 让 ChatScreen 重组时
                                 // message 内容未变的气泡完全跳过重组（流式每个 token 触发 messages 变化，
                                 // 原实现会让所有气泡都重组，因为 lambda 参数每帧都是新实例）
+                                val rowSelected = selectedMessageIds.contains(message.id)
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
+                                        .then(
+                                            if (multiSelectMode && !message.isNotice) {
+                                                // 多选：点击整行勾选，选中行整行高亮
+                                                Modifier
+                                                    .clip(RoundedCornerShape(10.dp))
+                                                    .background(
+                                                        if (rowSelected) {
+                                                            MaterialTheme.colorScheme.primaryContainer
+                                                                .copy(alpha = 0.35f)
+                                                        } else {
+                                                            Color.Transparent
+                                                        }
+                                                    )
+                                                    .clickable(
+                                                        interactionSource = remember {
+                                                            MutableInteractionSource()
+                                                        },
+                                                        indication = null
+                                                    ) { toggleSelection(message.id) }
+                                            } else {
+                                                Modifier
+                                            }
+                                        )
+                                        .padding(
+                                            horizontal = if (multiSelectMode && !message.isNotice) 4.dp else 0.dp
+                                        )
                                 ) {
                                     if (message.isNotice) {
                                         NoticeBubble(content = message.content)
@@ -767,6 +838,7 @@ fun ChatScreen(
                                                 isGenerating = isGenerating,
                                                 userAvatarUri = settings.userAvatarUri,
                                                 aiAvatarUri = conversation?.persona?.aiAvatarUri,
+                                                aiName = conversation?.persona?.name,
                                                 senderName = if (message.role == Role.USER) {
                                                     if (isGroupChat) "我" else null
                                                 } else {
@@ -786,14 +858,19 @@ fun ChatScreen(
                                                 typingDelayMsPerChar = settings.typingDelayMsPerChar,
                                                 isSelected = selectedMessageIds.contains(message.id),
                                                 isHighlighted = highlightMessageId == message.id,
-                                                isWithdrawing = withdrawTargetId == message.id,
-                                                isRewriting = rewriteTargetId == message.id,
+                                                isWithdrawing = expandedActionId == message.id,
+                                                isActionsExpanded = expandedActionId == message.id,
                                                 viewModel = viewModel,
                                                 onEnterMultiSelect = ::enterMultiSelect,
                                                 onToggleSelection = ::toggleSelection,
-                                                onWithdrawTargetChange = { withdrawTargetId = it },
-                                                onRewriteTargetChange = { rewriteTargetId = it },
-                                                onStartRewrite = { rewritingMessageId = it; rewriteTargetId = null }
+                                                onToggleActions = {
+                                                    expandedActionId = if (expandedActionId == message.id) {
+                                                        null
+                                                    } else {
+                                                        message.id
+                                                    }
+                                                },
+                                                onStartRewrite = { rewritingMessageId = it; expandedActionId = null }
                                             )
                                         }
                                     }
@@ -814,28 +891,57 @@ fun ChatScreen(
                 }
             }
 
-            // 输入栏（多选模式 / 会话内搜索时隐藏）
-            if (!multiSelectMode && !searchActive) {
-                // 群聊成员头像栏（方案十一：输入框上方、向右靠齐、随键盘一起动）
-                if (isGroupChat) {
-                    GroupAvatarBar(
-                        members = groupMembers,
-                        queue = groupQueue,
-                        onTap = { memberId -> viewModel.enqueueGroupMember(memberId) },
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)
+            // 输入栏区域：随键盘升起/降下（与消息列表同步偏移），顶栏与背景不动
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .graphicsLayer {
+                        translationY = keyboardOffset.value
+                    }
+            ) {
+                // 输入栏：多选模式下切换为底部操作栏（复制/导出长图/删除），搜索时隐藏
+                if (multiSelectMode) {
+                    MultiSelectActionBar(
+                        selectedCount = selectedMessageIds.size,
+                        onCopy = { copySelectedMessages() },
+                        onExportImage = { exportSelectedAsImage() },
+                        onDelete = { deleteSelectedMessages() }
+                    )
+                } else if (!searchActive) {
+                    ChatInputBar(
+                        enterToSend = settings.enterToSend,
+                        isGenerating = isGenerating,
+                        allowSendWhileGenerating = isGroupChat,
+                        onSend = { text -> viewModel.sendMessage(text) },
+                        onStop = { viewModel.stopGeneration() },
+                        enabled = !showHamburger,
+                        transparent = wallpaperUri != null,
+                        onTextChange = { text -> viewModel.updateInputText(text) },
+                        isCompressing = isCompressing,
+                        // 群聊成员头像栏（方案十一：并入输入框容器、靠左、随键盘一起动）
+                        header = if (isGroupChat) {
+                            {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(16.dp))
+                                        .background(
+                                            MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.45f)
+                                        )
+                                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                                ) {
+                                    GroupAvatarBar(
+                                        members = groupMembers,
+                                        queue = groupQueue,
+                                        onTap = { memberId -> viewModel.enqueueGroupMember(memberId) }
+                                    )
+                                }
+                            }
+                        } else {
+                            null
+                        }
                     )
                 }
-                ChatInputBar(
-                    enterToSend = settings.enterToSend,
-                    isGenerating = isGenerating,
-                    allowSendWhileGenerating = isGroupChat,
-                    onSend = { text -> viewModel.sendMessage(text) },
-                    onStop = { viewModel.stopGeneration() },
-                    enabled = !showHamburger,
-                    transparent = wallpaperUri != null,
-                    onTextChange = { text -> viewModel.updateInputText(text) },
-                    isCompressing = isCompressing
-                )
             }
         }
 
@@ -850,6 +956,10 @@ fun ChatScreen(
         viewModel = viewModel,
         settingsViewModel = settingsViewModel,
         onDismiss = { dragController.closeMenu() },
+        onDeleteConversation = {
+            viewModel.deleteCurrentConversation()
+            onBack()
+        },
         onJumpToMessage = { id ->
             // 走统一的 pendingJumpMessageId 定位机制（自动滚动协程消费），
             // 避免与 IME 收起/菜单关闭动画竞争导致跳转被拉回底部
@@ -1014,36 +1124,29 @@ private fun ThinkingBubble(aiAvatarUri: String?) {
 }
 
 /**
- * 多选模式顶部操作栏。
+ * 多选模式顶部操作栏（精简版）。
  *
- * 布局：关闭按钮 | 已选 N 项 | 全选 + 复制 + 导出长图 + 删除
- * - 关闭按钮退出多选模式（清空选择）
- * - "全选"图标在已全选时切换为取消全选
- * - 导出长图把选中消息生成固定浅色长图并弹系统分享
- * - 复制/删除在选中数为 0 时仍可点击但无操作（由调用方判断）
+ * 布局：关闭按钮 | 已选 N 项 | 全选（文字按钮）
+ * - 复制 / 导出长图 / 删除 操作移到底部操作栏，避免遮挡聊天内容
  */
 @Composable
 private fun MultiSelectTopBar(
     selectedCount: Int,
     allSelected: Boolean,
     onClose: () -> Unit,
-    onSelectAll: () -> Unit,
-    onCopy: () -> Unit,
-    onExportImage: () -> Unit,
-    onDelete: () -> Unit
+    onSelectAll: () -> Unit
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .windowInsetsPadding(WindowInsets.statusBars)
-            .height(56.dp)
-            .padding(horizontal = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
+            .height(48.dp)
+            .padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
             modifier = Modifier
-                .size(48.dp)
+                .size(40.dp)
                 .clip(RoundedCornerShape(50))
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
@@ -1056,88 +1159,103 @@ private fun MultiSelectTopBar(
                 imageVector = Icons.Filled.Close,
                 contentDescription = "退出多选",
                 tint = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.size(24.dp)
+                modifier = Modifier.size(22.dp)
             )
         }
         Text(
             text = "已选 $selectedCount 项",
-            style = MaterialTheme.typography.titleMedium,
+            style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.Medium,
             color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.weight(1f).padding(horizontal = 4.dp)
+            modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
         )
-        Box(
-            modifier = Modifier
-                .size(48.dp)
-                .clip(RoundedCornerShape(50))
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = onSelectAll
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = if (allSelected) Icons.Filled.Deselect else Icons.Filled.SelectAll,
-                contentDescription = if (allSelected) "取消全选" else "全选",
-                tint = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.size(24.dp)
+        TextButton(onClick = onSelectAll) {
+            Text(
+                text = if (allSelected) "取消全选" else "全选",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Medium
             )
         }
-        Box(
+    }
+}
+
+/**
+ * 多选模式底部操作栏：复制 / 导出长图 / 删除。
+ * 放置在原输入栏位置，选中数为 0 时置灰不可点。
+ */
+@Composable
+private fun MultiSelectActionBar(
+    selectedCount: Int,
+    onCopy: () -> Unit,
+    onExportImage: () -> Unit,
+    onDelete: () -> Unit
+) {
+    Surface(color = MaterialTheme.colorScheme.background) {
+        Row(
             modifier = Modifier
-                .size(48.dp)
-                .clip(RoundedCornerShape(50))
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = onCopy
-                ),
-            contentAlignment = Alignment.Center
+                .fillMaxWidth()
+                .windowInsetsPadding(WindowInsets.navigationBars)
+                .padding(vertical = 6.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(
-                imageVector = Icons.Filled.ContentCopy,
-                contentDescription = "复制",
+            MultiSelectActionButton(
+                icon = Icons.Filled.ContentCopy,
+                label = "复制",
+                enabled = selectedCount > 0,
                 tint = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.size(24.dp)
+                onClick = onCopy
             )
-        }
-        Box(
-            modifier = Modifier
-                .size(48.dp)
-                .clip(RoundedCornerShape(50))
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = onExportImage
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.Filled.IosShare,
-                contentDescription = "导出长图",
+            MultiSelectActionButton(
+                icon = Icons.Filled.IosShare,
+                label = "导出长图",
+                enabled = selectedCount > 0,
                 tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(24.dp)
+                onClick = onExportImage
             )
-        }
-        Box(
-            modifier = Modifier
-                .size(48.dp)
-                .clip(RoundedCornerShape(50))
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = onDelete
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.Filled.Delete,
-                contentDescription = "删除",
+            MultiSelectActionButton(
+                icon = Icons.Filled.Delete,
+                label = "删除",
+                enabled = selectedCount > 0,
                 tint = MaterialTheme.colorScheme.error,
-                modifier = Modifier.size(24.dp)
+                onClick = onDelete
             )
         }
+    }
+}
+
+@Composable
+private fun MultiSelectActionButton(
+    icon: ImageVector,
+    label: String,
+    enabled: Boolean,
+    tint: Color,
+    onClick: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(
+                enabled = enabled,
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick
+            )
+            .padding(horizontal = 20.dp, vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = if (enabled) tint else tint.copy(alpha = 0.35f),
+            modifier = Modifier.size(22.dp)
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = if (enabled) tint else tint.copy(alpha = 0.35f),
+            fontWeight = FontWeight.Medium
+        )
     }
 }
 
@@ -1161,6 +1279,7 @@ private fun MessageBubbleItem(
     isGenerating: Boolean,
     userAvatarUri: String?,
     aiAvatarUri: String?,
+    aiName: String?,
     senderName: String?,
     senderAvatarUri: String?,
     bracketGrayEnabled: Boolean,
@@ -1169,12 +1288,11 @@ private fun MessageBubbleItem(
     isSelected: Boolean,
     isHighlighted: Boolean,
     isWithdrawing: Boolean,
-    isRewriting: Boolean,
+    isActionsExpanded: Boolean,
     viewModel: ChatViewModel,
     onEnterMultiSelect: (String) -> Unit,
     onToggleSelection: (String) -> Unit,
-    onWithdrawTargetChange: (String?) -> Unit,
-    onRewriteTargetChange: (String?) -> Unit,
+    onToggleActions: () -> Unit,
     onStartRewrite: (String) -> Unit
 ) {
     val mid = message.id
@@ -1188,19 +1306,20 @@ private fun MessageBubbleItem(
             { viewModel.regenerate() }
         }
     }
+    // 继续说仅私聊（继续最后一条 AI 回复）；群聊继续接话靠点头像点名，不提供继续说
     val cont = remember(viewModel) { { viewModel.continueGeneration() } }
     val withdraw = remember(viewModel, mid) {
         {
             viewModel.withdrawMessage(mid)
-            onWithdrawTargetChange(null)
+            onToggleActions()
         }
     }
 
     // ===== 缓存依赖状态的回调（key 用稳定的状态枚举）=====
     // lambda body 用 { ... } 包裹成 () -> Unit 表达式，避免 Kotlin 把单语句函数调用当成 Unit 返回值
     // （推断出 Unit 而非 () -> Unit，类型不匹配）。
-    val onRegenFinal: (() -> Unit)? = if (!inMultiSelect && !isGenerating &&
-        (isGroupChat && !isUserMsg || (!isGroupChat && isLastAi))) {
+    // 重说：私聊=重说 AI 这一整轮；群聊=仅限最后一条成员消息（方案：群聊重说仅末条）
+    val onRegenFinal: (() -> Unit)? = if (!inMultiSelect && !isGenerating && !isUserMsg && isLastAi) {
         remember<() -> Unit>(inMultiSelect, isLastAi, isGenerating, regen) { { regen() } }
     } else null
     val onContFinal: (() -> Unit)? = if (!inMultiSelect && isLastAi && !isGenerating && !isGroupChat) {
@@ -1210,20 +1329,16 @@ private fun MessageBubbleItem(
         remember<() -> Unit>(inMultiSelect, isUserMsg, isGenerating, withdraw) { { withdraw() } }
     } else null
     val onBubbleClickFinal: (() -> Unit)? = if (!inMultiSelect && isUserMsg && !isGenerating) {
-        remember<() -> Unit>(inMultiSelect, isUserMsg, isGenerating, isWithdrawing) {
-            { onWithdrawTargetChange(if (isWithdrawing) null else mid) }
-        }
+        remember<() -> Unit>(inMultiSelect, isUserMsg, isGenerating) { { onToggleActions() } }
     } else null
     val onLongClickFinal: (() -> Unit)? = if (!inMultiSelect && !isGenerating) {
         remember<() -> Unit>(inMultiSelect, isGenerating) { { onEnterMultiSelect(mid) } }
     } else null
-    val onRewriteTriggerFinal: (() -> Unit)? = if (!inMultiSelect && isLastAi && !isGenerating) {
-        remember<() -> Unit>(inMultiSelect, isLastAi, isGenerating, isRewriting) {
-            { onRewriteTargetChange(if (isRewriting) null else mid) }
+    // AI 消息操作面板：展开时提供改写/删除；重说/继续说按各自可用性显示。
+    val onRewriteFinal: (() -> Unit)? = if (!inMultiSelect && !isUserMsg && !isGenerating && isActionsExpanded) {
+        remember<() -> Unit>(inMultiSelect, isUserMsg, isGenerating, isActionsExpanded) {
+            { onStartRewrite(mid) }
         }
-    } else null
-    val onRewriteFinal: (() -> Unit)? = if (!inMultiSelect && isLastAi && !isGenerating && isRewriting) {
-        remember<() -> Unit>(inMultiSelect, isLastAi, isGenerating, isRewriting) { { onStartRewrite(mid) } }
     } else null
     val onSelectFinal: (() -> Unit)? = if (inMultiSelect) {
         remember<() -> Unit>(inMultiSelect) { { onToggleSelection(mid) } }
@@ -1231,8 +1346,10 @@ private fun MessageBubbleItem(
 
     MessageBubble(
         message = message,
+        isGroupChat = isGroupChat,
         userAvatarUri = userAvatarUri,
         aiAvatarUri = aiAvatarUri,
+        aiName = aiName,
         senderName = senderName,
         senderAvatarUri = senderAvatarUri,
         bracketGrayEnabled = bracketGrayEnabled,
@@ -1245,9 +1362,11 @@ private fun MessageBubbleItem(
         isWithdrawing = isWithdrawing,
         onBubbleClick = onBubbleClickFinal,
         onLongClick = onLongClickFinal,
-        onRewriteTrigger = onRewriteTriggerFinal,
+        isActionsExpanded = isActionsExpanded,
+        onToggleActions = if (!inMultiSelect && !isUserMsg && !isGenerating) {
+            remember<() -> Unit>(inMultiSelect, isUserMsg, isGenerating) { { onToggleActions() } }
+        } else null,
         onRewrite = onRewriteFinal,
-        isRewriting = isRewriting,
         isHighlighted = isHighlighted,
         multiSelectMode = inMultiSelect,
         isSelected = isSelected,
