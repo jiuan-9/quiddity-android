@@ -29,4 +29,10 @@ class SendDelayGateTest {
         assertFalse(SendDelayGate.shouldFire("", 3500L, 6000L, 3000L))
         assertTrue(SendDelayGate.shouldFire("", 3500L, 6500L, 3000L))
     }
+
+    @Test
+    fun `zero delay means disabled and fires immediately`() {
+        assertTrue(SendDelayGate.shouldFire("", 0L, 0L, 0L))
+        assertTrue(SendDelayGate.shouldFire("", 1234L, 1234L, 0L))
+    }
 }

@@ -206,11 +206,13 @@ text = "统一管控加载动画时长与发送延迟，关闭则所有延迟功
                             value = sendDelaySeconds.toFloat(),
                             valueRange = QuiddityConstants.MIN_SEND_DELAY_SECONDS.toFloat()..
                                 QuiddityConstants.MAX_SEND_DELAY_SECONDS.toFloat(),
-                            steps = QuiddityConstants.MAX_SEND_DELAY_SECONDS - 2,
+                            steps = QuiddityConstants.MAX_SEND_DELAY_SECONDS -
+                                QuiddityConstants.MIN_SEND_DELAY_SECONDS - 1,
                             enabled = overallEnabled,
                             explanation = "点击发送后，应用等待的秒数。期间若你继续输入，" +
                                 "计时会重置，直到你停止输入才真正发出请求。" +
-                                "这样能避免连续输入时发出多个请求，节省 Token 消耗。",
+                                "这样能避免连续输入时发出多个请求，节省 Token 消耗。" +
+                                "设为 0 秒即关闭本功能。",
                             valueFormatter = { "${it}s" },
                             onCommit = { onSendDelaySecondsChange(it) }
                         )

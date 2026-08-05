@@ -367,9 +367,9 @@ class ChatViewModel(
                 conversationRepository.appendMessage(userMsg)
             }
 
-            // 发送延迟——等待用户停止输入后再发出 API 请求（编辑感知防抖）
+            // 发送延迟——等待用户停止输入后再发出 API 请求（编辑感知防抖；0 秒 = 关闭）
             val settings = settingsRepository.currentSnapshot()
-            if (settings.sendDelayEnabled) {
+            if (settings.sendDelayEnabled && settings.sendDelaySeconds > 0) {
                 val delayMs = settings.sendDelaySeconds * 1000L
                 while (true) {
                     if (com.quiddity.app.domain.SendDelayGate.shouldFire(

@@ -393,7 +393,8 @@ data class AppSettings(
     val sendDelayEnabled: Boolean = QuiddityConstants.DEFAULT_SEND_DELAY_ENABLED,
     /**
      * - 范围 [QuiddityConstants.MIN_SEND_DELAY_SECONDS] - [QuiddityConstants.MAX_SEND_DELAY_SECONDS]
-     * - 默认 [QuiddityConstants.DEFAULT_SEND_DELAY_SECONDS]（3秒）
+     * - 默认 [QuiddityConstants.DEFAULT_SEND_DELAY_SECONDS]（2秒）
+     * - 0 秒 = 关闭发送延迟
      */
     val sendDelaySeconds: Int = QuiddityConstants.DEFAULT_SEND_DELAY_SECONDS,
     /**

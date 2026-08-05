@@ -175,8 +175,9 @@ object QuiddityConstants {
     /** 发送延迟默认开启。 */
     const val DEFAULT_SEND_DELAY_ENABLED = true
     /** 发送延迟默认秒数。 */
-    const val DEFAULT_SEND_DELAY_SECONDS = 3
-    const val MIN_SEND_DELAY_SECONDS = 1
+    const val DEFAULT_SEND_DELAY_SECONDS = 2
+    /** 最小 0 秒 = 关闭发送延迟。 */
+    const val MIN_SEND_DELAY_SECONDS = 0
     const val MAX_SEND_DELAY_SECONDS = 30
 
     // ===== 记忆库 =====
