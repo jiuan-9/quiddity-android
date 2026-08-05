@@ -367,15 +367,21 @@ class ChatViewModel(
                 conversationRepository.appendMessage(userMsg)
             }
 
-            // 发送延迟——等待用户停止输入后再发出 API 请求
+            // 发送延迟——等待用户停止输入后再发出 API 请求（编辑感知防抖）
             val settings = settingsRepository.currentSnapshot()
             if (settings.sendDelayEnabled) {
                 val delayMs = settings.sendDelaySeconds * 1000L
-                kotlinx.coroutines.delay(delayMs)
-                // 等待输入框为空（用户停止输入）
-                // 如果用户在等待期间继续输入并发送，sendDelayJob 会被外层 cancel 并重启
-                while (_inputBarText.value.isNotBlank()) {
-                    kotlinx.coroutines.delay(500)
+                while (true) {
+                    if (com.quiddity.app.domain.SendDelayGate.shouldFire(
+                            _inputBarText.value,
+                            lastInputEditAt,
+                            System.currentTimeMillis(),
+                            delayMs
+                        )
+                    ) {
+                        break
+                    }
+                    kotlinx.coroutines.delay(250)
                 }
             }
 
@@ -1701,12 +1707,17 @@ class ChatViewModel(
     /** 发送延迟计时器。 */
     private var sendDelayJob: Job? = null
 
+    /** 输入框最后一次编辑时间（含退格，用于发送延迟防抖重计时）。 */
+    private var lastInputEditAt = 0L
+
     /**
      * 更新输入框文本状态（由 ChatInputBar 调用）。
-     * 用于发送延迟检测：当输入框为空时才真正发出 API 请求。
+     * 用于发送延迟检测：记录每次编辑（含退格），防抖重计时。
      */
     fun updateInputText(text: String) {
+        if (_inputBarText.value == text) return
         _inputBarText.value = text
+        lastInputEditAt = System.currentTimeMillis()
     }
 
     /**
