@@ -44,28 +44,32 @@ enum class QuickSetupTier(
     val maxChars: Int,
     val maxWords: Int,
     val requiredTier: ApiCatalogManager.ModelTier,
-    val includesMemory: Boolean
+    val includesMemory: Boolean,
+    val densityRequirement: String
 ) {
     ROUGH(
         chineseName = "粗略",
         maxChars = 500,
         maxWords = 300,
         requiredTier = ApiCatalogManager.ModelTier.BASIC,
-        includesMemory = false
+        includesMemory = false,
+        densityRequirement = "内容精炼：每个字段用 1-3 句具体信息填充完整，禁止敷衍。"
     ),
     CONCRETE(
         chineseName = "具体",
         maxChars = 2000,
         maxWords = 1200,
         requiredTier = ApiCatalogManager.ModelTier.ADVANCED,
-        includesMemory = true
+        includesMemory = true,
+        densityRequirement = "内容充实：每个字段展开为一段有细节的完整描述。"
     ),
     COMPREHENSIVE(
         chineseName = "全面",
         maxChars = 5000,
         maxWords = 3500,
         requiredTier = ApiCatalogManager.ModelTier.FULL,
-        includesMemory = true
+        includesMemory = true,
+        densityRequirement = "内容详尽：每个字段充分展开，细节丰富、自成体系。"
     );
 
     // ===== 三条开发规范（位于文件中间位置） =====
