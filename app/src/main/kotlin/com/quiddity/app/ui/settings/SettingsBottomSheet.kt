@@ -37,6 +37,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
@@ -366,7 +367,8 @@ fun SettingsBottomSheet(
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(screenHeight * 0.8f)
+                    .heightIn(max = screenHeight * 0.8f)
+                    .fillMaxHeight()
                     .graphicsLayer {
                     // 整个面板跟随拖动偏移（1:1，draw phase 读取，零重组）
                     translationY = dragOffsetYState.floatValue.coerceAtLeast(0f)

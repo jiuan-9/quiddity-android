@@ -13,9 +13,11 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
@@ -141,7 +143,8 @@ fun ApiEditBottomSheet(
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(screenHeight * 0.85f),
+                    .heightIn(max = screenHeight * 0.85f)
+                    .fillMaxHeight(),
                 color = MaterialTheme.colorScheme.surface,
                 shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
                 tonalElevation = 3.dp,
