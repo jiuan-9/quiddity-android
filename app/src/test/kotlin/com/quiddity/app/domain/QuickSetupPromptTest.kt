@@ -67,4 +67,53 @@ class QuickSetupPromptTest {
         assertTrue(sys.contains("密度优先"))
         assertTrue(sys.contains("每个字段都必须填充"))
     }
+
+    @Test
+    fun `missing required field keys per tier`() {
+        val empty = QuickSetupResult(
+            persona = Persona.Empty,
+            userPersona = UserPersona.Empty,
+            scene = "",
+            memory = ""
+        )
+        val roughMissing = empty.missingRequiredFieldKeys(QuickSetupTier.ROUGH)
+        assertTrue("ai_name" in roughMissing)
+        assertTrue("ai_persona" in roughMissing)
+        assertTrue("ai_character" in roughMissing)
+        assertTrue("user_name" in roughMissing)
+        assertTrue("scene" in roughMissing)
+        assertTrue("memory" !in roughMissing)
+
+        val fullMissing = empty.missingRequiredFieldKeys(QuickSetupTier.COMPREHENSIVE)
+        assertTrue("ai_appearance" in fullMissing)
+        assertTrue("ai_world_background" in fullMissing)
+        assertTrue("ai_desired" in fullMissing)
+        assertTrue("memory" in fullMissing)
+    }
+
+    @Test
+    fun `filled persona has no missing keys`() {
+        val filled = QuickSetupResult(
+            persona = Persona(
+                name = "林夕",
+                persona = "学姐",
+                character = "温柔",
+                appearance = "长发",
+                worldBackground = "都市世界，大学",
+                desired = "耐心",
+                compiledPersona = null,
+                aiAvatarUri = null
+            ),
+            userPersona = UserPersona(
+                name = "小明",
+                identity = "新生",
+                gender = "暂不设置",
+                age = "18",
+                appearance = "运动装"
+            ),
+            scene = "图书馆",
+            memory = "喜欢拿铁"
+        )
+        assertEquals(emptySet(), filled.missingRequiredFieldKeys(QuickSetupTier.COMPREHENSIVE))
+    }
 }

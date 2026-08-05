@@ -53,6 +53,7 @@ import com.quiddity.app.domain.AiPersonaField
 import com.quiddity.app.domain.ApiCatalogManager
 import com.quiddity.app.domain.QuickSetupPrompt
 import com.quiddity.app.domain.QuickSetupTier
+import com.quiddity.app.domain.missingRequiredFieldKeys
 import com.quiddity.app.ui.components.ConfirmDialog
 import com.quiddity.app.ui.components.QuiddityTextField
 import com.quiddity.app.ui.theme.Motion
@@ -451,6 +452,10 @@ private fun QuickSetupResultDialog(
         return sb.toString()
     }
 
+    val currentMissing = QuickSetupPrompt
+        .parseQuickSetupResult(buildText(), tier)
+        .missingRequiredFieldKeys(tier)
+
     Dialog(
         onDismissRequest = onCancel,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -476,6 +481,14 @@ private fun QuickSetupResultDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                 )
+                if (currentMissing.isNotEmpty()) {
+                    Spacer(modifier = Modifier.size(8.dp))
+                    Text(
+                        text = "以下字段不能为空：" + currentMissing.map { missingLabel(it) }.joinToString("、"),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
                 Spacer(modifier = Modifier.size(12.dp))
                 Column(
                     modifier = Modifier
@@ -484,32 +497,71 @@ private fun QuickSetupResultDialog(
                         .verticalScroll(rememberScrollState())
                 ) {
                     SectionHeader(title = "AI 人设")
-                    SectionField(label = "名字", value = aiName, onValueChange = { aiName = it }, singleLine = true)
-                    SectionField(label = "身份背景", value = aiPersona, onValueChange = { aiPersona = it })
-                    SectionField(label = "性格", value = aiCharacter, onValueChange = { aiCharacter = it })
+                    SectionField(
+                        label = "名字", value = aiName, onValueChange = { aiName = it },
+                        singleLine = true, isError = "ai_name" in currentMissing
+                    )
+                    SectionField(
+                        label = "身份背景", value = aiPersona, onValueChange = { aiPersona = it },
+                        isError = "ai_persona" in currentMissing
+                    )
+                    SectionField(
+                        label = "性格", value = aiCharacter, onValueChange = { aiCharacter = it },
+                        isError = "ai_character" in currentMissing
+                    )
                     if (AiPersonaField.APPEARANCE in aiFields) {
-                        SectionField(label = "外观", value = aiAppearance, onValueChange = { aiAppearance = it })
+                        SectionField(
+                            label = "外观", value = aiAppearance, onValueChange = { aiAppearance = it },
+                            isError = "ai_appearance" in currentMissing
+                        )
                     }
                     if (AiPersonaField.WORLD_BACKGROUND in aiFields) {
-                        SectionField(label = "世界背景", value = aiWorld, onValueChange = { aiWorld = it })
+                        SectionField(
+                            label = "世界背景", value = aiWorld, onValueChange = { aiWorld = it },
+                            isError = "ai_world_background" in currentMissing
+                        )
                     }
                     if (AiPersonaField.DESIRED in aiFields) {
-                        SectionField(label = "期望特质", value = aiDesired, onValueChange = { aiDesired = it })
+                        SectionField(
+                            label = "期望特质", value = aiDesired, onValueChange = { aiDesired = it },
+                            isError = "ai_desired" in currentMissing
+                        )
                     }
 
                     SectionHeader(title = "用户人设")
-                    SectionField(label = "名字", value = userName, onValueChange = { userName = it }, singleLine = true)
-                    SectionField(label = "身份", value = userIdentity, onValueChange = { userIdentity = it })
-                    SectionField(label = "性别", value = userGender, onValueChange = { userGender = it }, singleLine = true)
-                    SectionField(label = "年龄", value = userAge, onValueChange = { userAge = it }, singleLine = true)
-                    SectionField(label = "外观", value = userAppearance, onValueChange = { userAppearance = it })
+                    SectionField(
+                        label = "名字", value = userName, onValueChange = { userName = it },
+                        singleLine = true, isError = "user_name" in currentMissing
+                    )
+                    SectionField(
+                        label = "身份", value = userIdentity, onValueChange = { userIdentity = it },
+                        isError = "user_identity" in currentMissing
+                    )
+                    SectionField(
+                        label = "性别", value = userGender, onValueChange = { userGender = it },
+                        singleLine = true, isError = "user_gender" in currentMissing
+                    )
+                    SectionField(
+                        label = "年龄", value = userAge, onValueChange = { userAge = it },
+                        singleLine = true, isError = "user_age" in currentMissing
+                    )
+                    SectionField(
+                        label = "外观", value = userAppearance, onValueChange = { userAppearance = it },
+                        isError = "user_appearance" in currentMissing
+                    )
 
                     SectionHeader(title = "场景设置")
-                    SectionField(label = "当前场景", value = scene, onValueChange = { scene = it })
+                    SectionField(
+                        label = "当前场景", value = scene, onValueChange = { scene = it },
+                        isError = "scene" in currentMissing
+                    )
 
                     if (tier.includesMemory) {
                         SectionHeader(title = "记忆设置")
-                        SectionField(label = "需要记住的事", value = memory, onValueChange = { memory = it })
+                        SectionField(
+                            label = "需要记住的事", value = memory, onValueChange = { memory = it },
+                            isError = "memory" in currentMissing
+                        )
                     }
                 }
                 Spacer(modifier = Modifier.size(16.dp))
@@ -518,7 +570,10 @@ private fun QuickSetupResultDialog(
                     horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
                 ) {
                     TextButton(onClick = onCancel) { Text("取消") }
-                    TextButton(onClick = { onFillIn(buildText()) }) {
+                    TextButton(
+                        onClick = { onFillIn(buildText()) },
+                        enabled = currentMissing.isEmpty()
+                    ) {
                         Text("填入", fontWeight = FontWeight.SemiBold)
                     }
                 }
@@ -549,12 +604,14 @@ private fun SectionField(
     label: String,
     value: String,
     onValueChange: (String) -> Unit,
-    singleLine: Boolean = false
+    singleLine: Boolean = false,
+    isError: Boolean = false
 ) {
     Text(
         text = label,
         style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
+        color = if (isError) MaterialTheme.colorScheme.error
+        else MaterialTheme.colorScheme.onSurfaceVariant
     )
     Spacer(modifier = Modifier.size(4.dp))
     OutlinedTextField(
@@ -566,7 +623,28 @@ private fun SectionField(
         textStyle = MaterialTheme.typography.bodySmall,
         singleLine = singleLine,
         minLines = if (singleLine) 1 else 2,
-        maxLines = if (singleLine) 1 else 6
+        maxLines = if (singleLine) 1 else 6,
+        isError = isError
     )
     Spacer(modifier = Modifier.size(8.dp))
+}
+
+/**
+ * 必填缺失 key → 中文名映射（用于错误提示）。
+ */
+private fun missingLabel(key: String): String = when (key) {
+    "ai_name" -> "AI 名字"
+    "ai_persona" -> "AI 身份背景"
+    "ai_character" -> "AI 性格"
+    "ai_appearance" -> "AI 外观"
+    "ai_world_background" -> "AI 世界背景"
+    "ai_desired" -> "AI 期望特质"
+    "user_name" -> "用户名字"
+    "user_identity" -> "用户身份"
+    "user_gender" -> "用户性别"
+    "user_age" -> "用户年龄"
+    "user_appearance" -> "用户外观"
+    "scene" -> "当前场景"
+    "memory" -> "需要记住的事"
+    else -> key
 }

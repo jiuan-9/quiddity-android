@@ -230,3 +230,30 @@ object QuickSetupPrompt {
         return match?.range?.first ?: -1
     }
 }
+
+/**
+ * 必填校验：返回当前档位下缺失字段的 key 集合。
+ * 预览弹窗据此禁用「填入」并标红缺失项。
+ */
+fun QuickSetupResult.missingRequiredFieldKeys(tier: QuickSetupTier): Set<String> {
+    val keys = mutableSetOf<String>()
+    tier.aiPersonaFields().forEach { field ->
+        val value = when (field) {
+            AiPersonaField.NAME -> persona.name
+            AiPersonaField.PERSONA -> persona.persona
+            AiPersonaField.CHARACTER -> persona.character
+            AiPersonaField.APPEARANCE -> persona.appearance
+            AiPersonaField.WORLD_BACKGROUND -> persona.worldBackground
+            AiPersonaField.DESIRED -> persona.desired
+        }
+        if (value.isBlank()) keys += "ai_${field.name.lowercase()}"
+    }
+    if (userPersona.name.isBlank()) keys += "user_name"
+    if (userPersona.identity.isBlank()) keys += "user_identity"
+    if (userPersona.gender.isBlank()) keys += "user_gender"
+    if (userPersona.age.isBlank()) keys += "user_age"
+    if (userPersona.appearance.isBlank()) keys += "user_appearance"
+    if (scene.isBlank()) keys += "scene"
+    if (tier.includesMemory && memory.isBlank()) keys += "memory"
+    return keys
+}

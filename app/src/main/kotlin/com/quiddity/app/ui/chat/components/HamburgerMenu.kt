@@ -560,6 +560,8 @@ fun HamburgerMenu(
                                     },
                                     onApply = { rawText, selectedTier ->
                                         viewModel.applyQuickSetupResult(rawText, selectedTier)
+                                        currentPanel = null
+                                        onDismiss()
                                     },
                                     onBack = { currentPanel = null }
                                 )
