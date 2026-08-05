@@ -38,10 +38,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 /*
@@ -70,7 +68,15 @@ import androidx.compose.ui.unit.dp
  * ============================================================================
  */
 
-// 当前规则：圆角 24dp 输入框；最大 4 行；回车发送策略由 enterToSend 决定；壁纸模式下玻璃质感；
+/**
+ * 输入框行数容量：固定尺寸，不做动态测量。
+ * - GROUP：群聊输入区固定 2 行；
+ * - PRIVATE：私聊输入框容量 = 群聊整体高度（2 行输入 + 成员头像栏）换算出的固定行数。
+ */
+enum class ChatInputBarLineCapacity { GROUP, PRIVATE }
+
+// 当前规则：圆角 24dp 输入框；群聊固定 2 行、私聊按群聊整体高度换算的固定容量；
+// 回车发送策略由 enterToSend 决定；壁纸模式下玻璃质感；
 // 发送按钮三态（正常/停止/压缩置灰）；群聊成员头像栏并入输入框容器顶部（方案十一）。
 @Composable
 fun ChatInputBar(
@@ -86,19 +92,25 @@ fun ChatInputBar(
     isCompressing: Boolean = false,
     // 输入框容器内的顶部内容（群聊成员头像栏，随输入框一起动）
     header: (@Composable () -> Unit)? = null,
-    maxLines: Int = 4,
-    maxFieldHeight: Dp? = null,
-    onContentHeightChanged: ((Int) -> Unit)? = null
+    lineCapacity: ChatInputBarLineCapacity = ChatInputBarLineCapacity.PRIVATE
 ) {
     var text by rememberSaveable { mutableStateOf("") }
 
     val density = LocalDensity.current
-    val effectiveMaxLines = if (maxFieldHeight != null) {
-        val lineHeightPx = with(density) { MaterialTheme.typography.bodyMedium.lineHeight.roundToPx() }
-        val availablePx = with(density) { (maxFieldHeight - 24.dp).roundToPx() }
-        (availablePx / lineHeightPx).coerceAtLeast(1)
-    } else {
-        maxLines
+    // 固定尺寸换算：成员栏 56dp（头像 44dp + 上下 padding 12dp）、输入框内部留白 24dp
+    val lineHeightPx = with(density) { MaterialTheme.typography.bodyMedium.lineHeight.roundToPx() }
+    val fieldInternalPadPx = with(density) { 24.dp.roundToPx() }
+    val memberBarPx = with(density) { 56.dp.roundToPx() }
+    val groupTwoLineFieldPx = (lineHeightPx * 2 + fieldInternalPadPx)
+        .coerceAtLeast(with(density) { 48.dp.roundToPx() })
+    val fieldMaxPx = when (lineCapacity) {
+        ChatInputBarLineCapacity.GROUP -> groupTwoLineFieldPx
+        ChatInputBarLineCapacity.PRIVATE -> groupTwoLineFieldPx + memberBarPx
+    }
+    val effectiveMaxLines = when (lineCapacity) {
+        ChatInputBarLineCapacity.GROUP -> 2
+        ChatInputBarLineCapacity.PRIVATE ->
+            ((fieldMaxPx - fieldInternalPadPx) / lineHeightPx).coerceAtLeast(1)
     }
 
     fun trySend() {
@@ -129,7 +141,6 @@ fun ChatInputBar(
                         MaterialTheme.colorScheme.surfaceContainerLow
                     }
                 )
-                .onSizeChanged { onContentHeightChanged?.invoke(it.height) }
         ) {
             if (header != null) {
                 Box(
@@ -153,7 +164,7 @@ fun ChatInputBar(
                     enabled = enabled,
                     modifier = Modifier
                         .weight(1f)
-                        .heightIn(min = 48.dp, max = maxFieldHeight ?: 140.dp),
+                        .heightIn(min = 48.dp, max = with(density) { fieldMaxPx.toDp() }),
                     placeholder = {
                         Text(
                             text = "输入消息…",
