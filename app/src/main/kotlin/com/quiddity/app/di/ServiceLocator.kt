@@ -5,11 +5,13 @@ import android.content.Context
 import com.quiddity.app.active.AlarmScheduler
 import com.quiddity.app.data.local.CharacterStore
 import com.quiddity.app.data.local.ConversationStore
+import com.quiddity.app.data.local.MiniAppStore
 import com.quiddity.app.data.local.SettingsStore
 import com.quiddity.app.data.remote.ChatApi
 import com.quiddity.app.data.repo.ChatRepository
 import com.quiddity.app.data.repo.CharacterRepository
 import com.quiddity.app.data.repo.ConversationRepository
+import com.quiddity.app.data.repo.MiniAppSessionRepository
 import com.quiddity.app.data.repo.SettingsRepository
 import com.quiddity.app.data.repo.TimeLibraryRepository
 import com.quiddity.app.domain.ApiCatalogManager
@@ -65,6 +67,8 @@ object ServiceLocator {
         private set
     lateinit var conversationStore: ConversationStore
         private set
+    lateinit var miniAppStore: MiniAppStore
+        private set
     lateinit var characterStore: CharacterStore
         private set
     lateinit var chatApi: ChatApi
@@ -75,6 +79,8 @@ object ServiceLocator {
     lateinit var characterRepository: CharacterRepository
         private set
     lateinit var conversationRepository: ConversationRepository
+        private set
+    lateinit var miniAppSessionRepository: MiniAppSessionRepository
         private set
     lateinit var chatRepository: ChatRepository
         private set
@@ -108,6 +114,7 @@ object ServiceLocator {
         appContext = context.applicationContext
         settingsStore = SettingsStore(appContext)
         conversationStore = ConversationStore(appContext)
+        miniAppStore = MiniAppStore(appContext)
         characterStore = CharacterStore(appContext)
         chatApi = ChatApi()
 
@@ -121,6 +128,7 @@ object ServiceLocator {
             apiCatalogManager = apiCatalogManager,
             characterRepository = characterRepository
         )
+        miniAppSessionRepository = MiniAppSessionRepository(conversationRepository)
         docsProvider = DocsProvider(apiCatalogManager)
         chatRepository = ChatRepository(chatApi, conversationRepository, settingsRepository)
         alarmScheduler = AlarmScheduler(appContext)
@@ -138,6 +146,7 @@ object ServiceLocator {
             settingsRepository.ensureInitialized()
             conversationRepository.loadAll()
             characterRepository.loadAll()
+            miniAppStore.load()
             // 详见 ConversationStore.migrateDeduplicateMessageIds
             conversationRepository.migrateDeduplicateMessageIds()
             // 主动消息：每日首次启动重置 done → pending，并重注册闹钟

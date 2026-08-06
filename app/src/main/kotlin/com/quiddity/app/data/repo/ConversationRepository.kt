@@ -113,6 +113,11 @@ class ConversationRepository(
         return conv
     }
 
+    /** 创建指定内容的会话（小应用邀请角色等场景使用）。 */
+    suspend fun createConversation(conv: Conversation) {
+        store.createConversation(conv)
+    }
+
     /**
      * 解析当前激活模型分级对应的默认上下文记忆轮数。
      *

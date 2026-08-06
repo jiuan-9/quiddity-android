@@ -17,6 +17,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -30,11 +31,13 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.AddComment
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Person
@@ -58,8 +61,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -107,6 +115,7 @@ fun HomeScreen(
     viewModel: HomeViewModel,
     settingsViewModel: SettingsViewModel,
     userAvatarUri: String?,
+    onOpenMiniApps: () -> Unit = {},
     onOpenConversation: (String) -> Unit
 ) {
     val conversations by viewModel.conversations.collectAsStateWithLifecycle()
@@ -174,6 +183,57 @@ fun HomeScreen(
     val isMultiSelect = multiSelectState.value.first
     val selectedIds = multiSelectState.value.second
 
+    // ===== 下拉进入小应用 =====
+    // 列表在顶部时，下拉手势被本连接拦截并跟手显示"小应用"指示器；
+    // 超过阈值立即进入小应用中心（微信式）。
+    val listState = rememberLazyListState()
+    val density = LocalDensity.current
+    val maxPullDp = 150f
+    val thresholdDp = 108f
+    var pullDp by remember { mutableStateOf(0f) }
+    var pullTriggered by remember { mutableStateOf(false) }
+    val atTop by remember {
+        derivedStateOf {
+            !isMultiSelect && (
+                isLoading ||
+                    conversations.isEmpty() ||
+                    filteredConversations.isEmpty() ||
+                    (listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0)
+                )
+        }
+    }
+    val pullConnection = remember(atTop, onOpenMiniApps, density) {
+        object : NestedScrollConnection {
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: NestedScrollSource
+            ): Offset {
+                if (source != NestedScrollSource.UserInput || !atTop) return Offset.Zero
+                val dyDp = available.y / density.density
+                if (dyDp > 0 && !pullTriggered) {
+                    pullDp = (pullDp + dyDp).coerceAtMost(maxPullDp)
+                    if (pullDp >= thresholdDp) {
+                        pullTriggered = true
+                        onOpenMiniApps()
+                    }
+                    return Offset(0f, available.y)
+                }
+                if (dyDp < 0 && pullDp > 0f) {
+                    pullDp = (pullDp + dyDp).coerceAtLeast(0f)
+                    return Offset(0f, available.y)
+                }
+                return Offset.Zero
+            }
+        }
+    }
+    LaunchedEffect(pullTriggered) {
+        if (pullTriggered) {
+            pullDp = 0f
+            pullTriggered = false
+        }
+    }
+
     fun syncMultiSelect(newIsMulti: Boolean, newIds: Set<String>) {
         multiSelectState.value = newIsMulti to newIds
     }
@@ -215,7 +275,11 @@ fun HomeScreen(
 
     // - 壁纸存在时：底层渲染壁纸图片 + 暗化遮罩，内容层半透明叠加
     // - 壁纸不存在时：使用默认背景色
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .nestedScroll(pullConnection)
+    ) {
         // 壁纸层（铺满全屏，在所有内容之下）
         // 注：hasListWallpaper 已包含 listWallpaperUri != null 判断
         if (hasListWallpaper) {
@@ -316,6 +380,7 @@ fun HomeScreen(
                     }
                     else -> {
                         LazyColumn(
+                            state = listState,
                             modifier = Modifier.fillMaxSize(),
                             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
                             verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -376,6 +441,60 @@ fun HomeScreen(
                     .fillMaxWidth()
                     .windowInsetsPadding(WindowInsets.navigationBars)
                     .padding(vertical = 4.dp)
+            )
+        }
+
+        // 下拉指示器：跟手出现的小应用入口
+        AnimatedVisibility(
+            visible = pullDp > 0f && !pullTriggered,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .windowInsetsPadding(WindowInsets.statusBars)
+                .padding(horizontal = 16.dp, vertical = 10.dp)
+        ) {
+            Surface(
+                shape = RoundedCornerShape(22.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                shadowElevation = 6.dp
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Icon(
+                    imageVector = Icons.Filled.KeyboardArrowUp,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Text(
+                        text = "小应用",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = if (pullDp >= thresholdDp) "松开进入" else "继续下拉",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+
+        // 顶部常驻提示（仅在列表顶部且未下拉时显示）
+        AnimatedVisibility(
+            visible = atTop && pullDp == 0f && !isMultiSelect && !pullTriggered,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .windowInsetsPadding(WindowInsets.statusBars)
+                .padding(top = 68.dp)
+        ) {
+            Text(
+                text = "下拉进入小应用",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
             )
         }
     }

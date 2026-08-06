@@ -3,12 +3,17 @@ package com.quiddity.app.ui.navigation
 import androidx.activity.ComponentActivity
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.platform.LocalContext
+import android.widget.Toast
+import kotlinx.coroutines.launch
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -27,6 +32,10 @@ import com.quiddity.app.ui.chat.ChatViewModelHostFactory
 import com.quiddity.app.ui.home.HomeScreen
 import com.quiddity.app.ui.home.HomeViewModel
 import com.quiddity.app.ui.home.HomeViewModelFactory
+import com.quiddity.app.ui.miniapps.MiniAppHost
+import com.quiddity.app.ui.miniapps.MiniAppMissingScreen
+import com.quiddity.app.ui.miniapps.MiniAppRegistry
+import com.quiddity.app.ui.miniapps.MiniAppsCenterScreen
 import com.quiddity.app.ui.settings.SettingsViewModel
 import com.quiddity.app.ui.settings.SettingsViewModelFactory
 import com.quiddity.app.ui.theme.Motion
@@ -144,10 +153,71 @@ fun QuiddityNavHost() {
                 viewModel = homeVm,
                 settingsViewModel = settingsVm,
                 userAvatarUri = settings.userAvatarUri,
+                onOpenMiniApps = {
+                    navController.navigate(QuiddityRoute.MiniApps.path)
+                },
                 onOpenConversation = { convId ->
                     navController.navigate(QuiddityRoute.Chat.create(convId))
                 }
             )
+        }
+
+        composable(
+            route = QuiddityRoute.MiniApps.path,
+            enterTransition = {
+                slideInVertically(
+                    animationSpec = tween(Motion.DurationPageTransition, easing = Motion.EasingStandard),
+                    initialOffsetY = { -it }
+                )
+            },
+            popExitTransition = {
+                slideOutVertically(
+                    animationSpec = tween(Motion.DurationPageTransition, easing = Motion.EasingStandard),
+                    targetOffsetY = { -it }
+                )
+            }
+        ) {
+            val context = LocalContext.current
+            val miniAppStore = ServiceLocator.miniAppStore
+            val favorites by miniAppStore.favorites.collectAsStateWithLifecycle()
+            val scope = rememberCoroutineScope()
+            MiniAppsCenterScreen(
+                favorites = favorites,
+                onToggleFavorite = { id ->
+                    scope.launch {
+                        miniAppStore.toggleFavorite(id)
+                    }
+                },
+                onOpenApp = { appId ->
+                    navController.navigate(QuiddityRoute.MiniAppHost.create(appId))
+                },
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(
+            route = QuiddityRoute.MiniAppHost.PATTERN,
+            arguments = QuiddityRoute.MiniAppHost.arguments
+        ) { backStackEntry ->
+            val appId = backStackEntry.arguments?.getString(QuiddityRoute.MiniAppHost.ARG_APP_ID).orEmpty()
+            val app = MiniAppRegistry.byId(appId)
+            if (app == null) {
+                MiniAppMissingScreen(onBack = { navController.popBackStack() })
+            } else {
+                val context = LocalContext.current
+                val host = remember(appId) {
+                    MiniAppHost(
+                        onExit = { navController.popBackStack() },
+                        onOpenConversation = { convId ->
+                            navController.navigate(QuiddityRoute.Chat.create(convId))
+                        },
+                        onToast = { message ->
+                            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                        }
+                    )
+                }
+                app.Content(host)
+            }
         }
 
         composable(
@@ -214,6 +284,15 @@ fun QuiddityNavHost() {
 
 sealed class QuiddityRoute(val path: String) {
     data object Home : QuiddityRoute("home")
+    data object MiniApps : QuiddityRoute("miniapps")
+    data object MiniAppHost : QuiddityRoute("miniapp/{appId}") {
+        const val PATTERN = "miniapp/{appId}"
+        const val ARG_APP_ID = "appId"
+        fun create(appId: String) = "miniapp/$appId"
+        val arguments = listOf(
+            androidx.navigation.navArgument(ARG_APP_ID) { type = androidx.navigation.NavType.StringType }
+        )
+    }
     data object Chat : QuiddityRoute("chat/{convId}") {
         const val PATTERN = "chat/{convId}"
         const val ARG_CONV_ID = "convId"
