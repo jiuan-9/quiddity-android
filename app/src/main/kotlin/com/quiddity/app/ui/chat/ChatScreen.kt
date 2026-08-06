@@ -811,6 +811,10 @@ fun ChatScreen(
                         }
                     }
                     else -> {
+                        val lastMsg = messages.lastOrNull()
+                        // 群聊用头像栏三点表示正在回复，不显示私聊的思考气泡
+                        val showThinking = !isGroupChat && isGenerating &&
+                            (lastMsg == null || !(lastMsg.role == Role.ASSISTANT && lastMsg.isStreaming))
                         LazyColumn(
                             state = listState,
                             modifier = Modifier.fillMaxSize(),
@@ -819,6 +823,30 @@ fun ChatScreen(
                             contentPadding = PaddingValues(vertical = 12.dp),
                             verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
+                            // 思考气泡：reverseLayout 的第一项 = 最底部，紧贴输入栏（标准"正在输入"位置）
+                            if (!isGroupChat) {
+                                item(key = "thinking_bubble", contentType = { "thinking" }) {
+                                    // 常驻 item + AnimatedVisibility：出现淡入、消失淡出，不再硬插硬删
+                                    Column(modifier = Modifier.fillMaxWidth()) {
+                                        AnimatedVisibility(
+                                            visible = showThinking,
+                                            enter = fadeIn(
+                                                tween(Motion.DurationShort, easing = Motion.EasingEmphasizedDecelerate)
+                                            ) + expandVertically(
+                                                tween(Motion.DurationShort, easing = Motion.EasingEmphasizedDecelerate)
+                                            ),
+                                            exit = fadeOut(
+                                                tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate)
+                                            ) + shrinkVertically(
+                                                tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate)
+                                            )
+                                        ) {
+                                            ThinkingBubble(aiAvatarUri = conversation?.persona?.aiAvatarUri)
+                                        }
+                                    }
+                                }
+                            }
+
                             items(
                                 items = messages.asReversed().filterNot { it.isNotice },
                                 key = { it.id },
@@ -913,33 +941,6 @@ fun ChatScreen(
                             if (sceneNoticeContent.isNotBlank()) {
                                 item(key = "scene_notice_bubble", contentType = { "notice" }) {
                                     NoticeBubble(content = sceneNoticeContent)
-                                }
-                            }
-
-                            val lastMsg = messages.lastOrNull()
-                            // 群聊用头像栏三点表示正在回复，不显示私聊的思考气泡
-                            val showThinking = !isGroupChat && isGenerating &&
-                                (lastMsg == null || !(lastMsg.role == Role.ASSISTANT && lastMsg.isStreaming))
-                            if (!isGroupChat) {
-                                item(key = "thinking_bubble", contentType = { "thinking" }) {
-                                    // 常驻 item + AnimatedVisibility：出现淡入、消失淡出，不再硬插硬删
-                                    Column(modifier = Modifier.fillMaxWidth()) {
-                                        AnimatedVisibility(
-                                            visible = showThinking,
-                                            enter = fadeIn(
-                                                tween(Motion.DurationShort, easing = Motion.EasingEmphasizedDecelerate)
-                                            ) + expandVertically(
-                                                tween(Motion.DurationShort, easing = Motion.EasingEmphasizedDecelerate)
-                                            ),
-                                            exit = fadeOut(
-                                                tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate)
-                                            ) + shrinkVertically(
-                                                tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate)
-                                            )
-                                        ) {
-                                            ThinkingBubble(aiAvatarUri = conversation?.persona?.aiAvatarUri)
-                                        }
-                                    }
                                 }
                             }
                         }

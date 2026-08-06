@@ -185,6 +185,9 @@ class MessageStreamCoordinator(
         // 流结束时仍有滞留括号段：合并进最后一条已发消息（或作为整条回复发出），
         // 根因修复——不再留下"只有动作没有下文"的悬空气泡。
         if (pendingBrackets.isNotEmpty()) {
+            // 首个预留索引 = 半截括号流式消息的索引；最终消息必须用该索引，
+            // 否则会新建一条重复消息而把半截流式消息留在界面上（内容污染）
+            val firstReservedIndex = pendingBrackets.first().first
             val trailing = pendingBrackets.joinToString("") { it.second }
             pendingBrackets.clear()
             when {
@@ -199,7 +202,22 @@ class MessageStreamCoordinator(
                     completed[lastIdx] = merged
                     signals += StreamCoordinator.Signal.Update(merged)
                 }
-                else -> buffer.append(trailing)
+                else -> {
+                    // 整条回复只有括号段：用首个预留索引产出最终消息。
+                    // 若半截括号曾以流式消息发出（同索引），此处走 Update 补全而非新建。
+                    val finalMsg = buildMessageFromContentAt(
+                        firstReservedIndex,
+                        trailing,
+                        streaming = false
+                    )
+                    if (knownIds.add(finalMsg.id)) {
+                        signals += StreamCoordinator.Signal.New(finalMsg)
+                    } else {
+                        signals += StreamCoordinator.Signal.Update(finalMsg)
+                    }
+                    signals += StreamCoordinator.Signal.Complete(finalMsg)
+                    completed += finalMsg
+                }
             }
         }
         // buffer 为空说明全部内容已在 accept 阶段切分完成（或流本就无内容），无需收尾

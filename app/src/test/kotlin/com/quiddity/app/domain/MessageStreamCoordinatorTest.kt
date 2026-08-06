@@ -120,6 +120,29 @@ class MessageStreamCoordinatorTest {
     }
 
     @Test
+    fun `partial bracket then close then end updates streaming message without duplicate`() {
+        // 回归：括号分两段到达（先流式半截，再闭合）后流直接结束。
+        // 旧实现会新建一条完整消息，却把半截流式消息留在界面上 → 内容重复污染。
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("（把脸埋在你胸口，声")
+        val streamingBefore = coord.snapshot().last()
+        assertTrue(streamingBefore.isStreaming, "半截括号应先以流式消息存在")
+        coord.accept("音闷闷的）")
+        val signals = coord.finalize()
+        val snap = coord.snapshot()
+        assertEquals(
+            listOf("（把脸埋在你胸口，声音闷闷的）"),
+            snap.map { it.content },
+            "最终只能有一条完整消息，不得残留半截 + 重复"
+        )
+        assertTrue(snap.all { !it.isStreaming }, "finalize 后不得残留流式状态")
+        assertTrue(
+            signals.any { it is StreamCoordinator.Signal.Update },
+            "半截流式消息应通过 Update 被补全"
+        )
+    }
+
+    @Test
     fun `pending bracket visible in snapshot before following content`() {
         // 括号已闭合但后续内容未到时，快照应包含该括号段（不丢字、不悬空）
         val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
