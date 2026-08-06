@@ -44,8 +44,7 @@ sealed interface BoardRoute {
 
 enum class BoardGameMode {
     INVITE_CHARACTER,
-    VS_COMPUTER,
-    VS_AI
+    VS_COMPUTER
 }
 
 data class BoardChatMessage(
@@ -86,8 +85,7 @@ data class BoardSession(
 data class BoardUiState(
     val route: BoardRoute = BoardRoute.GameSelect,
     val session: BoardSession? = null,
-    val inviteChecking: Boolean = false,
-    val inviteError: String? = null
+    val inviteChecking: Boolean = false
 )
 
 class BoardViewModel(
@@ -107,15 +105,15 @@ class BoardViewModel(
     }
 
     fun backToGames() {
-        _uiState.update { it.copy(route = BoardRoute.GameSelect, session = null, inviteError = null) }
+        _uiState.update { it.copy(route = BoardRoute.GameSelect, session = null) }
     }
 
     fun backToMode(game: BoardGameType) {
-        _uiState.update { it.copy(route = BoardRoute.ModeSelect(game), inviteError = null) }
+        _uiState.update { it.copy(route = BoardRoute.ModeSelect(game)) }
     }
 
     fun onChooseInvite(game: BoardGameType) {
-        _uiState.update { it.copy(route = BoardRoute.Invite(game), inviteError = null) }
+        _uiState.update { it.copy(route = BoardRoute.Invite(game)) }
     }
 
     /** 与电脑对战：固定使用本地棋力，无需联网，不与 AI 混在一起。 */
@@ -131,36 +129,10 @@ class BoardViewModel(
         )
     }
 
-    /** 与 AI 对战：必须能连上已配置的 AI 接口，否则明确报错，不降级成电脑。 */
-    fun onChooseVsAi(game: BoardGameType) {
-        _uiState.update { it.copy(inviteChecking = true, inviteError = null) }
-        viewModelScope.launch {
-            val access = inviteManager.resolveDefaultAccessWithCheck()
-            if (access == null) {
-                _uiState.update {
-                    it.copy(
-                        inviteChecking = false,
-                        inviteError = "无法连接 AI 接口：未配置或连接失败。请先在 设置 → 模型配置 中配置，或改用“与电脑对战”。"
-                    )
-                }
-            } else {
-                startSession(
-                    game = game,
-                    mode = BoardGameMode.VS_AI,
-                    opponentName = "AI 棋手",
-                    opponentPersona = null,
-                    conversationId = null,
-                    access = access,
-                    notice = null
-                )
-            }
-        }
-    }
-
     /** 邀请角色：先检测 API 连接，成功则 LLM 对手；失败则本地电脑兜底，不阻塞开始。 */
     fun inviteCharacter(character: Character) {
         val game = (_uiState.value.route as? BoardRoute.Invite)?.game ?: return
-        _uiState.update { it.copy(inviteChecking = true, inviteError = null) }
+        _uiState.update { it.copy(inviteChecking = true) }
         viewModelScope.launch {
             val invite = inviteManager.prepare(character) { name ->
                 BoardMiniApp.inviteBubbleText(game, name)
@@ -320,8 +292,7 @@ class BoardViewModel(
             it.copy(
                 session = session,
                 route = BoardRoute.Playing(session.id),
-                inviteChecking = false,
-                inviteError = null
+                inviteChecking = false
             )
         }
         if (session.board.current != userStone) {
@@ -336,6 +307,8 @@ class BoardViewModel(
             delay(if (session.board.moveCount == 0) 900L else 500L)
             val latest = _uiState.value.session ?: return@launch
             if (latest.status != BoardStatus.Playing) return@launch
+            // 开局即由对方落子 = 对方执黑先行（用户执白），落子后给出明确提示，避免"灵异棋"疑惑
+            val isAutoFirstMove = latest.board.moveCount == 0
 
             var fallbackNotice: String? = null
             var llmMove: LlmMove? = null
@@ -394,7 +367,9 @@ class BoardViewModel(
             } else {
                 _uiState.update { st ->
                     if (st.session?.id != current.id) return@update st
-                    st.copy(session = st.session.copy(board = newBoard, thinking = false, notice = fallbackNotice))
+                    val notice = fallbackNotice
+                        ?: if (isAutoFirstMove) "你执白，${latest.opponentName}执黑先行，已自动落子" else null
+                    st.copy(session = st.session.copy(board = newBoard, thinking = false, notice = notice))
                 }
             }
         }

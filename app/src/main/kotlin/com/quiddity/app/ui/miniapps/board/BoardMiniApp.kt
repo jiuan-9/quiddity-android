@@ -61,12 +61,9 @@ private fun BoardAppRoot(
         is BoardRoute.ModeSelect -> {
             BoardModeSelectScreen(
                 game = route.game,
-                checking = uiState.inviteChecking,
-                error = uiState.inviteError,
                 onBack = { vm.backToGames() },
                 onInvite = { vm.onChooseInvite(route.game) },
-                onVsComputer = { vm.onChooseVsComputer(route.game) },
-                onVsAi = { vm.onChooseVsAi(route.game) }
+                onVsComputer = { vm.onChooseVsComputer(route.game) }
             )
         }
         is BoardRoute.Invite -> {
@@ -75,7 +72,6 @@ private fun BoardAppRoot(
                 characters = characters,
                 game = route.game,
                 checking = uiState.inviteChecking,
-                error = uiState.inviteError,
                 onBack = { vm.backToMode(route.game) },
                 onInvite = vm::inviteCharacter
             )

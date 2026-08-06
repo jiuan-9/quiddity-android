@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,15 +29,20 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.rounded.Apps
-import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -54,6 +60,8 @@ fun MiniAppsCenterScreen(
     onBack: () -> Unit
 ) {
     BackHandler(onBack = onBack)
+    val density = LocalDensity.current
+    var dragUp by remember { mutableStateOf(0f) }
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -64,7 +72,22 @@ fun MiniAppsCenterScreen(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 8.dp, bottom = 16.dp),
+                .padding(top = 8.dp, bottom = 16.dp)
+                .pointerInput(onBack) {
+                    detectVerticalDragGestures(
+                        onVerticalDrag = { change, dragAmount ->
+                            change.consume()
+                            dragUp = (dragUp + dragAmount).coerceAtMost(0f)
+                        },
+                        onDragEnd = {
+                            if (dragUp <= -with(density) { 60.dp.toPx() }) {
+                                onBack()
+                            }
+                            dragUp = 0f
+                        },
+                        onDragCancel = { dragUp = 0f }
+                    )
+                },
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Box(
@@ -88,19 +111,6 @@ fun MiniAppsCenterScreen(
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onBackground
-                )
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Rounded.KeyboardArrowDown,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                    modifier = Modifier.size(16.dp)
-                )
-                Text(
-                    text = "点击卡片打开，或下拉回到主页",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                 )
             }
         }
