@@ -96,7 +96,6 @@ import com.quiddity.app.data.model.Role
 import com.quiddity.app.data.model.UserPersona
 import com.quiddity.app.domain.ChatRecordSearch
 import com.quiddity.app.ui.chat.components.ChatInputBar
-import com.quiddity.app.ui.chat.components.ChatInputBarLineCapacity
 import com.quiddity.app.ui.chat.components.CompressionProgressDialog
 import com.quiddity.app.ui.chat.components.GroupAvatarBar
 import com.quiddity.app.ui.chat.components.HamburgerMenu
@@ -947,11 +946,6 @@ fun ChatScreen(
                         transparent = wallpaperUri != null,
                         onTextChange = { text -> viewModel.updateInputText(text) },
                         isCompressing = isCompressing,
-                        lineCapacity = if (isGroupChat) {
-                            ChatInputBarLineCapacity.GROUP
-                        } else {
-                            ChatInputBarLineCapacity.PRIVATE
-                        },
                         // 群聊成员头像栏（方案十一：并入输入框容器、靠左、随键盘一起动）
                         header = if (isGroupChat) {
                             { mentionScope ->

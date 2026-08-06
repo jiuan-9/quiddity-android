@@ -191,7 +191,11 @@ class MessageStreamCoordinator(
                 buffer.isNotEmpty() -> buffer.append(trailing)
                 completed.isNotEmpty() -> {
                     val lastIdx = completed.lastIndex
-                    val merged = completed[lastIdx].copy(content = completed[lastIdx].content + trailing)
+                    val mergedContent = completed[lastIdx].content + trailing
+                    val merged = completed[lastIdx].copy(
+                        content = mergedContent,
+                        tokenCount = TokenEstimator.estimate(mergedContent)
+                    )
                     completed[lastIdx] = merged
                     signals += StreamCoordinator.Signal.Update(merged)
                 }

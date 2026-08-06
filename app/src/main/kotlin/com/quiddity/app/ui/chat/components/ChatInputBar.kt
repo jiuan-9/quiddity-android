@@ -74,13 +74,6 @@ import androidx.compose.ui.unit.dp
  */
 
 /**
- * 输入框行数容量：固定尺寸，不做动态测量。
- * - GROUP：群聊输入区固定 2 行；
- * - PRIVATE：私聊输入框容量 = 群聊整体高度（2 行输入 + 成员头像栏）换算出的固定行数。
- */
-enum class ChatInputBarLineCapacity { GROUP, PRIVATE }
-
-/**
  * 群聊头像栏交互上下文（由 [ChatInputBar] 提供给 header）。
  *
  * - [isMentionPending]：当前输入是否处于"打出 @ 待选人"状态（输入末尾为 @）；
@@ -97,7 +90,7 @@ class MentionInputScope internal constructor(
 /** 匹配 `@名字` 提及片段（@ 后到空白/下一个 @ 为止）。 */
 private val MentionPattern = Regex("@[^\\s@]+")
 
-// 当前规则：圆角 24dp 输入框；群聊固定 2 行、私聊按群聊整体高度换算的固定容量；
+// 当前规则：圆角 24dp 输入框；输入框统一固定 2 行高度（不随输入行数变化，超出内容在框内滚动）；
 // 回车发送策略由 enterToSend 决定；壁纸模式下玻璃质感；
 // 发送按钮三态（正常/停止/压缩置灰）；群聊成员头像栏并入输入框容器顶部（方案十一）。
 @Composable
@@ -113,31 +106,19 @@ fun ChatInputBar(
     onTextChange: ((String) -> Unit)? = null,
     isCompressing: Boolean = false,
     // 输入框容器内的顶部内容（群聊成员头像栏，随输入框一起动）
-    header: (@Composable (MentionInputScope) -> Unit)? = null,
-    lineCapacity: ChatInputBarLineCapacity = ChatInputBarLineCapacity.PRIVATE
+    header: (@Composable (MentionInputScope) -> Unit)? = null
 ) {
     var textFieldValue by rememberSaveable(stateSaver = TextFieldValue.Saver) {
         mutableStateOf(TextFieldValue(""))
     }
 
     val density = LocalDensity.current
-    // 固定尺寸换算：成员栏 56dp（头像 44dp + 上下 padding 12dp）、输入框内部留白 24dp
+    // 固定 2 行输入框：行高 × 2 + 内部留白，不参与成员栏高度（成员栏是独立的顶部区域）
     val lineHeightPx = with(density) { MaterialTheme.typography.bodyMedium.lineHeight.roundToPx() }
     val fieldInternalPadPx = with(density) { 24.dp.roundToPx() }
-    val memberBarPx = with(density) { 56.dp.roundToPx() }
-    val groupTwoLineFieldPx = (lineHeightPx * 2 + fieldInternalPadPx)
+    val fixedFieldHeightPx = (lineHeightPx * 2 + fieldInternalPadPx)
         .coerceAtLeast(with(density) { 48.dp.roundToPx() })
-    val fieldMaxPx = when (lineCapacity) {
-        ChatInputBarLineCapacity.GROUP -> groupTwoLineFieldPx
-        ChatInputBarLineCapacity.PRIVATE -> groupTwoLineFieldPx + memberBarPx
-    }
-    val effectiveMaxLines = when (lineCapacity) {
-        ChatInputBarLineCapacity.GROUP -> 2
-        ChatInputBarLineCapacity.PRIVATE ->
-            ((fieldMaxPx - fieldInternalPadPx) / lineHeightPx).coerceAtLeast(1)
-    }
-    // 固定尺寸：不随输入行数变化（超出 maxLines 的内容在框内滚动）
-    val fixedFieldHeightPx = fieldMaxPx
+    val effectiveMaxLines = 2
 
     val text = textFieldValue.text
 

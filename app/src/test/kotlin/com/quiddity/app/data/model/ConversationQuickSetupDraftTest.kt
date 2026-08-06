@@ -1,5 +1,6 @@
 package com.quiddity.app.data.model
 
+import com.quiddity.app.util.QuiddityConstants
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -34,5 +35,27 @@ class ConversationQuickSetupDraftTest {
         val encoded = json.encodeToString(Conversation.serializer(), conv)
         val decoded = json.decodeFromString(Conversation.serializer(), encoded)
         assertEquals("温柔的学姐", decoded.quickSetupDraft)
+    }
+
+    @Test
+    fun `old json without replyStyle decodes to follow persona default`() {
+        val old = """
+            {"id":"c1","title":"测试","createdAt":1,"updatedAt":1}
+        """.trimIndent()
+        val conv = json.decodeFromString(Conversation.serializer(), old)
+        assertEquals(QuiddityConstants.REPLY_STYLE_FOLLOW_PERSONA, conv.replyStyle)
+    }
+
+    @Test
+    fun `replyStyle round trips`() {
+        val conv = Conversation(
+            id = "c1",
+            createdAt = 1,
+            updatedAt = 1,
+            replyStyle = QuiddityConstants.REPLY_STYLE_DETAILED
+        )
+        val encoded = json.encodeToString(Conversation.serializer(), conv)
+        val decoded = json.decodeFromString(Conversation.serializer(), encoded)
+        assertEquals(QuiddityConstants.REPLY_STYLE_DETAILED, decoded.replyStyle)
     }
 }

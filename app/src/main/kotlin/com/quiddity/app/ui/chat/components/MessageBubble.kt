@@ -191,21 +191,23 @@ fun MessageBubble(
         }
     }
 
-    // ===== 流式文字淡入（内容增长时整段柔和淡入，而非逐字蹦出） =====
+    // ===== 流式文字淡入（内容增长时从当前透明度柔和过渡到 1，不压暗文字） =====
     val streamRevealAlpha = remember(message.id) { Animatable(1f) }
     val streamedLength = remember(message.id) { mutableIntStateOf(0) }
     LaunchedEffect(message.id, fullContent.length, isStreaming) {
-        val prev = streamedLength.intValue
-        if (isStreaming && fullContent.length > prev) {
-            streamRevealAlpha.snapTo(0.7f)
+        if (isStreaming && streamedLength.intValue < fullContent.length) {
+            // 根因修复：快速 delta 会反复重启本协程，绝不能先 snap 到低透明度
+            // （动画永远跑不完，流式期间文字会一直发暗）。animateTo 默认从当前值起步，
+            // 每次重启只会把透明度继续推向 1，文字始终柔和变亮。
             streamRevealAlpha.animateTo(
                 targetValue = 1f,
                 animationSpec = tween(200, easing = Motion.EasingEmphasizedDecelerate)
             )
+            streamedLength.intValue = fullContent.length
         } else if (!isStreaming) {
             streamRevealAlpha.snapTo(1f)
+            streamedLength.intValue = fullContent.length
         }
-        streamedLength.intValue = fullContent.length
     }
 
     val bubbleInteractionSource = remember { MutableInteractionSource() }
