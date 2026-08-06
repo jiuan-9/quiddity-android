@@ -40,7 +40,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -128,6 +127,9 @@ fun MessageBubble(
     onRewrite: (() -> Unit)? = null,
     // 查找聊天记录跳转高亮：命中消息气泡短暂变色
     isHighlighted: Boolean = false,
+    // 新消息入场动画：仅对"本会话打开后新到达"的消息播放淡入上浮；
+    // 历史消息滚动回来时不重放，避免整屏反复闪动
+    animateEntry: Boolean = true,
     // 打字机效果：UI 层逐字渲染（仅对 streaming AI 消息生效）
     typingDelayEnabled: Boolean = false,
     typingDelayMsPerChar: Int = 0,
@@ -171,42 +173,27 @@ fun MessageBubble(
         if (isStreaming) wasStreamed = true
     }
 
-    // ===== 气泡/头像淡入动画（首次出现时整体淡入 + 轻微上浮，不再硬生生插入） =====
-    val entryAlpha = remember(message.id) { Animatable(0f) }
-    val entryOffsetY = remember(message.id) { Animatable(0f) }
-    val entryOffsetPx = with(LocalDensity.current) { 10.dp.toPx() }
-    LaunchedEffect(message.id) {
-        entryOffsetY.snapTo(entryOffsetPx)
-        launch {
-            entryAlpha.animateTo(
-                targetValue = 1f,
-                animationSpec = tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedDecelerate)
-            )
-        }
-        launch {
-            entryOffsetY.animateTo(
-                targetValue = 0f,
-                animationSpec = tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedDecelerate)
-            )
-        }
+    // ===== 新消息入场动画（明显可感知：400ms 淡入 + 上浮 + 轻微放大） =====
+    // 流式 delta 很快，逐字/逐段淡入感知不到；改为整条消息出现时一次性淡入，
+    // 文字随气泡一起柔和显现。
+    val entryAlpha = remember(message.id, animateEntry) {
+        Animatable(if (animateEntry) 0f else 1f)
     }
-
-    // ===== 流式文字淡入（内容增长时从当前透明度柔和过渡到 1，不压暗文字） =====
-    val streamRevealAlpha = remember(message.id) { Animatable(1f) }
-    val streamedLength = remember(message.id) { mutableIntStateOf(0) }
-    LaunchedEffect(message.id, fullContent.length, isStreaming) {
-        if (isStreaming && streamedLength.intValue < fullContent.length) {
-            // 根因修复：快速 delta 会反复重启本协程，绝不能先 snap 到低透明度
-            // （动画永远跑不完，流式期间文字会一直发暗）。animateTo 默认从当前值起步，
-            // 每次重启只会把透明度继续推向 1，文字始终柔和变亮。
-            streamRevealAlpha.animateTo(
-                targetValue = 1f,
-                animationSpec = tween(200, easing = Motion.EasingEmphasizedDecelerate)
-            )
-            streamedLength.intValue = fullContent.length
-        } else if (!isStreaming) {
-            streamRevealAlpha.snapTo(1f)
-            streamedLength.intValue = fullContent.length
+    val entryOffsetY = remember(message.id, animateEntry) { Animatable(0f) }
+    val entryScale = remember(message.id, animateEntry) {
+        Animatable(if (animateEntry) 0.97f else 1f)
+    }
+    val entryOffsetPx = with(LocalDensity.current) { 12.dp.toPx() }
+    LaunchedEffect(message.id, animateEntry) {
+        if (animateEntry) {
+            entryAlpha.snapTo(0f)
+            entryOffsetY.snapTo(entryOffsetPx)
+            entryScale.snapTo(0.97f)
+            val spec: androidx.compose.animation.core.FiniteAnimationSpec<Float> =
+                tween(Motion.DurationXLong, easing = Motion.EasingEmphasizedDecelerate)
+            launch { entryAlpha.animateTo(1f, spec) }
+            launch { entryOffsetY.animateTo(0f, spec) }
+            launch { entryScale.animateTo(1f, spec) }
         }
     }
 
@@ -285,6 +272,8 @@ fun MessageBubble(
             .graphicsLayer {
                 alpha = entryAlpha.value
                 translationY = entryOffsetY.value
+                scaleX = entryScale.value
+                scaleY = entryScale.value
             }
     ) {
         // 群聊发言者名字（方案十二.1-2：气泡上方显示名字；用户显示「我」）
@@ -529,11 +518,7 @@ fun MessageBubble(
                                     textColor = textColor,
                                     onBubbleClick = if (multiSelectMode) onSelectToggle else (if (isUser) onBubbleClick else null),
                                     onLongClick = if (multiSelectMode || !isUser) null else onLongClick,
-                                    modifier = Modifier
-                                        .widthIn(max = BubbleInnerMaxWidth)
-                                        .graphicsLayer {
-                                            alpha = if (isStreaming) streamRevealAlpha.value else 1f
-                                        }
+                                    modifier = Modifier.widthIn(max = BubbleInnerMaxWidth)
                                 )
                                 if (isStreaming) {
                                     Spacer(modifier = Modifier.size(2.dp))

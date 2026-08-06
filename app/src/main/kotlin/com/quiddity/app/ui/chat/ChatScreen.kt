@@ -8,9 +8,14 @@ import android.os.Build
 import android.widget.Toast
 import android.view.ViewTreeObserver
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -166,6 +171,8 @@ fun ChatScreen(
 
     var showHamburger by rememberSaveable { mutableStateOf(false) }
     val listState = rememberLazyListState()
+    // 会话打开时刻：只有此后新到达的消息播放入场动画（历史消息滚动回来不重放）
+    val openedAtMs = rememberSaveable { System.currentTimeMillis() }
 
     // ===== 群聊信息（方案十二：消息按发送者显示头像与名字） =====
     val isGroupChat = conversation?.type == ConversationType.GROUP
@@ -798,6 +805,9 @@ fun ChatScreen(
                             if (sceneNoticeContent.isNotBlank()) {
                                 NoticeBubble(content = sceneNoticeContent)
                             }
+                            if (!isGroupChat && isGenerating) {
+                                ThinkingBubble(aiAvatarUri = conversation?.persona?.aiAvatarUri)
+                            }
                         }
                     }
                     else -> {
@@ -880,6 +890,7 @@ fun ChatScreen(
                                             isHighlighted = highlightMessageId == message.id,
                                             isWithdrawing = expandedActionId == message.id,
                                             isActionsExpanded = expandedActionId == message.id,
+                                            animateEntry = message.timestamp >= openedAtMs,
                                             viewModel = viewModel,
                                             onEnterMultiSelect = ::enterMultiSelect,
                                             onToggleSelection = ::toggleSelection,
@@ -909,9 +920,26 @@ fun ChatScreen(
                             // 群聊用头像栏三点表示正在回复，不显示私聊的思考气泡
                             val showThinking = !isGroupChat && isGenerating &&
                                 (lastMsg == null || !(lastMsg.role == Role.ASSISTANT && lastMsg.isStreaming))
-                            if (showThinking) {
+                            if (!isGroupChat) {
                                 item(key = "thinking_bubble", contentType = { "thinking" }) {
-                                    ThinkingBubble(aiAvatarUri = conversation?.persona?.aiAvatarUri)
+                                    // 常驻 item + AnimatedVisibility：出现淡入、消失淡出，不再硬插硬删
+                                    Column(modifier = Modifier.fillMaxWidth()) {
+                                        AnimatedVisibility(
+                                            visible = showThinking,
+                                            enter = fadeIn(
+                                                tween(Motion.DurationShort, easing = Motion.EasingEmphasizedDecelerate)
+                                            ) + expandVertically(
+                                                tween(Motion.DurationShort, easing = Motion.EasingEmphasizedDecelerate)
+                                            ),
+                                            exit = fadeOut(
+                                                tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate)
+                                            ) + shrinkVertically(
+                                                tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate)
+                                            )
+                                        ) {
+                                            ThinkingBubble(aiAvatarUri = conversation?.persona?.aiAvatarUri)
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1115,20 +1143,10 @@ private fun EmptyChatState(
 
 @Composable
 private fun ThinkingBubble(aiAvatarUri: String?) {
-    val fadeInAlpha = remember { Animatable(0f) }
-    LaunchedEffect(Unit) {
-        fadeInAlpha.animateTo(
-            targetValue = 1f,
-            animationSpec = tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedDecelerate)
-        )
-    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp)
-            .graphicsLayer {
-                alpha = fadeInAlpha.value
-            },
+            .padding(horizontal = 12.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.Start,
         verticalAlignment = Alignment.Top
     ) {
@@ -1336,6 +1354,7 @@ private fun MessageBubbleItem(
     isHighlighted: Boolean,
     isWithdrawing: Boolean,
     isActionsExpanded: Boolean,
+    animateEntry: Boolean,
     viewModel: ChatViewModel,
     onEnterMultiSelect: (String) -> Unit,
     onToggleSelection: (String) -> Unit,
@@ -1410,6 +1429,7 @@ private fun MessageBubbleItem(
         onBubbleClick = onBubbleClickFinal,
         onLongClick = onLongClickFinal,
         isActionsExpanded = isActionsExpanded,
+        animateEntry = animateEntry,
         onToggleActions = if (!inMultiSelect && !isUserMsg && !isGenerating) {
             remember<() -> Unit>(inMultiSelect, isUserMsg, isGenerating) { { onToggleActions() } }
         } else null,
