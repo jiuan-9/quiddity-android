@@ -46,6 +46,21 @@ object QuiddityConstants {
     const val MAX_MAX_TOKENS = 32_000
     const val DEFAULT_MAX_TOKENS = 4_096
 
+    // ===== 采样温度 =====
+    /** 采样温度上下界（DeepSeek 官方文档：0～2，默认 1.0）。 */
+    const val MIN_TEMPERATURE = 0.0
+    const val MAX_TEMPERATURE = 2.0
+    /** 采样温度默认值（DeepSeek 官方默认 1.0；聊天场景官方建议 1.3，由用户自主调节）。 */
+    const val DEFAULT_TEMPERATURE = 1.0
+
+    // ===== DeepSeek 官方服务端联网搜索（Responses API） =====
+    /** DeepSeek 官方服务商 id（Provider 预设）。 */
+    const val DEEPSEEK_PROVIDER_ID = "deepseek"
+    /** Responses API 目前唯一支持的模型（官方文档：暂不支持 deepseek-v4-pro）。 */
+    const val DEEPSEEK_RESPONSES_MODEL = "deepseek-v4-flash"
+    /** DeepSeek 官方 Responses API 端点（服务端执行 web_search）。 */
+    const val DEEPSEEK_RESPONSES_URL = "https://api.deepseek.com/responses"
+
     /** 单条消息 Token 上下界。 */
     const val MIN_SINGLE_MESSAGE_TOKENS = 32
     const val MAX_SINGLE_MESSAGE_TOKENS = 8_000

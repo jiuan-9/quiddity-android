@@ -4,6 +4,8 @@ import com.quiddity.app.data.model.AppSettings
 import com.quiddity.app.data.model.Conversation
 import com.quiddity.app.data.model.Message
 import com.quiddity.app.data.remote.ChatCompletionRequest
+import com.quiddity.app.data.remote.DeepSeekResponsesRequest
+import com.quiddity.app.data.remote.ResponsesTool
 import com.quiddity.app.data.repo.ApiAccess
 import com.quiddity.app.data.repo.toChatException
 
@@ -44,6 +46,14 @@ object GroupReplyPlanner {
 
     data class Plan(
         val request: ChatCompletionRequest,
+        /**
+         * DeepSeek 官方服务端联网搜索请求（Responses API）；null = 走 Chat Completions。
+         */
+        val responsesRequest: DeepSeekResponsesRequest? = null,
+        /**
+         * Responses API 端点（联网搜索启用时非空，HTTP 请求目标 URL）。
+         */
+        val responsesApiUrl: String? = null,
         val apiUrl: String,
         val apiKey: String,
         val senderId: String,
@@ -61,6 +71,8 @@ object GroupReplyPlanner {
      * @param tier 成员模型分级（由调用方解析）
      * @param senderNames 成员会话 id → 成员 AI 名字映射（转述格式「名字：内容」）
      * @param userName 用户消息的名字（方案九.3：= 该成员私聊用户人设里的名字）
+     * @param webSearchResponsesUrl 该成员启用官方联网搜索时的 Responses API 端点；
+     *   非空时本计划改为构造 Responses API 请求（由调用方按能力解析，null = 不启用）
      * @return 成功返回 [Plan]；API 解析失败返回失败结果（含用户提示）
      */
     fun buildPlan(
@@ -71,7 +83,8 @@ object GroupReplyPlanner {
         senderId: String,
         tier: ApiCatalogManager.ModelTier,
         senderNames: Map<String, String> = emptyMap(),
-        userName: String? = null
+        userName: String? = null,
+        webSearchResponsesUrl: String? = null
     ): Result<Plan> {
         val access = ApiAccess.resolve(settings, member)
         if (access is ApiAccess.Failure) {
@@ -83,20 +96,41 @@ object GroupReplyPlanner {
         val apiMessages = PromptBuilder.toApiMessages(systemPrompt, transcript, senderNames, userName)
         val maxTokens = member.maxTokens ?: settings.globalMaxTokens
         val singleMsgTokens = member.singleMessageTokens ?: settings.globalSingleMessageTokens
+        val temperature = member.temperature ?: settings.globalTemperature
         // 方案六.3：基础级只带最近 N 条；进阶级/完整级可自行用工具检索完整群聊消息。
         val useSearchTool = tier != ApiCatalogManager.ModelTier.BASIC
         val request = ChatCompletionRequest(
             model = access.model,
             messages = apiMessages,
             max_tokens = maxTokens,
-            temperature = 0.8,
+            temperature = temperature,
             stream = true,
             tools = if (useSearchTool) listOf(PromptBuilder.buildSearchChatTool()) else null,
             tool_choice = if (useSearchTool) "auto" else null
         )
+        val responsesApiUrl = webSearchResponsesUrl?.takeIf { it.isNotBlank() }
+        val responsesRequest = responsesApiUrl?.let {
+            val responsesTools = buildList {
+                add(ResponsesTool(type = "web_search"))
+                if (useSearchTool) {
+                    add(PromptBuilder.toResponsesTool(PromptBuilder.buildSearchChatTool()))
+                }
+            }
+            DeepSeekResponsesRequest(
+                model = access.model,
+                input = PromptBuilder.toResponsesInput(apiMessages),
+                instructions = apiMessages.firstOrNull { it.role == "system" }?.content,
+                max_output_tokens = maxTokens,
+                temperature = temperature,
+                stream = true,
+                tools = responsesTools
+            )
+        }
         return Result.success(
             Plan(
                 request = request,
+                responsesRequest = responsesRequest,
+                responsesApiUrl = responsesApiUrl,
                 apiUrl = access.apiUrl,
                 apiKey = access.apiKey,
                 senderId = senderId,

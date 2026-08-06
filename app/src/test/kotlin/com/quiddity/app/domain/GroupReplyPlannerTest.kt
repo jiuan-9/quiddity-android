@@ -6,8 +6,10 @@ import com.quiddity.app.data.model.Conversation
 import com.quiddity.app.data.model.Message
 import com.quiddity.app.data.model.Role
 import com.quiddity.app.util.CryptoUtils
+import com.quiddity.app.util.QuiddityConstants
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -232,6 +234,80 @@ class GroupReplyPlannerTest {
             tier = ApiCatalogManager.ModelTier.BASIC
         )
         assertTrue(result.isFailure)
+    }
+
+    @Test
+    fun `member temperature falls back to global default and override wins`() {
+        val settings = AppSettings.Default.copy(
+            globalTemperature = 1.3,
+            catalog = listOf(catalogEntry("cat_a"))
+        )
+        val fallback = GroupReplyPlanner.buildPlan(
+            settings = settings,
+            member = member(),
+            group = group(),
+            transcript = emptyList(),
+            senderId = "member_a",
+            tier = ApiCatalogManager.ModelTier.BASIC
+        ).getOrThrow()
+        assertEquals(1.3, fallback.request.temperature, "未设置会话温度时跟随全局默认")
+
+        val override = GroupReplyPlanner.buildPlan(
+            settings = settings,
+            member = member().copy(temperature = 0.5),
+            group = group(),
+            transcript = emptyList(),
+            senderId = "member_a",
+            tier = ApiCatalogManager.ModelTier.BASIC
+        ).getOrThrow()
+        assertEquals(0.5, override.request.temperature, "会话级温度覆盖全局默认")
+    }
+
+    @Test
+    fun `web search member reply plans responses api with server search tool`() {
+        val settings = AppSettings.Default.copy(catalog = listOf(catalogEntry("cat_a")))
+        val plan = GroupReplyPlanner.buildPlan(
+            settings = settings,
+            member = member().copy(temperature = 1.3),
+            group = group(),
+            transcript = listOf(msg("m1", "member_a")),
+            senderId = "member_a",
+            tier = ApiCatalogManager.ModelTier.FULL,
+            senderNames = mapOf("member_a" to "小A"),
+            webSearchResponsesUrl = "https://api.deepseek.com/responses"
+        ).getOrThrow()
+        val responses = plan.responsesRequest
+        assertNotNull(responses, "启用联网搜索时应构造 Responses API 请求")
+        assertEquals(QuiddityConstants.DEEPSEEK_RESPONSES_URL, plan.responsesApiUrl)
+        assertEquals("deepseek-v4-flash", responses.model)
+        assertEquals(1.3, responses.temperature)
+        assertEquals(true, responses.tools?.any { it.type == "web_search" }, "必须携带服务端 web_search 工具")
+        assertEquals(
+            true,
+            responses.tools?.any { it.type == "function" && it.name == "search_chat" },
+            "完整级成员应保留 search_chat 工具"
+        )
+        assertEquals(
+            "小A：测试消息 m1",
+            responses.input.firstOrNull { it.role == "user" }?.content,
+            "Responses input 应沿用群聊转述格式"
+        )
+        assertTrue(responses.instructions.isNullOrBlank().not(), "系统提示词应放入 instructions 字段")
+    }
+
+    @Test
+    fun `web search disabled keeps chat completions plan`() {
+        val settings = AppSettings.Default.copy(catalog = listOf(catalogEntry("cat_a")))
+        val plan = GroupReplyPlanner.buildPlan(
+            settings = settings,
+            member = member(),
+            group = group(),
+            transcript = emptyList(),
+            senderId = "member_a",
+            tier = ApiCatalogManager.ModelTier.BASIC
+        ).getOrThrow()
+        assertNull(plan.responsesRequest, "未启用联网搜索时不应构造 Responses 请求")
+        assertNull(plan.responsesApiUrl)
     }
 
     @Test

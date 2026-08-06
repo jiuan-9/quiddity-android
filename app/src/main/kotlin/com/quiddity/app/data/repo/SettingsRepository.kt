@@ -133,6 +133,14 @@ class SettingsRepository(private val store: SettingsStore) {
     suspend fun setEnterToSend(enabled: Boolean) = update { it.copy(enterToSend = enabled) }
     suspend fun setMaxTokens(value: Int) = update { it.copy(globalMaxTokens = value) }
     suspend fun setSingleMessageTokens(value: Int) = update { it.copy(globalSingleMessageTokens = value) }
+    suspend fun setGlobalTemperature(value: Double) = update {
+        it.copy(
+            globalTemperature = value.coerceIn(
+                QuiddityConstants.MIN_TEMPERATURE,
+                QuiddityConstants.MAX_TEMPERATURE
+            )
+        )
+    }
     suspend fun setContextLimit(value: Int) = update { it.copy(globalContextLimit = value) }
     /**
      * 与其他 setter 保持一致：仅走 update {} 流程（DataStore.edit 原子事务）。

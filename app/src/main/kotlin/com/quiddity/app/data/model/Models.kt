@@ -167,6 +167,18 @@ data class Conversation(
     val apiCatalogId: String? = null,
     val maxTokens: Int? = null,
     val singleMessageTokens: Int? = null,
+    /**
+     * 会话级采样温度覆盖（0～2，[QuiddityConstants.MIN_TEMPERATURE]～[QuiddityConstants.MAX_TEMPERATURE]）。
+     * - null = 跟随全局默认 [AppSettings.globalTemperature]
+     * - 官方文档：DeepSeek 思考模式下 temperature 不生效
+     */
+    val temperature: Double? = null,
+    /**
+     * 会话级"DeepSeek 官方服务端联网搜索"开关。
+     * - true = 当前 API 配置支持时走 Responses API（tools 携带 web_search，服务端执行搜索）
+     * - 能力依赖官方平台：providerId=deepseek 且模型为 [QuiddityConstants.DEEPSEEK_RESPONSES_MODEL]
+     */
+    val webSearchEnabled: Boolean = false,
     val contextLimit: Int = QuiddityConstants.DEFAULT_CONTEXT_LIMIT,
     val compileEnabled: Boolean = false,
     /**
@@ -352,6 +364,11 @@ data class AppSettings(
     val userAvatarUri: String? = null,
     val globalMaxTokens: Int = QuiddityConstants.DEFAULT_MAX_TOKENS,
     val globalSingleMessageTokens: Int = QuiddityConstants.DEFAULT_SINGLE_MESSAGE_TOKENS,
+    /**
+     * 全局默认采样温度（0～2，官方默认 1.0）。
+     * 会话未单独设置温度时使用该值。
+     */
+    val globalTemperature: Double = QuiddityConstants.DEFAULT_TEMPERATURE,
     val globalContextLimit: Int = QuiddityConstants.DEFAULT_CONTEXT_LIMIT,
     /**
      * AI 回复多消息切分（UI 叫法"AI 回复切分"）：

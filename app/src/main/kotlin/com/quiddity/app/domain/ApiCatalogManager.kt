@@ -1,6 +1,8 @@
 package com.quiddity.app.domain
 
 import com.quiddity.app.data.model.ApiCatalogEntry
+import com.quiddity.app.data.model.AppSettings
+import com.quiddity.app.data.model.Conversation
 import com.quiddity.app.data.remote.ChatApi
 import com.quiddity.app.util.CryptoUtils
 import com.quiddity.app.util.IdGenerator
@@ -63,7 +65,12 @@ class ApiCatalogManager(
         val name: String,
         val defaultUrl: String,
         val keyUrl: String,
-        val models: List<String>
+        val models: List<String>,
+        /**
+         * 该服务商官方支持的 Responses API 端点（服务端 web_search）。
+         * null = 该服务商无服务端搜索能力。
+         */
+        val responsesUrl: String? = null
     )
 
     /**
@@ -155,6 +162,16 @@ class ApiCatalogManager(
     )
 
     /**
+     * 支持服务端联网搜索（Responses API web_search）的模型清单。
+     *
+     * 官方文档：Responses API 目前仅支持 deepseek-v4-flash，暂不支持 deepseek-v4-pro。
+     * 随官方开放范围维护，新增模型时在此追加。
+     */
+    private val RESPONSES_SUPPORTED_MODELS: Set<String> = setOf(
+        QuiddityConstants.DEEPSEEK_RESPONSES_MODEL
+    )
+
+    /**
      * 查询模型所属分级。
      *
      * - 自定义服务商（[providerId] == "custom"）自动归为完整级。
@@ -164,6 +181,31 @@ class ApiCatalogManager(
         if (providerId == "custom") return ModelTier.FULL
         return MODEL_TIER_MAP[apiModel] ?: ModelTier.FULL
     }
+
+    /**
+     * 解析会话实际使用的 catalog 条目（与会话级覆盖 → 全局激活 → 第一条的顺序一致）。
+     */
+    fun resolveEntry(settings: AppSettings, conv: Conversation): ApiCatalogEntry? =
+        settings.catalog
+            .firstOrNull { it.id == conv.apiCatalogId }
+            ?: settings.catalog.firstOrNull { it.id == settings.activeCatalogId }
+            ?: settings.catalog.firstOrNull()
+
+    /**
+     * 该条目所属服务商官方提供的 Responses API 端点；不支持时返回 null。
+     */
+    fun responsesApiUrl(entry: ApiCatalogEntry): String? =
+        findProvider(entry.providerId).responsesUrl
+
+    /**
+     * 该条目是否支持 DeepSeek 官方服务端联网搜索（Responses API web_search）。
+     *
+     * 要求官方服务商（providerId=deepseek）+ 官方支持的模型（[RESPONSES_SUPPORTED_MODELS]）。
+     */
+    fun supportsServerWebSearch(entry: ApiCatalogEntry): Boolean =
+        entry.providerId == QuiddityConstants.DEEPSEEK_PROVIDER_ID &&
+            entry.apiModel in RESPONSES_SUPPORTED_MODELS &&
+            responsesApiUrl(entry) != null
 
     /**
      * 查询指定分级对应的默认上下文轮数。
@@ -282,7 +324,8 @@ class ApiCatalogManager(
             "deepseek", "深度求索\nDeepSeek",
             "https://api.deepseek.com/v1/chat/completions",
             "https://platform.deepseek.com",
-            listOf(
+            responsesUrl = QuiddityConstants.DEEPSEEK_RESPONSES_URL,
+            models = listOf(
                 "deepseek-v4-flash",
                 "deepseek-v4-pro"
             )

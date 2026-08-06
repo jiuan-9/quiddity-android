@@ -1564,6 +1564,34 @@ class ChatViewModel(
         }
     }
 
+    // ===== 会话级采样温度 / 官方联网搜索（模型配置） =====
+
+    /**
+     * 设置当前会话的采样温度覆盖（0～2；null = 跟随全局默认）。
+     * 官方文档：DeepSeek 思考模式下 temperature 不生效。
+     */
+    fun updateTemperature(value: Double?) {
+        val conv = conversation.value ?: return
+        val clamped = value?.coerceIn(
+            QuiddityConstants.MIN_TEMPERATURE,
+            QuiddityConstants.MAX_TEMPERATURE
+        )
+        viewModelScope.launch {
+            conversationRepository.updateConversation(conv.copy(temperature = clamped))
+        }
+    }
+
+    /**
+     * 设置当前会话的 DeepSeek 官方服务端联网搜索开关。
+     * 开启仅代表用户意愿；实际路由由 ChatRepository 按当前 API 配置能力判定。
+     */
+    fun updateWebSearchEnabled(enabled: Boolean) {
+        val conv = conversation.value ?: return
+        viewModelScope.launch {
+            conversationRepository.updateConversation(conv.copy(webSearchEnabled = enabled))
+        }
+    }
+
     // ===== 群聊设置（方案十：群名称 / 上下文条数 N / 成员管理 / 停止模式） =====
 
     /** 设置群聊上下文条数 N（范围 1～200）。 */
@@ -1817,6 +1845,12 @@ class ChatViewModel(
         } else {
             conv.memoryBankRounds
         }
+        // 切换到不支持服务端搜索的模型时自动关闭官方联网搜索，避免开关状态与实际能力不一致
+        val newWebSearch = if (conv.webSearchEnabled) {
+            apiCatalogManager.supportsServerWebSearch(entry)
+        } else {
+            false
+        }
         conversationRepository.updateConversation(
             conv.copy(
                 apiCatalogId = if (explicit) entry.id else conv.apiCatalogId,
@@ -1824,7 +1858,8 @@ class ChatViewModel(
                 tokenCountApiId = entry.id,
                 lastUsedModel = entry.apiModel,
                 contextLimit = newContextLimit,
-                memoryBankRounds = syncRounds
+                memoryBankRounds = syncRounds,
+                webSearchEnabled = newWebSearch
             )
         )
     }

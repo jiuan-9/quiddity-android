@@ -114,6 +114,7 @@ import com.quiddity.app.ui.components.ConfirmDialog
 import com.quiddity.app.util.DateUtils
 import com.quiddity.app.ui.components.ExpandableText
 import com.quiddity.app.ui.components.QuiddityToggleSwitch
+import com.quiddity.app.ui.components.TemperatureSlider
 import com.quiddity.app.util.QuiddityConstants
 import com.quiddity.app.ui.settings.SettingsViewModel
 import com.quiddity.app.ui.theme.Motion
@@ -174,6 +175,17 @@ fun HamburgerMenu(
     val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
     val apiCatalogManager = remember { ServiceLocator.apiCatalogManager }
     val currentTier = remember(conversation) { viewModel.resolveCurrentTier() }
+    val webSearchSupported = remember(conversation, settings) {
+        val conv = conversation ?: return@remember false
+        val entry = apiCatalogManager.resolveEntry(settings, conv) ?: return@remember false
+        apiCatalogManager.supportsServerWebSearch(entry)
+    }
+    val currentModelId = remember(conversation, settings) {
+        settings.catalog
+            .firstOrNull { it.id == (conversation?.apiCatalogId ?: settings.activeCatalogId) }
+            ?.apiModel
+            ?: "未选择"
+    }
 
     // Android 13+ 需要通知权限：开启主动消息时一并请求，保证到点能弹通知
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
@@ -537,6 +549,14 @@ fun HamburgerMenu(
                                         ?: QuiddityConstants.REPLY_STYLE_FOLLOW_PERSONA,
                                     onReplyStyleChange = { style ->
                                         viewModel.updateReplyStyle(style)
+                                    },
+                                    webSearchSupported = webSearchSupported,
+                                    currentModelId = currentModelId,
+                                    onTemperatureChange = { value ->
+                                        viewModel.updateTemperature(value)
+                                    },
+                                    onWebSearchChange = { enabled ->
+                                        viewModel.updateWebSearchEnabled(enabled)
                                     }
                                 )
                             }
@@ -1477,9 +1497,14 @@ private fun MainMenuContent(
     onViewTimeLibrary: () -> Unit,
     onOpenSearchChat: () -> Unit,
     replyStyle: String,
-    onReplyStyleChange: (String) -> Unit
+    onReplyStyleChange: (String) -> Unit,
+    webSearchSupported: Boolean,
+    currentModelId: String,
+    onTemperatureChange: (Double?) -> Unit,
+    onWebSearchChange: (Boolean) -> Unit
 ) {
     var showReplyStyleDialog by remember { mutableStateOf(false) }
+    var showTemperatureEditor by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -1602,6 +1627,32 @@ private fun MainMenuContent(
                 title = "管理模型配置",
                 subtitle = "添加、编辑或删除模型配置",
                 onClick = { onPanelSelected(HamburgerPanel.ApiEditor) },
+            )
+            Spacer(modifier = Modifier.size(4.dp))
+            val temperatureSubtitle = if (conversation?.temperature != null) {
+                "本会话 " + String.format(java.util.Locale.US, "%.1f", conversation.temperature) +
+                    " · 默认 " + String.format(java.util.Locale.US, "%.1f", settings.globalTemperature)
+            } else {
+                "跟随默认（" + String.format(java.util.Locale.US, "%.1f", settings.globalTemperature) + "）"
+            }
+            MenuRow(
+                title = "采样温度",
+                subtitle = temperatureSubtitle,
+                onClick = { showTemperatureEditor = !showTemperatureEditor }
+            )
+            if (showTemperatureEditor) {
+                TemperatureEditorPanel(
+                    current = conversation?.temperature,
+                    globalDefault = settings.globalTemperature,
+                    onTemperatureChange = onTemperatureChange
+                )
+            }
+            Spacer(modifier = Modifier.size(4.dp))
+            WebSearchMenuRow(
+                enabled = conversation?.webSearchEnabled == true,
+                supported = webSearchSupported,
+                currentModelId = currentModelId,
+                onWebSearchChange = onWebSearchChange
             )
 
             }
@@ -2755,6 +2806,7 @@ private fun ToggleMenuRow(
     title: String,
     subtitle: String = "",
     checked: Boolean,
+    enabled: Boolean = true,
     onCheckedChange: (Boolean) -> Unit,
 ) {
     // Box 替代 Surface：行内无 elevation 需求，Box+background+clip 跳过 Surface 的 CompositionLocalProvider 开销
@@ -2765,10 +2817,16 @@ private fun ToggleMenuRow(
             .background(
                 MaterialTheme.colorScheme.surfaceContainerLow
             )
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null
-            ) { onCheckedChange(!checked) }
+            .then(
+                if (enabled) {
+                    Modifier.clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { onCheckedChange(!checked) }
+                } else {
+                    Modifier
+                }
+            )
     ) {
         Row(
             modifier = Modifier
@@ -2781,22 +2839,184 @@ private fun ToggleMenuRow(
                     title,
                     style = MaterialTheme.typography.bodyLarge,
                     fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = if (enabled) {
+                        MaterialTheme.colorScheme.onSurface
+                    } else {
+                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                    }
                 )
                 if (subtitle.isNotEmpty()) {
                     Text(
                         subtitle,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        color = if (enabled) {
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                        }
                     )
                 }
             }
             QuiddityToggleSwitch(
                 checked = checked,
-                onCheckedChange = onCheckedChange
+                onCheckedChange = onCheckedChange,
+                enabled = enabled
             )
         }
     }
+}
+
+/**
+ * 会话级采样温度编辑面板：预设快捷档 + 0～2 滑杆 + 跟随默认重置。
+ * 官方文档：DeepSeek 思考模式下 temperature 不生效。
+ */
+@Composable
+private fun TemperatureEditorPanel(
+    current: Double?,
+    globalDefault: Double,
+    onTemperatureChange: (Double?) -> Unit
+) {
+    val effective = current ?: globalDefault
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 3.dp),
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "采样温度",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                if (current != null) {
+                    TextButton(onClick = { onTemperatureChange(null) }) {
+                        Text("跟随默认")
+                    }
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                temperaturePresets.forEach { (value, label) ->
+                    TemperaturePresetChip(
+                        value = value,
+                        label = label,
+                        selected = kotlin.math.abs(effective - value) < 0.001,
+                        onClick = { onTemperatureChange(value) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+            TemperatureSlider(
+                value = effective,
+                onValueChangeFinished = { onTemperatureChange(it) }
+            )
+            Text(
+                text = "范围 0～2，DeepSeek 官方默认 1.0；思考模式下温度不生效。\n" +
+                    "0.0 代码/数学 · 1.0 数据抽取 · 1.3 通用对话/翻译 · 1.5 创意写作",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+            )
+        }
+    }
+}
+
+/** 官方场景建议档位（值 → 展示标签）。 */
+private val temperaturePresets = listOf(
+    0.0 to "0.0 严谨",
+    1.0 to "1.0 均衡",
+    1.3 to "1.3 对话",
+    1.5 to "1.5 创意"
+)
+
+@Composable
+private fun TemperaturePresetChip(
+    value: Double,
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick
+            ),
+        shape = RoundedCornerShape(8.dp),
+        color = if (selected) {
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+        } else {
+            MaterialTheme.colorScheme.surface
+        },
+        border = androidx.compose.foundation.BorderStroke(
+            width = 1.dp,
+            color = if (selected) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+            }
+        )
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = if (selected) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                }
+            )
+        }
+    }
+}
+
+/**
+ * DeepSeek 官方服务端联网搜索开关行。
+ * 仅官方服务商 + 支持模型可用（由 [supported] 判定）；不支持时整行禁用并说明原因。
+ */
+@Composable
+private fun WebSearchMenuRow(
+    enabled: Boolean,
+    supported: Boolean,
+    currentModelId: String,
+    onWebSearchChange: (Boolean) -> Unit
+) {
+    ToggleMenuRow(
+        title = "官方联网搜索",
+        subtitle = if (supported) {
+            if (enabled) {
+                "已开启：DeepSeek 服务端搜索，无需第三方引擎"
+            } else {
+                "DeepSeek 官方服务端联网搜索"
+            }
+        } else {
+            "仅 DeepSeek 官方 " + QuiddityConstants.DEEPSEEK_RESPONSES_MODEL +
+                " 支持（当前：$currentModelId）"
+        },
+        checked = enabled,
+        enabled = supported,
+        onCheckedChange = { onWebSearchChange(it) }
+    )
 }
 
 /**

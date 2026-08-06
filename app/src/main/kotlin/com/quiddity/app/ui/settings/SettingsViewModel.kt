@@ -134,6 +134,18 @@ class SettingsViewModel(
         )
     }
 
+    /**
+     * 设置全局默认采样温度（0～2，[QuiddityConstants.MIN_TEMPERATURE]～[QuiddityConstants.MAX_TEMPERATURE]）。
+     */
+    fun setGlobalTemperature(value: Double) = viewModelScope.launch {
+        settingsRepository.setGlobalTemperature(
+            value.coerceIn(
+                QuiddityConstants.MIN_TEMPERATURE,
+                QuiddityConstants.MAX_TEMPERATURE
+            )
+        )
+    }
+
     fun setContextLimit(value: Int) = viewModelScope.launch {
         settingsRepository.setContextLimit(
             value.coerceIn(

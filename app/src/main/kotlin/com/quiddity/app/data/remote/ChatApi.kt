@@ -174,6 +174,94 @@ open class ChatApi {
     }.flowOn(Dispatchers.IO)
 
     /**
+     * 发起 DeepSeek 官方 Responses API 流式请求（服务端联网搜索路径）。
+     *
+     * - 流式事件为语义化 SSE（response.output_text.delta 等），没有 `[DONE]`；
+     *   最后一条事件 response.completed / response.incomplete / response.failed 由
+     *   [ResponsesStreamParser] 判定为流结束。
+     * - response.failed 时以 [ChatException] 关闭流，携带服务端 error.message。
+     * - 服务端联网搜索（web_search 工具）由 DeepSeek 服务端直接执行，客户端无需第三方搜索。
+     *
+     * @param apiUrl 完整 /responses URL
+     * @param apiKey 明文 API Key
+     * @param request Responses API 请求体
+     * @return [Flow] of [StreamEvent]；Flow 完成表示流结束
+     */
+    open fun streamResponses(
+        apiUrl: String,
+        apiKey: String,
+        request: DeepSeekResponsesRequest
+    ): Flow<StreamEvent> = callbackFlow {
+        val parser = ResponsesStreamParser()
+        val body = json.encodeToString(DeepSeekResponsesRequest.serializer(), request)
+            .toRequestBody(mediaType)
+
+        val requestBuilder = Request.Builder()
+            .url(apiUrl)
+            .post(body)
+            .header("Accept", "text/event-stream")
+            .header("Cache-Control", "no-cache")
+
+        if (apiKey.isNotEmpty()) {
+            requestBuilder.header("Authorization", "Bearer $apiKey")
+        }
+
+        val closed = java.util.concurrent.atomic.AtomicBoolean(false)
+
+        fun safeClose(cause: Throwable? = null) {
+            if (!closed.compareAndSet(false, true)) return
+            channel.close(cause)
+        }
+
+        val eventSourceListener = object : EventSourceListener() {
+            override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
+                if (closed.get()) return
+                val parsed = parser.acceptEvent(type, data)
+                if (parsed == null) {
+                    // 终态事件（completed/incomplete/failed）：下发聚合完成的函数调用后结束
+                    trySend(StreamEvent.ToolCalls(parser.takeToolCalls()))
+                    val error = parser.terminalError
+                    if (error != null) {
+                        safeClose(ChatException(error))
+                    } else {
+                        safeClose()
+                    }
+                    return
+                }
+                val content = parsed.content
+                if (!content.isNullOrEmpty()) {
+                    trySend(StreamEvent.Content(content))
+                }
+            }
+
+            override fun onClosed(eventSource: EventSource) {
+                trySend(StreamEvent.ToolCalls(parser.takeToolCalls()))
+                safeClose()
+            }
+
+            override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
+                val msg = t?.message ?: response?.let { "HTTP ${it.code}: ${it.message}" } ?: "未知错误"
+                val errorBody = runCatching { response?.peekBody(2 * 1024)?.string().orEmpty() }
+                    .getOrDefault("")
+                val cause = if (errorBody.isNotBlank()) {
+                    ChatException("$msg — $errorBody", t)
+                } else {
+                    ChatException(msg, t)
+                }
+                safeClose(cause)
+            }
+        }
+
+        val factory = EventSources.createFactory(client)
+        val es = factory.newEventSource(requestBuilder.build(), eventSourceListener)
+
+        awaitClose {
+            closed.set(true)
+            es.cancel()
+        }
+    }.flowOn(Dispatchers.IO)
+
+    /**
      * 同步测试连接（非流式），返回是否成功。
      */
     suspend fun testConnection(apiUrl: String, apiKey: String, model: String): Result<String> = withContext(Dispatchers.IO) {

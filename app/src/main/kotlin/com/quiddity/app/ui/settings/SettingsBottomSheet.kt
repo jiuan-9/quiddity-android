@@ -106,6 +106,7 @@ import com.quiddity.app.ui.components.ActiveMessagePermissionCard
 import com.quiddity.app.ui.components.ConfirmDialog
 import com.quiddity.app.ui.components.ExpandableText
 import com.quiddity.app.ui.components.QuiddityToggleSwitch
+import com.quiddity.app.ui.components.TemperatureSlider
 import com.quiddity.app.ui.components.UpdateDialog
 import com.quiddity.app.ui.components.rememberUpdateController
 import com.quiddity.app.util.UpdateChecker
@@ -184,6 +185,7 @@ fun SettingsBottomSheet(
     var showApiEditor by rememberSaveable { mutableStateOf(false) }
     var showDonate by rememberSaveable { mutableStateOf(false) }
     var showTokenEditor by rememberSaveable { mutableStateOf(false) }
+    var showTemperatureEditor by rememberSaveable { mutableStateOf(false) }
     var showDocuments by rememberSaveable { mutableStateOf(false) }
     var showDelayEditor by rememberSaveable { mutableStateOf(false) }
     var showListWallpaper by rememberSaveable { mutableStateOf(false) }
@@ -525,6 +527,41 @@ fun SettingsBottomSheet(
                                     onSingleChange = { v -> if (v.isNotEmpty()) viewModel.setSingleMessageTokens(v.toIntOrNull() ?: 800) },
                                     modifier = Modifier
                                 )
+                        }
+                            val temperatureSubtitle = remember(settings.globalTemperature) {
+                                "默认 " + String.format(java.util.Locale.US, "%.1f", settings.globalTemperature) +
+                                    " · 范围 0～2"
+                            }
+                            ClickableRow(
+                                icon = Icons.Filled.FormatSize,
+                                title = "默认采样温度",
+                                subtitle = temperatureSubtitle,
+                                onClick = { showTemperatureEditor = !showTemperatureEditor }
+                            )
+                        if (showTemperatureEditor) {
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 3.dp),
+                                shape = RoundedCornerShape(14.dp),
+                                color = MaterialTheme.colorScheme.surfaceContainerLow
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(16.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    TemperatureSlider(
+                                        value = settings.globalTemperature,
+                                        onValueChangeFinished = { viewModel.setGlobalTemperature(it) }
+                                    )
+                                    Text(
+                                        text = "DeepSeek 官方默认 1.0；思考模式下温度不生效。\n" +
+                                            "场景建议：0.0 代码/数学 · 1.0 数据抽取 · 1.3 通用对话/翻译 · 1.5 创意写作",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                    )
+                                }
+                            }
                         }
                             ToggleRow(
                                 icon = Icons.Filled.Layers,

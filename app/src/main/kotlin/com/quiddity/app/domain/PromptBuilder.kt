@@ -5,6 +5,8 @@ import com.quiddity.app.data.model.Message
 import com.quiddity.app.data.model.MemoryCompressionResult
 import com.quiddity.app.data.model.Role
 import com.quiddity.app.data.remote.ChatMessage
+import com.quiddity.app.data.remote.ResponsesInputItem
+import com.quiddity.app.data.remote.ResponsesTool
 import com.quiddity.app.data.remote.ToolDefinition
 import com.quiddity.app.data.remote.ToolFunction
 import com.quiddity.app.util.QuiddityConstants
@@ -424,6 +426,33 @@ object PromptBuilder {
         }
         return result
     }
+
+    /**
+     * 把 [toApiMessages] 产出的消息列表转为 Responses API input item 列表。
+     *
+     * system 消息不进入 input（由调用方作为 Responses 请求的 instructions 字段发送，
+     * 服务端将其作为上下文中的第一条 system 消息）；其余消息按 role/content 原样映射。
+     */
+    fun toResponsesInput(apiMessages: List<ChatMessage>): List<ResponsesInputItem> =
+        apiMessages
+            .filterNot { it.role == "system" }
+            .map { msg ->
+                ResponsesInputItem(
+                    role = msg.role,
+                    content = msg.content
+                )
+            }
+
+    /**
+     * 把 OpenAI 兼容 function 工具定义转为 Responses API 工具声明。
+     */
+    fun toResponsesTool(tool: ToolDefinition): ResponsesTool =
+        ResponsesTool(
+            type = tool.type,
+            name = tool.function.name,
+            description = tool.function.description,
+            parameters = tool.function.parameters
+        )
 
     // ============================================================
     // 三、主动消息提示词（时间库生成 + 发送决策）

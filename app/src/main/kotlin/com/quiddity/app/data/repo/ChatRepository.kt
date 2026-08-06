@@ -11,6 +11,10 @@ import com.quiddity.app.data.remote.ChatException
 import com.quiddity.app.data.remote.ChatMessage
 import com.quiddity.app.data.remote.ChatStreamParser
 import com.quiddity.app.data.remote.AssistantToolCall
+import com.quiddity.app.data.remote.DeepSeekResponsesRequest
+import com.quiddity.app.data.remote.ResponsesInputItem
+import com.quiddity.app.data.remote.ResponsesTool
+import com.quiddity.app.data.remote.ToolDefinition
 import com.quiddity.app.domain.ChatRecordSearch
 import com.quiddity.app.domain.ChatError
 import com.quiddity.app.domain.ApiCatalogManager
@@ -22,8 +26,8 @@ import com.quiddity.app.domain.StreamCoordinator
 import com.quiddity.app.util.IdGenerator
 import com.quiddity.app.util.QuiddityConstants
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.JsonObject
 
 /*
  * ============================================================================
@@ -79,6 +83,15 @@ class ChatRepository(
         }
 ) {
 
+    /**
+     * 聊天请求的统一载体：Chat Completions（所有服务商）或 DeepSeek Responses API
+     * （官方服务端联网搜索）。工具轮（read_memory / search_chat）对两种协议复用同一套流程。
+     */
+    private sealed interface ChatRoundRequest {
+        data class Completions(val request: ChatCompletionRequest) : ChatRoundRequest
+        data class Responses(val request: DeepSeekResponsesRequest) : ChatRoundRequest
+    }
+
     /** 对外暴露的流式事件。 */
     sealed class Event {
         /** 新消息创建（含初始空 streaming 消息）。 */
@@ -131,16 +144,17 @@ class ChatRepository(
 
         val maxTokens = conv.maxTokens ?: settings.globalMaxTokens
         val singleMsgTokens = conv.singleMessageTokens ?: settings.globalSingleMessageTokens
-
-        val request = ChatCompletionRequest(
-            model = access.model,
-            messages = apiMessages,
-            max_tokens = maxTokens,
-            temperature = 0.8,
-            stream = true,
-            tools = if (effectiveStrategy == QuiddityConstants.MEMORY_STRATEGY_TOOL &&
-                conv.compressedMemory.isNotBlank()
-            ) {
+        val temperature = conv.temperature ?: settings.globalTemperature
+        val toolStrategyActive = effectiveStrategy == QuiddityConstants.MEMORY_STRATEGY_TOOL &&
+            conv.compressedMemory.isNotBlank()
+        val request = buildChatRound(
+            access = access,
+            systemPrompt = systemPrompt,
+            apiMessages = apiMessages,
+            maxTokens = maxTokens,
+            temperature = temperature,
+            responsesUrl = resolveWebSearch(settings, conv),
+            tools = if (toolStrategyActive) {
                 listOf(
                     PromptBuilder.buildReadMemoryTool(),
                     PromptBuilder.buildSearchChatTool()
@@ -148,13 +162,7 @@ class ChatRepository(
             } else {
                 null
             },
-            tool_choice = if (effectiveStrategy == QuiddityConstants.MEMORY_STRATEGY_TOOL &&
-                conv.compressedMemory.isNotBlank()
-            ) {
-                "auto"
-            } else {
-                null
-            }
+            tool_choice = if (toolStrategyActive) "auto" else null
         )
 
         val coordinator = coordinatorFactory(
@@ -200,16 +208,17 @@ class ChatRepository(
 
         val maxTokens = conv.maxTokens ?: settings.globalMaxTokens
         val singleMsgTokens = conv.singleMessageTokens ?: settings.globalSingleMessageTokens
-
-        val request = ChatCompletionRequest(
-            model = access.model,
-            messages = guidedMessages,
-            max_tokens = maxTokens,
-            temperature = 0.8,
-            stream = true,
-            tools = if (effectiveStrategy == QuiddityConstants.MEMORY_STRATEGY_TOOL &&
-                conv.compressedMemory.isNotBlank()
-            ) {
+        val temperature = conv.temperature ?: settings.globalTemperature
+        val toolStrategyActive = effectiveStrategy == QuiddityConstants.MEMORY_STRATEGY_TOOL &&
+            conv.compressedMemory.isNotBlank()
+        val request = buildChatRound(
+            access = access,
+            systemPrompt = systemPrompt,
+            apiMessages = guidedMessages,
+            maxTokens = maxTokens,
+            temperature = temperature,
+            responsesUrl = resolveWebSearch(settings, conv),
+            tools = if (toolStrategyActive) {
                 listOf(
                     PromptBuilder.buildReadMemoryTool(),
                     PromptBuilder.buildSearchChatTool()
@@ -217,13 +226,7 @@ class ChatRepository(
             } else {
                 null
             },
-            tool_choice = if (effectiveStrategy == QuiddityConstants.MEMORY_STRATEGY_TOOL &&
-                conv.compressedMemory.isNotBlank()
-            ) {
-                "auto"
-            } else {
-                null
-            }
+            tool_choice = if (toolStrategyActive) "auto" else null
         )
 
         val coordinator = coordinatorFactory(
@@ -238,6 +241,69 @@ class ChatRepository(
     }
 
     /**
+     * 构造聊天请求：启用 DeepSeek 官方联网搜索时走 Responses API（服务端 web_search），
+     * 否则走 OpenAI 兼容 Chat Completions。
+     *
+     * @param responsesUrl 非空表示本会话已启用联网搜索且当前 API 配置支持（由 [resolveWebSearch] 判定）
+     * @param tools OpenAI 兼容 function 工具（记忆策略 TOOL 时携带）；Responses 路径会附加 web_search
+     * @param tool_choice OpenAI 兼容工具调用策略（"auto" / null）
+     */
+    private fun buildChatRound(
+        access: ApiAccess.Resolved,
+        systemPrompt: String,
+        apiMessages: List<ChatMessage>,
+        maxTokens: Int,
+        temperature: Double,
+        responsesUrl: String?,
+        tools: List<ToolDefinition>?,
+        tool_choice: String?
+    ): ChatRoundRequest {
+        if (responsesUrl.isNullOrBlank()) {
+            return ChatRoundRequest.Completions(
+                ChatCompletionRequest(
+                    model = access.model,
+                    messages = apiMessages,
+                    max_tokens = maxTokens,
+                    temperature = temperature,
+                    stream = true,
+                    tools = tools,
+                    tool_choice = tool_choice
+                )
+            )
+        }
+        val responsesTools = buildList {
+            add(ResponsesTool(type = "web_search"))
+            tools.orEmpty().forEach { add(PromptBuilder.toResponsesTool(it)) }
+        }
+        return ChatRoundRequest.Responses(
+            DeepSeekResponsesRequest(
+                model = access.model,
+                input = PromptBuilder.toResponsesInput(apiMessages),
+                instructions = apiMessages.firstOrNull { it.role == "system" }?.content,
+                max_output_tokens = maxTokens,
+                temperature = temperature,
+                stream = true,
+                tools = responsesTools,
+                tool_choice = tool_choice?.let { JsonPrimitive(it) }
+            )
+        )
+    }
+
+    /**
+     * 解析会话是否启用 DeepSeek 官方服务端联网搜索。
+     *
+     * 判定链：会话开关开启 → 解析实际 catalog 条目 → 该条目支持 Responses 服务端搜索。
+     * 返回官方 /responses 端点；不满足任一条件返回 null（走 Chat Completions）。
+     */
+    private fun resolveWebSearch(settings: AppSettings, conv: Conversation): String? {
+        val manager = apiCatalogManager ?: return null
+        if (!conv.webSearchEnabled) return null
+        val entry = manager.resolveEntry(settings, conv) ?: return null
+        if (!manager.supportsServerWebSearch(entry)) return null
+        return manager.responsesApiUrl(entry)
+    }
+
+    /**
      * 通用流式驱动（含 read_memory 工具轮）：
      * 第一轮如聚合到工具调用，回填检索结果后发起第二轮（最多一轮，防死循环），
      * 最后由 [StreamCoordinator] 负责正确的 NewMessage/UpdateMessage/CompleteMessage 派发。
@@ -246,7 +312,7 @@ class ChatRepository(
         api: ChatApi,
         apiUrl: String,
         apiKey: String,
-        request: ChatCompletionRequest,
+        request: ChatRoundRequest,
         coordinator: StreamCoordinator,
         conv: Conversation,
         onEvent: suspend (Event) -> Unit
@@ -254,12 +320,7 @@ class ChatRepository(
         val firstRoundCalls = runSingleStream(api, apiUrl, apiKey, request, coordinator, onEvent) ?: return
         if (firstRoundCalls.isNotEmpty()) {
             try {
-                val toolMessages = buildToolResultMessages(request.messages, conv, firstRoundCalls)
-                val secondRequest = request.copy(
-                    messages = toolMessages,
-                    tools = null,
-                    tool_choice = null
-                )
+                val secondRequest = buildSecondRoundRequest(request, conv, firstRoundCalls)
                 // 第二轮不再聚合工具调用（模型若再次请求工具则忽略），直接流式输出最终答复
                 runSingleStream(api, apiUrl, apiKey, secondRequest, coordinator, onEvent)
             } catch (t: Throwable) {
@@ -279,7 +340,7 @@ class ChatRepository(
         api: ChatApi,
         apiUrl: String,
         apiKey: String,
-        request: ChatCompletionRequest,
+        request: ChatRoundRequest,
         coordinator: StreamCoordinator,
         onEvent: suspend (Event) -> Unit
     ): List<ChatStreamParser.AggregatedToolCall>? {
@@ -289,7 +350,11 @@ class ChatRepository(
             // 此处不再阻塞流式消费——避免大 delta 时 API 缓冲区堆积、
             // 网络层超时，以及"逐字渲染无感"的问题（旧实现按 delta 整段延迟，
             // delta 较大时用户看到的是整段跳出而非逐字浮现）。
-            api.streamChat(apiUrl, apiKey, request).collect { event ->
+            val stream = when (request) {
+                is ChatRoundRequest.Completions -> api.streamChat(apiUrl, apiKey, request.request)
+                is ChatRoundRequest.Responses -> api.streamResponses(apiUrl, apiKey, request.request)
+            }
+            stream.collect { event ->
                 when (event) {
                     is ChatApi.StreamEvent.Content -> {
                         val evictions = coordinator.accept(event.text)
@@ -307,6 +372,38 @@ class ChatRepository(
             return null
         }
         return toolCalls
+    }
+
+    /**
+     * 构造工具回填后的第二轮请求：
+     * - Chat Completions：assistant 工具调用消息 + tool 角色结果消息
+     * - Responses API：function_call / function_call_output input item（call_id 一一对应）
+     */
+    private suspend fun buildSecondRoundRequest(
+        request: ChatRoundRequest,
+        conv: Conversation,
+        calls: List<ChatStreamParser.AggregatedToolCall>
+    ): ChatRoundRequest = when (request) {
+        is ChatRoundRequest.Completions -> {
+            val toolMessages = buildToolResultMessages(request.request.messages, conv, calls)
+            ChatRoundRequest.Completions(
+                request.request.copy(
+                    messages = toolMessages,
+                    tools = null,
+                    tool_choice = null
+                )
+            )
+        }
+        is ChatRoundRequest.Responses -> {
+            val items = buildResponsesToolResultItems(request.request.input, conv, calls)
+            ChatRoundRequest.Responses(
+                request.request.copy(
+                    input = items,
+                    tools = null,
+                    tool_choice = null
+                )
+            )
+        }
     }
 
     /**
@@ -336,24 +433,62 @@ class ChatRepository(
         val memory = PromptBuilder.buildMemoryDrawerContent(conv)
         calls.forEach { call ->
             val toolCallId = call.id ?: "call_${call.index}"
-            val content = if (call.name == "read_memory") {
-                val query = parseToolQuery(call.arguments)
-                MemorySearch.search(memory, query).content
-            } else if (call.name == "search_chat") {
-                val query = parseToolQuery(call.arguments)
-                val messages = conversationRepo.observeMessages(conv.id).value
-                    .filterNot { it.isNotice }
-                ChatRecordSearch.search(messages, query).content
-            } else {
-                "工具 ${call.name} 不存在"
-            }
             result += ChatMessage(
                 role = "tool",
                 tool_call_id = toolCallId,
-                content = content
+                content = resolveToolContent(call, conv, memory)
             )
         }
         return result
+    }
+
+    /**
+     * 构造 Responses API 工具回填 input：原始消息 + function_call item + function_call_output item。
+     * 官方要求 call_id 非空唯一，且每个 function_call 必须有对应 function_call_output。
+     */
+    private suspend fun buildResponsesToolResultItems(
+        originalInput: List<ResponsesInputItem>,
+        conv: Conversation,
+        calls: List<ChatStreamParser.AggregatedToolCall>
+    ): List<ResponsesInputItem> {
+        val result = originalInput.toMutableList()
+        calls.forEach { call ->
+            result += ResponsesInputItem(
+                type = "function_call",
+                call_id = call.id ?: "call_${call.index}",
+                name = call.name,
+                arguments = call.arguments
+            )
+        }
+        val memory = PromptBuilder.buildMemoryDrawerContent(conv)
+        calls.forEach { call ->
+            result += ResponsesInputItem(
+                type = "function_call_output",
+                call_id = call.id ?: "call_${call.index}",
+                output = resolveToolContent(call, conv, memory)
+            )
+        }
+        return result
+    }
+
+    /**
+     * 解析单个工具调用结果：read_memory / search_chat 走本地检索，其余工具回填"不存在"。
+     */
+    private suspend fun resolveToolContent(
+        call: ChatStreamParser.AggregatedToolCall,
+        conv: Conversation,
+        memory: String
+    ): String = when (call.name) {
+        "read_memory" -> {
+            MemorySearch.search(memory, parseToolQuery(call.arguments)).content
+        }
+        "search_chat" -> {
+            val query = parseToolQuery(call.arguments)
+            val messages = conversationRepo.observeMessages(conv.id).value
+                .filterNot { it.isNotice }
+            ChatRecordSearch.search(messages, query).content
+        }
+        else -> "工具 ${call.name} 不存在"
     }
 
     /** 解析工具参数 JSON 中的 query 字段；解析失败时回退使用原始参数字符串。 */
@@ -546,7 +681,8 @@ class ChatRepository(
             senderId = senderId,
             tier = resolveMemberTier(member, settings),
             senderNames = senderNames,
-            userName = member.userPersona.name.takeIf { it.isNotBlank() }
+            userName = member.userPersona.name.takeIf { it.isNotBlank() },
+            webSearchResponsesUrl = resolveWebSearch(settings, member)
         )
         // 模型有时会误输出「名字：」前缀（如回复开头带其他成员名），
         // 在事件派发前剥掉，保证落库/展示内容不带任何名字前缀（方案五）。
@@ -577,7 +713,10 @@ class ChatRepository(
                     p.singleMessageTokens,
                     p.senderId
                 )
-                runWithToolRound(api, p.apiUrl, p.apiKey, p.request, coordinator, group, cleanEvent)
+                val roundRequest = p.responsesRequest?.let { ChatRoundRequest.Responses(it) }
+                    ?: ChatRoundRequest.Completions(p.request)
+                val effectiveApiUrl = p.responsesApiUrl ?: p.apiUrl
+                runWithToolRound(api, effectiveApiUrl, p.apiKey, roundRequest, coordinator, group, cleanEvent)
             },
             onFailure = { emitError(onEvent, it, "") }
         )
