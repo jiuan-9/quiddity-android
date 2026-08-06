@@ -28,6 +28,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -40,6 +41,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,12 +49,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Velocity
 import com.quiddity.app.ui.theme.Motion
 import kotlinx.coroutines.delay
 
@@ -71,12 +78,62 @@ fun MiniAppsCenterScreen(
     BackHandler(onBack = onBack)
     val density = LocalDensity.current
     var dragUp by remember { mutableStateOf(0f) }
+    // 整页"下拉关闭"：列表在顶部时向下拉超过阈值即返回主页（微信式），头部上滑仍可用
+    val listState = rememberLazyListState()
+    var pullDown by remember { mutableStateOf(0f) }
+    var pullClosed by remember { mutableStateOf(false) }
+    val atListTop by remember {
+        derivedStateOf {
+            listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
+        }
+    }
+    val closeConnection = remember(atListTop, onBack, density) {
+        object : NestedScrollConnection {
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: NestedScrollSource
+            ): Offset {
+                if (source != NestedScrollSource.UserInput || !atListTop || pullClosed) return Offset.Zero
+                val dyDp = available.y / density.density
+                if (dyDp > 0) {
+                    pullDown = (pullDown + dyDp).coerceAtMost(160f)
+                    return Offset(0f, available.y)
+                }
+                if (dyDp < 0 && pullDown > 0f) {
+                    pullDown = (pullDown + dyDp).coerceAtLeast(0f)
+                    return Offset(0f, available.y)
+                }
+                return Offset.Zero
+            }
+
+            // 松手时再判断：避免拖动中途 pop 导致界面异常
+            override suspend fun onPostFling(
+                consumed: Velocity,
+                available: Velocity
+            ): Velocity {
+                if (pullDown >= 80f && !pullClosed) {
+                    pullClosed = true
+                    onBack()
+                }
+                pullDown = 0f
+                return Velocity.Zero
+            }
+        }
+    }
+    LaunchedEffect(pullClosed) {
+        if (pullClosed) {
+            pullDown = 0f
+            pullClosed = false
+        }
+    }
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
             .windowInsetsPadding(WindowInsets.statusBars)
             .windowInsetsPadding(WindowInsets.navigationBars)
+            .nestedScroll(closeConnection)
     ) {
         Column(
             modifier = Modifier
@@ -125,6 +182,7 @@ fun MiniAppsCenterScreen(
         }
 
         LazyColumn(
+            state = listState,
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(

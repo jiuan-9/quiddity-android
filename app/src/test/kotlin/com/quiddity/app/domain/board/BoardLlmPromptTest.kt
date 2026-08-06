@@ -82,6 +82,19 @@ class BoardLlmPromptTest {
     }
 
     @Test
+    fun buildChatSystemMessage_containsBoardStones() {
+        var state = BoardState(gameType = BoardGameType.GOMOKU)
+        val b = state.applyMove(7, 7)
+        assertIs<MoveOutcome.Played>(b)
+        val w = b.state.applyMove(3, 3)
+        assertIs<MoveOutcome.Played>(w)
+        state = w.state
+        val msg = BoardLlmPrompt.buildChatSystemMessage(state, "小林", null)
+        assertTrue(msg.contains("(7,7)"))
+        assertTrue(msg.contains("(3,3)"))
+    }
+
+    @Test
     fun buildChatUserMessage_containsUserText() {
         val state = BoardState(gameType = BoardGameType.GO)
         val msg = BoardLlmPrompt.buildChatUserMessage("你这步下得不错", state)

@@ -304,7 +304,7 @@ class BoardViewModel(
         if (session.status != BoardStatus.Playing) return
         _uiState.update { it.copy(session = it.session?.copy(thinking = true, notice = null)) }
         viewModelScope.launch {
-            delay(if (session.board.moveCount == 0) 900L else 500L)
+            delay(if (session.board.moveCount == 0) AI_THINK_DELAY_FIRST_MS else AI_THINK_DELAY_MS)
             val latest = _uiState.value.session ?: return@launch
             if (latest.status != BoardStatus.Playing) return@launch
             // 开局即由对方落子 = 对方执黑先行（用户执白），落子后给出明确提示，避免"灵异棋"疑惑
@@ -325,6 +325,8 @@ class BoardViewModel(
                 val outcome = latest.board.applyMove(llmMove.move)
                 if (outcome is MoveOutcome.Played) {
                     moveOutcome = outcome
+                } else if (outcome is MoveOutcome.Ko) {
+                    fallbackNotice = "对方落子触发打劫禁手，已自动兜底"
                 } else {
                     fallbackNotice = "对方给出的落子不合法，已自动兜底"
                 }
@@ -410,6 +412,9 @@ class BoardViewModel(
 
     private companion object {
         const val LOCAL_BOT_CHAT_NOTICE_PREFIX = "（本地电脑）"
+        /** 对方落子前的"思考"延迟：首手略长（让用户看清自动先手），后续统一短延迟。 */
+        const val AI_THINK_DELAY_FIRST_MS = 900L
+        const val AI_THINK_DELAY_MS = 500L
     }
 }
 

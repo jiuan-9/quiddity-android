@@ -42,22 +42,10 @@ object BoardLlmPrompt {
 
     /** 构建落子 user 消息（当前局面 + 轮次）。 */
     fun buildMoveUserMessage(state: BoardState): String {
-        val blacks = mutableListOf<String>()
-        val whites = mutableListOf<String>()
-        for (r in 0 until state.size) {
-            for (c in 0 until state.size) {
-                when (state.stoneAt(r, c)) {
-                    Stone.BLACK -> blacks += "($r,$c)"
-                    Stone.WHITE -> whites += "($r,$c)"
-                    Stone.EMPTY -> Unit
-                }
-            }
-        }
         val passHint = if (state.gameType.isGo) "（围棋可回复 PASS 停一手）" else ""
         return buildString {
             appendLine("当前第 ${state.moveCount + 1} 手，轮到你（${state.current.label}棋）落子$passHint。")
-            appendLine("黑子位置：${if (blacks.isEmpty()) "无" else blacks.joinToString(" ")}")
-            appendLine("白子位置：${if (whites.isEmpty()) "无" else whites.joinToString(" ")}")
+            appendLine(boardStonesText(state))
             state.lastMove?.let {
                 appendLine("上一手：${it.row},${it.col}")
             }
@@ -77,6 +65,7 @@ object BoardLlmPrompt {
                 appendLine("你的性格与说话方式：$persona")
             }
             appendLine("当前第 ${state.moveCount + 1} 手，轮到你（${state.current.label}棋）落子。")
+            appendLine(boardStonesText(state))
             appendLine("请以角色口吻自然回复用户消息，可以谈棋局、聊闲天，但不要替用户决策。")
         }.trim()
     }
@@ -103,6 +92,25 @@ object BoardLlmPrompt {
             return LlmMove.Pass
         }
         return null
+    }
+
+    /** 生成"黑子位置 / 白子位置"的统一棋局描述，供落子与聊天共用。 */
+    private fun boardStonesText(state: BoardState): String {
+        val blacks = mutableListOf<String>()
+        val whites = mutableListOf<String>()
+        for (r in 0 until state.size) {
+            for (c in 0 until state.size) {
+                when (state.stoneAt(r, c)) {
+                    Stone.BLACK -> blacks += "($r,$c)"
+                    Stone.WHITE -> whites += "($r,$c)"
+                    Stone.EMPTY -> Unit
+                }
+            }
+        }
+        return buildString {
+            appendLine("黑子位置：${if (blacks.isEmpty()) "无" else blacks.joinToString(" ")}")
+            append("白子位置：${if (whites.isEmpty()) "无" else whites.joinToString(" ")}")
+        }
     }
 }
 
