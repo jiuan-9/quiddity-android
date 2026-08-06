@@ -75,7 +75,7 @@ class GroupModelSerializationTest {
         assertEquals(QuiddityConstants.GROUP_DEFAULT_CONTEXT_LIMIT, decoded.groupContextLimit)
         assertEquals(QuiddityConstants.GROUP_DEFAULT_STOP_MODE, decoded.stopMode)
         assertEquals("", decoded.groupBackground)
-        assertEquals("", decoded.groupScene)
+        assertEquals(QuiddityConstants.GROUP_DEFAULT_BACKGROUND_MODE, decoded.groupBackgroundMode)
         assertTrue(decoded.memberConversationIds.isEmpty())
     }
 

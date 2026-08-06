@@ -486,9 +486,6 @@ fun HamburgerMenu(
                                     onGroupBackground = {
                                         currentPanel = HamburgerPanel.GroupBackground
                                     },
-                                    onGroupScene = {
-                                        currentPanel = HamburgerPanel.GroupScene
-                                    },
                                     onWallpaper = {
                                         currentPanel = HamburgerPanel.Wallpaper
                                     },
@@ -796,21 +793,10 @@ fun HamburgerMenu(
                             conversation?.let { conv ->
                                 GroupBackgroundPanel(
                                     currentText = conv.groupBackground,
+                                    currentMode = conv.groupBackgroundMode,
                                     onBack = { currentPanel = null },
-                                    onSave = { text ->
-                                        viewModel.updateGroupBackground(text)
-                                        currentPanel = null
-                                    }
-                                )
-                            }
-                        }
-                        HamburgerPanel.GroupScene -> {
-                            conversation?.let { conv ->
-                                GroupScenePanel(
-                                    currentText = conv.groupScene,
-                                    onBack = { currentPanel = null },
-                                    onSave = { text ->
-                                        viewModel.updateGroupScene(text)
+                                    onSave = { text, mode ->
+                                        viewModel.updateGroupBackground(text, mode)
                                         currentPanel = null
                                     }
                                 )
@@ -1502,7 +1488,7 @@ private fun TimeLibraryDetailDialog(
 internal enum class HamburgerPanel {
     QuickSetup, Persona, UserPersona, Scene, ApiSelector, ApiEditor,
     Wallpaper, Compression, SearchChat,
-    GroupName, GroupContextLimit, GroupMembers, GroupBackground, GroupScene
+    GroupName, GroupContextLimit, GroupMembers, GroupBackground
 }
 
 // ==================== 主菜单 ====================
@@ -1994,7 +1980,6 @@ private fun GroupMenuContent(
     onContextLimit: () -> Unit,
     onStopModeChange: (String) -> Unit,
     onGroupBackground: () -> Unit,
-    onGroupScene: () -> Unit,
     onWallpaper: () -> Unit,
     onManageMembers: () -> Unit,
     onSearchChat: () -> Unit,
@@ -2052,17 +2037,17 @@ private fun GroupMenuContent(
                     trailingIcon = Icons.Filled.ChevronRight
                 )
                 MenuRow(
-                    title = "群聊背景 / 群规",
-                    subtitle = if (conversation?.groupBackground?.isNotBlank() == true)
-                        conversation.groupBackground.trim() else "未设置（可选）",
+                    title = "群聊背景 / 场景",
+                    subtitle = conversation?.let { conv ->
+                        if (conv.groupBackground.isNotBlank()) {
+                            val label = if (conv.groupBackgroundMode == QuiddityConstants.GROUP_BACKGROUND_MODE_SCENE)
+                                "场景" else "背景"
+                            "$label：${conv.groupBackground.trim()}"
+                        } else {
+                            "未设置（可选）"
+                        }
+                    } ?: "未设置（可选）",
                     onClick = onGroupBackground,
-                    expandableSubtitle = true
-                )
-                MenuRow(
-                    title = "群聊场景",
-                    subtitle = if (conversation?.groupScene?.isNotBlank() == true)
-                        conversation.groupScene.trim() else "未设置（可选）",
-                    onClick = onGroupScene,
                     expandableSubtitle = true
                 )
                 MenuRow(
@@ -2269,16 +2254,19 @@ private fun GroupContextLimitPanel(
 }
 
 /**
- * 群聊背景 / 群规编辑面板：用户自定义文本，注入所有成员的回复提示词；
- * 清空输入并保存 = 移除群聊背景。
+ * 群聊背景 / 场景编辑面板：背景（氛围 / 群规）与场景（多人情境）合并为一个设置项，
+ * 单选其一开启；文本注入所有成员的回复提示词。清空输入并保存 = 移除。
  */
 @Composable
 private fun GroupBackgroundPanel(
     currentText: String,
+    currentMode: String,
     onBack: () -> Unit,
-    onSave: (String) -> Unit
+    onSave: (String, String) -> Unit
 ) {
     var text by rememberSaveable { mutableStateOf(currentText) }
+    var mode by rememberSaveable { mutableStateOf(currentMode) }
+    val isScene = mode == QuiddityConstants.GROUP_BACKGROUND_MODE_SCENE
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -2290,7 +2278,7 @@ private fun GroupBackgroundPanel(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "群聊背景 / 群规",
+                text = "群聊背景 / 场景",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface
@@ -2313,90 +2301,80 @@ private fun GroupBackgroundPanel(
             }
         }
         Spacer(modifier = Modifier.size(16.dp))
-        OutlinedTextField(
-            value = text,
-            onValueChange = { text = it },
-            label = { Text("群聊背景 / 群规") },
-            placeholder = { Text("例如：这是大学同学群，关系很熟，说话随意，偶尔互怼") },
-            minLines = 4,
-            maxLines = 8,
-            modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(modifier = Modifier.size(8.dp))
-        Text(
-            text = "这段文字会注入到每个成员回复时的提示词里，塑造群聊整体氛围；清空后保存即移除。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Spacer(modifier = Modifier.size(16.dp))
-        TextButton(onClick = { onSave(text) }) {
-            Text("保存")
-        }
-    }
-}
-
-/**
- * 群聊场景编辑面板：群聊作为多人场景时的情境描述，注入所有成员的回复提示词；
- * 清空输入并保存 = 移除群聊场景。
- */
-@Composable
-private fun GroupScenePanel(
-    currentText: String,
-    onBack: () -> Unit,
-    onSave: (String) -> Unit
-) {
-    var text by rememberSaveable { mutableStateOf(currentText) }
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "群聊场景",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Box(
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
                 modifier = Modifier
-                    .size(40.dp)
-                    .clip(CircleShape)
+                    .weight(1f)
+                    .clip(RoundedCornerShape(10.dp))
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null
-                    ) { onBack() },
-                contentAlignment = Alignment.Center
+                    ) { mode = QuiddityConstants.GROUP_BACKGROUND_MODE_BACKGROUND }
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    Icons.AutoMirrored.Filled.ArrowBack, "返回",
-                    tint = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.size(20.dp)
+                androidx.compose.material3.RadioButton(
+                    selected = !isScene,
+                    onClick = { mode = QuiddityConstants.GROUP_BACKGROUND_MODE_BACKGROUND }
+                )
+                Text(
+                    text = "背景 / 群规",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { mode = QuiddityConstants.GROUP_BACKGROUND_MODE_SCENE }
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                androidx.compose.material3.RadioButton(
+                    selected = isScene,
+                    onClick = { mode = QuiddityConstants.GROUP_BACKGROUND_MODE_SCENE }
+                )
+                Text(
+                    text = "场景",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface
                 )
             }
         }
-        Spacer(modifier = Modifier.size(16.dp))
+        Spacer(modifier = Modifier.size(12.dp))
         OutlinedTextField(
             value = text,
             onValueChange = { text = it },
-            label = { Text("群聊场景") },
-            placeholder = { Text("例如：你们几个朋友正在一场篝火晚会上，夜空晴朗，周围是树林") },
+            label = { Text(if (isScene) "场景描述" else "背景 / 群规") },
+            placeholder = {
+                Text(
+                    if (isScene) {
+                        "例如：你们几个朋友正在一场篝火晚会上，夜空晴朗，周围是树林"
+                    } else {
+                        "例如：这是大学同学群，关系很熟，说话随意，偶尔互怼"
+                    }
+                )
+            },
             minLines = 4,
             maxLines = 8,
             modifier = Modifier.fillMaxWidth()
         )
         Spacer(modifier = Modifier.size(8.dp))
         Text(
-            text = "群聊作为多人场景的情境描述，会注入到每个成员回复时的提示词里；清空后保存即移除。",
+            text = if (isScene) {
+                "多人场景的情境描述，会注入到每个成员回复时的提示词里；清空后保存即移除。"
+            } else {
+                "氛围与群规描述，会注入到每个成员回复时的提示词里；清空后保存即移除。"
+            },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Spacer(modifier = Modifier.size(16.dp))
-        TextButton(onClick = { onSave(text) }) {
+        TextButton(onClick = { onSave(text, mode) }) {
             Text("保存")
         }
     }

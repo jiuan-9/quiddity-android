@@ -128,6 +128,12 @@ object QuiddityConstants {
     /** 停止模式 B：停止时同时清空整个队列（默认，方案四.7）。 */
     const val GROUP_STOP_MODE_B = "B"
     const val GROUP_DEFAULT_STOP_MODE = GROUP_STOP_MODE_B
+    /** 群聊背景/场景合并设置的模式：背景（氛围 / 群规）。 */
+    const val GROUP_BACKGROUND_MODE_BACKGROUND = "BACKGROUND"
+    /** 群聊背景/场景合并设置的模式：场景（多人情境）。 */
+    const val GROUP_BACKGROUND_MODE_SCENE = "SCENE"
+    /** 群聊背景/场景的默认模式：背景。 */
+    const val GROUP_DEFAULT_BACKGROUND_MODE = GROUP_BACKGROUND_MODE_BACKGROUND
     /** 私聊默认名前缀（新会话 1、2、3…，方案二.4）。 */
     const val SOLO_DEFAULT_TITLE_PREFIX = "新会话"
     /** 群聊默认名前缀（新群聊 1、2、3…，方案二.4）。 */

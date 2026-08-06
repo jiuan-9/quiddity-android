@@ -100,7 +100,7 @@ object GroupReplyPlanner {
             PromptBuilder.GROUP_RULES,
             regeneratePreviousReply,
             group.groupBackground.takeIf { it.isNotBlank() },
-            group.groupScene.takeIf { it.isNotBlank() }
+            group.groupBackgroundMode
         )
         val apiMessages = PromptBuilder.toApiMessages(systemPrompt, transcript, senderNames, userName)
         val maxTokens = member.maxTokens ?: settings.globalMaxTokens

@@ -314,7 +314,10 @@ class GroupReplyPlannerTest {
                 persona = com.quiddity.app.data.model.Persona(name = "小A"),
                 userPersona = com.quiddity.app.data.model.UserPersona(name = "小明")
             ),
-            group = group().copy(groupScene = "你们正在一场篝火晚会上。"),
+            group = group().copy(
+                groupBackground = "你们正在一场篝火晚会上。",
+                groupBackgroundMode = QuiddityConstants.GROUP_BACKGROUND_MODE_SCENE
+            ),
             transcript = listOf(msg("m1", "member_a")),
             senderId = "member_a",
             tier = ApiCatalogManager.ModelTier.BASIC,

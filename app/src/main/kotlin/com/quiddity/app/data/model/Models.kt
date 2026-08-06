@@ -320,11 +320,14 @@ data class Conversation(
      */
     val groupBackground: String = "",
     /**
-     * 群聊场景（仅 type=GROUP 使用）：群聊作为多人场景时的情境描述，
-     * 注入每个成员回复时的 system 提示词【群聊场景】节；
-     * 空字符串 = 不注入。
+     * 群聊背景/场景的模式（仅 type=GROUP 使用，与 [groupBackground] 合并为一个设置项）：
+     * - [com.quiddity.app.util.QuiddityConstants.GROUP_BACKGROUND_MODE_BACKGROUND] = 背景（氛围 / 群规），
+     *   注入为【群聊背景】节
+     * - [com.quiddity.app.util.QuiddityConstants.GROUP_BACKGROUND_MODE_SCENE] = 场景（多人情境），
+     *   注入为【群聊场景】节
+     * 两者可选其一开启；旧数据缺省回退为背景模式。
      */
-    val groupScene: String = ""
+    val groupBackgroundMode: String = QuiddityConstants.GROUP_DEFAULT_BACKGROUND_MODE
 )
 
 /**

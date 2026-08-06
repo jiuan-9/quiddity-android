@@ -628,17 +628,17 @@ $persona
      *
      * @param regeneratePreviousReply 重说场景下该成员上一版回复的原文（null = 正常回复）。
      *   非空时【对话方式】会标记本次为「重说」并要求换一种表达，避免输出与上一版雷同。
-     * @param groupBackground 群聊背景 / 群规（null/空白 = 不注入）。
-     *   作为【群聊背景】节注入，所有成员回复时都可见，塑造群聊整体氛围。
-     * @param groupScene 群聊场景（null/空白 = 不注入）。
-     *   作为【群聊场景】节注入，描述群聊作为多人场景时的情境。
+     * @param groupBackground 群聊背景 / 场景合并设置（null/空白 = 不注入）。
+     *   所有成员回复时都可见；按 [groupBackgroundMode] 注入为【群聊背景】或【群聊场景】节。
+     * @param groupBackgroundMode 合并设置的模式（[QuiddityConstants.GROUP_BACKGROUND_MODE_*]），
+     *   决定上述文本注入的节标题；未知值回退为背景模式。
      */
     fun buildGroupSystemPrompt(
         member: Conversation,
         groupRules: String,
         regeneratePreviousReply: String? = null,
         groupBackground: String? = null,
-        groupScene: String? = null
+        groupBackgroundMode: String? = null
     ): String {
         val sb = StringBuilder()
         // 说话人认知：成员名字 = 该成员 AI 角色，用户名字 = 该成员私聊里的用户人设名字
@@ -654,10 +654,12 @@ $persona
             sb.append(userSection).append("\n\n")
         }
         if (!groupBackground.isNullOrBlank()) {
-            sb.append("【群聊背景】\n").append(groupBackground.trim()).append("\n\n")
-        }
-        if (!groupScene.isNullOrBlank()) {
-            sb.append("【群聊场景】\n").append(groupScene.trim()).append("\n\n")
+            val sectionTitle = if (groupBackgroundMode == QuiddityConstants.GROUP_BACKGROUND_MODE_SCENE) {
+                "【群聊场景】"
+            } else {
+                "【群聊背景】"
+            }
+            sb.append(sectionTitle).append("\n").append(groupBackground.trim()).append("\n\n")
         }
         if (groupRules.isNotBlank()) {
             sb.append("【群聊规则】\n").append(groupRules).append("\n")

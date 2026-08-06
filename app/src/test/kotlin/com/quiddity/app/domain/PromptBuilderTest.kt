@@ -475,29 +475,46 @@ class PromptBuilderTest {
     }
 
     @Test
-    fun `group system prompt without background omits section`() {
-        val member = conv().copy(persona = com.quiddity.app.data.model.Persona(name = "小A"))
-        val prompt = PromptBuilder.buildGroupSystemPrompt(member, PromptBuilder.GROUP_RULES)
-        assertFalse(prompt.contains("【群聊背景】"), "未设置背景时不应注入该节")
-    }
-
-    @Test
     fun `group system prompt injects group scene`() {
         val member = conv().copy(persona = com.quiddity.app.data.model.Persona(name = "小A"))
         val prompt = PromptBuilder.buildGroupSystemPrompt(
             member,
             PromptBuilder.GROUP_RULES,
-            groupScene = "你们几个朋友正在一场篝火晚会上，夜空晴朗。"
+            groupBackground = "你们几个朋友正在一场篝火晚会上，夜空晴朗。",
+            groupBackgroundMode = QuiddityConstants.GROUP_BACKGROUND_MODE_SCENE
         )
         assertTrue(prompt.contains("【群聊场景】"), "群聊场景应作为独立节注入")
         assertTrue(prompt.contains("你们几个朋友正在一场篝火晚会上，夜空晴朗。"), "群聊场景内容应原样注入")
     }
 
     @Test
-    fun `group system prompt without scene omits section`() {
+    fun `group system prompt without background omits both sections`() {
         val member = conv().copy(persona = com.quiddity.app.data.model.Persona(name = "小A"))
         val prompt = PromptBuilder.buildGroupSystemPrompt(member, PromptBuilder.GROUP_RULES)
+        assertFalse(prompt.contains("【群聊背景】"), "未设置背景时不应注入该节")
         assertFalse(prompt.contains("【群聊场景】"), "未设置场景时不应注入该节")
+    }
+
+    @Test
+    fun `group system prompt section title follows background mode`() {
+        val member = conv().copy(persona = com.quiddity.app.data.model.Persona(name = "小A"))
+        val scenePrompt = PromptBuilder.buildGroupSystemPrompt(
+            member,
+            PromptBuilder.GROUP_RULES,
+            groupBackground = "篝火晚会",
+            groupBackgroundMode = QuiddityConstants.GROUP_BACKGROUND_MODE_SCENE
+        )
+        assertTrue(scenePrompt.contains("【群聊场景】"), "场景模式应注入为【群聊场景】节")
+        assertFalse(scenePrompt.contains("【群聊背景】"), "场景模式不应出现【群聊背景】节")
+
+        val backgroundPrompt = PromptBuilder.buildGroupSystemPrompt(
+            member,
+            PromptBuilder.GROUP_RULES,
+            groupBackground = "大学同学群",
+            groupBackgroundMode = QuiddityConstants.GROUP_BACKGROUND_MODE_BACKGROUND
+        )
+        assertTrue(backgroundPrompt.contains("【群聊背景】"), "背景模式应注入为【群聊背景】节")
+        assertFalse(backgroundPrompt.contains("【群聊场景】"), "背景模式不应出现【群聊场景】节")
     }
 
     @Test

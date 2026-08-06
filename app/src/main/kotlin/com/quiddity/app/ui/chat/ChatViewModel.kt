@@ -1635,21 +1635,19 @@ class ChatViewModel(
         }
     }
 
-    /** 设置群聊背景 / 群规（注入所有成员的回复提示词）。 */
-    fun updateGroupBackground(text: String) {
+    /**
+     * 设置群聊背景 / 场景（合并设置，注入所有成员的回复提示词）。
+     *
+     * @param mode [com.quiddity.app.util.QuiddityConstants.GROUP_BACKGROUND_MODE_*] 之一，
+     *   决定文本注入为【群聊背景】还是【群聊场景】节。
+     */
+    fun updateGroupBackground(text: String, mode: String) {
         val group = conversation.value ?: return
         if (!isGroup()) return
         viewModelScope.launch {
-            conversationRepository.updateConversation(group.copy(groupBackground = text.trim()))
-        }
-    }
-
-    /** 设置群聊场景（多人场景描述，注入所有成员的回复提示词）。 */
-    fun updateGroupScene(text: String) {
-        val group = conversation.value ?: return
-        if (!isGroup()) return
-        viewModelScope.launch {
-            conversationRepository.updateConversation(group.copy(groupScene = text.trim()))
+            conversationRepository.updateConversation(
+                group.copy(groupBackground = text.trim(), groupBackgroundMode = mode)
+            )
         }
     }
 
