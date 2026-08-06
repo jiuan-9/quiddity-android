@@ -7,6 +7,8 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
@@ -466,13 +468,23 @@ fun HomeScreen(
         }
 
         // 下拉指示器：跟手出现的小应用入口
-        AnimatedVisibility(
-            visible = pullDp > 0f && !pullTriggered,
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .windowInsetsPadding(WindowInsets.statusBars)
-                .padding(horizontal = 16.dp, vertical = 10.dp)
-        ) {
+    AnimatedVisibility(
+        visible = pullDp > 0f && !pullTriggered,
+        modifier = Modifier
+            .align(Alignment.TopCenter)
+            .windowInsetsPadding(WindowInsets.statusBars)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        enter = fadeIn(tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedDecelerate)) +
+            scaleIn(
+                initialScale = 0.85f,
+                animationSpec = tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedDecelerate)
+            ),
+        exit = fadeOut(tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate)) +
+            scaleOut(
+                targetScale = 0.92f,
+                animationSpec = tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate)
+            )
+    ) {
             Surface(
                 shape = RoundedCornerShape(22.dp),
                 color = MaterialTheme.colorScheme.surfaceContainerHigh,

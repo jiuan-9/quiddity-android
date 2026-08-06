@@ -1,11 +1,28 @@
 package com.quiddity.app.ui.miniapps.board
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.AnimationVector1D
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,8 +55,10 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -49,13 +68,17 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.quiddity.app.domain.board.BoardState
 import com.quiddity.app.domain.board.Stone
+import com.quiddity.app.ui.theme.Motion
+import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 /*
@@ -73,7 +96,14 @@ fun BoardGameScreen(
     onRematch: () -> Unit,
     onOpenChat: (() -> Unit)?
 ) {
-    BackHandler(onBack = onBack)
+    var showExitConfirm by remember { mutableStateOf(false) }
+    BackHandler {
+        if (session.status == BoardStatus.Playing) {
+            showExitConfirm = true
+        } else {
+            onBack()
+        }
+    }
     val finished = session.status as? BoardStatus.Finished
 
     Column(
@@ -85,7 +115,9 @@ fun BoardGameScreen(
     ) {
         BoardTopBar(
             title = "${session.gameType.displayName} · ${session.opponentName}",
-            onBack = onBack,
+            onBack = {
+                if (session.status == BoardStatus.Playing) showExitConfirm = true else onBack()
+            },
             horizontalPadding = 12.dp,
             trailing = {
                 Text(
@@ -115,15 +147,48 @@ fun BoardGameScreen(
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             StoneDot(color = if (session.userStone == Stone.BLACK) Color(0xFF1B1B1F) else Color(0xFFF2EEE6))
-            Text(
-                text = buildTurnText(session),
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
-            )
+            AnimatedContent(
+                targetState = buildTurnText(session),
+                modifier = Modifier.weight(1f),
+                transitionSpec = {
+                    val enter = fadeIn(tween(Motion.DurationShort, easing = Motion.EasingEmphasizedDecelerate)) +
+                        slideInVertically(tween(Motion.DurationShort, easing = Motion.EasingStandard)) { -it / 3 }
+                    val exit = fadeOut(tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate)) +
+                        slideOutVertically(tween(Motion.DurationShort, easing = Motion.EasingStandard)) { it / 3 }
+                    enter togetherWith exit
+                },
+                label = "turn_text"
+            ) { text ->
+                if (session.thinking) {
+                    val pulse by rememberInfiniteTransition(label = "thinking").animateFloat(
+                        initialValue = 0.55f,
+                        targetValue = 1f,
+                        animationSpec = infiniteRepeatable(
+                            tween(600, easing = Motion.EasingStandard),
+                            RepeatMode.Reverse
+                        ),
+                        label = "thinking_alpha"
+                    )
+                    Text(
+                        text = text,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.graphicsLayer { alpha = pulse }
+                    )
+                } else {
+                    Text(
+                        text = text,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
             if (session.gameType.isGo && finished == null) {
                 TextButton(onClick = onPass, enabled = !session.thinking) {
                     Text("停一手")
@@ -175,6 +240,37 @@ fun BoardGameScreen(
             onOpenChat = onOpenChat
         )
     }
+
+    if (showExitConfirm) {
+        AlertDialog(
+            onDismissRequest = { showExitConfirm = false },
+            shape = RoundedCornerShape(24.dp),
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            title = {
+                Text("退出对局？", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Text(
+                    "对局还在进行中，退出后本局不会保留。",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showExitConfirm = false
+                    onBack()
+                }) {
+                    Text("退出", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showExitConfirm = false }) {
+                    Text("继续对局")
+                }
+            }
+        )
+    }
 }
 
 private fun buildTurnText(session: BoardSession): String {
@@ -200,6 +296,60 @@ fun GameBoardView(
     val lineColor = Color(0xFF7A5A32)
     val markerColor = Color(0xFFE53935)
 
+    // 落子动画：新子缩放入场；提子（围棋）淡出；最后落子标记淡入。
+    val scope = rememberCoroutineScope()
+    val appearAnims = remember { mutableStateMapOf<Pair<Int, Int>, Animatable<Float, AnimationVector1D>>() }
+    val vanishAnims = remember { mutableStateMapOf<Pair<Int, Int>, VanishAnim>() }
+    val prevGrid = remember { mutableStateOf(state.grid) }
+    val markerAlpha = remember { Animatable(0f) }
+
+    LaunchedEffect(state.grid) {
+        val prev = prevGrid.value
+        val cur = state.grid
+        val size = state.size
+        for (idx in cur.indices) {
+            if (Stone.fromCode(cur[idx]) != Stone.EMPTY &&
+                Stone.fromCode(prev.getOrElse(idx) { Stone.EMPTY.code }) == Stone.EMPTY
+            ) {
+                val key = idx / size to idx % size
+                if (key !in appearAnims) {
+                    val anim = Animatable(0f)
+                    appearAnims[key] = anim
+                    scope.launch {
+                        anim.animateTo(
+                            1f,
+                            spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)
+                        )
+                    }
+                }
+            }
+        }
+        for (idx in prev.indices) {
+            val stone = Stone.fromCode(prev[idx])
+            if (stone != Stone.EMPTY &&
+                Stone.fromCode(cur.getOrElse(idx) { Stone.EMPTY.code }) == Stone.EMPTY
+            ) {
+                val key = idx / size to idx % size
+                if (key !in vanishAnims) {
+                    val anim = Animatable(1f)
+                    vanishAnims[key] = VanishAnim(stone, anim)
+                    scope.launch {
+                        anim.animateTo(0f, tween(240, easing = Motion.EasingEmphasizedAccelerate))
+                        vanishAnims.remove(key)
+                    }
+                }
+            }
+        }
+        prevGrid.value = cur
+    }
+
+    LaunchedEffect(state.lastMove) {
+        if (state.lastMove != null) {
+            markerAlpha.snapTo(0f)
+            markerAlpha.animateTo(1f, tween(180, easing = Motion.EasingEmphasizedDecelerate))
+        }
+    }
+
     Canvas(
         modifier = Modifier
             .fillMaxWidth()
@@ -221,6 +371,33 @@ fun GameBoardView(
         val pad = minDim * 0.06f
         val inner = minDim - pad * 2f
         val cell = inner / (state.size - 1)
+
+        fun drawStoneAt(center: Offset, radius: Float, stone: Stone, alpha: Float, scale: Float) {
+            if (alpha <= 0f || scale <= 0f) return
+            val r = radius * scale
+            val brush = if (stone == Stone.BLACK) {
+                Brush.radialGradient(
+                    colors = listOf(Color(0xFF43434B), Color(0xFF101013)),
+                    center = center - Offset(radius * 0.35f, radius * 0.35f),
+                    radius = radius * 1.6f
+                )
+            } else {
+                Brush.radialGradient(
+                    colors = listOf(Color(0xFFFFFFFF), Color(0xFFD8D2C6)),
+                    center = center - Offset(radius * 0.35f, radius * 0.35f),
+                    radius = radius * 1.6f
+                )
+            }
+            drawCircle(brush = brush, radius = r, center = center, alpha = alpha)
+            if (stone == Stone.WHITE) {
+                drawCircle(
+                    color = Color(0xFF8A8377).copy(alpha = 0.6f * alpha),
+                    radius = r,
+                    center = center,
+                    style = Stroke(width = 1.2f)
+                )
+            }
+        }
 
         drawRoundRect(
             color = boardColor,
@@ -257,46 +434,46 @@ fun GameBoardView(
             }
         }
 
+        // 被提的棋子先淡出（画在底层）
+        for ((key, vanish) in vanishAnims) {
+            drawStoneAt(
+                center = Offset(pad + key.second * cell, pad + key.first * cell),
+                radius = cell * 0.46f,
+                stone = vanish.stone,
+                alpha = vanish.anim.value,
+                scale = 1f
+            )
+        }
+        // 当前棋子：新落子带缩放入场
         for (r in 0 until state.size) {
             for (c in 0 until state.size) {
                 val stone = state.stoneAt(r, c)
                 if (stone == Stone.EMPTY) continue
-                val center = Offset(pad + c * cell, pad + r * cell)
-                val radius = cell * 0.46f
-                val brush = if (stone == Stone.BLACK) {
-                    Brush.radialGradient(
-                        colors = listOf(Color(0xFF43434B), Color(0xFF101013)),
-                        center = center - Offset(radius * 0.35f, radius * 0.35f),
-                        radius = radius * 1.6f
-                    )
-                } else {
-                    Brush.radialGradient(
-                        colors = listOf(Color(0xFFFFFFFF), Color(0xFFD8D2C6)),
-                        center = center - Offset(radius * 0.35f, radius * 0.35f),
-                        radius = radius * 1.6f
-                    )
-                }
-                drawCircle(brush = brush, radius = radius, center = center)
-                if (stone == Stone.WHITE) {
-                    drawCircle(
-                        color = Color(0xFF8A8377).copy(alpha = 0.6f),
-                        radius = radius,
-                        center = center,
-                        style = Stroke(width = 1.2f)
-                    )
-                }
+                drawStoneAt(
+                    center = Offset(pad + c * cell, pad + r * cell),
+                    radius = cell * 0.46f,
+                    stone = stone,
+                    alpha = 1f,
+                    scale = appearAnims[r to c]?.value ?: 1f
+                )
             }
         }
 
         state.lastMove?.let { move ->
             drawCircle(
-                color = markerColor,
+                color = markerColor.copy(alpha = markerAlpha.value),
                 radius = cell * 0.13f,
                 center = Offset(pad + move.col * cell, pad + move.row * cell)
             )
         }
     }
 }
+
+/** 提子淡出动画：记录被移除棋子的颜色与透明度动画。 */
+private class VanishAnim(
+    val stone: Stone,
+    val anim: Animatable<Float, AnimationVector1D>
+)
 
 @Composable
 private fun StoneDot(color: Color) {
@@ -322,6 +499,7 @@ private fun androidx.compose.foundation.layout.ColumnScope.ChatPanel(
         }
     }
     var input by remember { mutableStateOf("") }
+    val canSend = input.isNotBlank()
 
     Column(
         modifier = Modifier
@@ -378,18 +556,23 @@ private fun androidx.compose.foundation.layout.ColumnScope.ChatPanel(
                 modifier = Modifier.weight(1f),
                 placeholder = { Text("说点什么…", color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)) },
                 shape = RoundedCornerShape(18.dp),
-                maxLines = 3
+                maxLines = 3,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                keyboardActions = KeyboardActions(onSend = {
+                    if (canSend) {
+                        onSend(input)
+                        input = ""
+                    }
+                })
             )
             Box(
                 modifier = Modifier
                     .size(42.dp)
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primary)
-                    .clickable {
-                        if (input.isNotBlank()) {
-                            onSend(input)
-                            input = ""
-                        }
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = if (canSend) 1f else 0.35f))
+                    .clickable(enabled = canSend) {
+                        onSend(input)
+                        input = ""
                     },
                 contentAlignment = Alignment.Center
             ) {
@@ -407,8 +590,20 @@ private fun androidx.compose.foundation.layout.ColumnScope.ChatPanel(
 @Composable
 private fun ChatBubble(message: BoardChatMessage) {
     val isUser = message.fromUser
+    // 新气泡淡入 + 轻微放大，表达"消息出现"的质感
+    val appear = remember { Animatable(0f) }
+    LaunchedEffect(Unit) {
+        appear.animateTo(1f, tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedDecelerate))
+    }
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .graphicsLayer {
+                alpha = appear.value
+                val s = 0.92f + 0.08f * appear.value
+                scaleX = s
+                scaleY = s
+            },
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
     ) {
         Text(

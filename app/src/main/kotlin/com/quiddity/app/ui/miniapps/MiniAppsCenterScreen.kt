@@ -1,6 +1,10 @@
 package com.quiddity.app.ui.miniapps
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -23,6 +27,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -34,6 +39,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,11 +47,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.quiddity.app.ui.theme.Motion
+import kotlinx.coroutines.delay
 
 /*
  * 小应用中心：收藏 / 全部 两个分区。
@@ -150,9 +159,10 @@ fun MiniAppsCenterScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(end = 8.dp)
                     ) {
-                        items(MiniAppRegistry.all.filter { it.id in favorites }, key = { it.id }) { app ->
+                        itemsIndexed(MiniAppRegistry.all.filter { it.id in favorites }, key = { _, app -> app.id }) { index, app ->
                             RoundAppIcon(
                                 app = app,
+                                index = index,
                                 isFavorite = true,
                                 onToggleFavorite = { onToggleFavorite(app.id) },
                                 onClick = { onOpenApp(app.id) }
@@ -170,9 +180,10 @@ fun MiniAppsCenterScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(end = 8.dp)
                 ) {
-                    items(MiniAppRegistry.all, key = { it.id }) { app ->
+                    itemsIndexed(MiniAppRegistry.all, key = { _, app -> app.id }) { index, app ->
                         RoundAppIcon(
                             app = app,
+                            index = index,
                             isFavorite = app.id in favorites,
                             onToggleFavorite = { onToggleFavorite(app.id) },
                             onClick = { onOpenApp(app.id) }
@@ -198,16 +209,41 @@ private fun SectionHeader(title: String) {
 @Composable
 private fun RoundAppIcon(
     app: MiniApp,
+    index: Int = 0,
     isFavorite: Boolean,
     onToggleFavorite: () -> Unit,
     onClick: () -> Unit
 ) {
+    // 交错入场：卡片依次淡入 + 轻微放大（总时长控制在 400ms 内）
+    val appear = remember { Animatable(0f) }
+    LaunchedEffect(Unit) {
+        delay(index * 40L)
+        appear.animateTo(1f, tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedDecelerate))
+    }
+    // 收藏星标：切换时弹一下（跳过首次合成）
+    val starScale = remember { Animatable(1f) }
+    var firstStar by remember { mutableStateOf(true) }
+    LaunchedEffect(isFavorite) {
+        if (firstStar) {
+            firstStar = false
+            return@LaunchedEffect
+        }
+        starScale.snapTo(1f)
+        starScale.animateTo(1.35f, tween(90, easing = Motion.EasingEmphasizedDecelerate))
+        starScale.animateTo(1f, spring(dampingRatio = 0.35f, stiffness = 600f))
+    }
     Column(
         modifier = Modifier
             .width(92.dp)
             .clip(RoundedCornerShape(18.dp))
             .clickable(onClick = onClick)
-            .padding(vertical = 12.dp, horizontal = 6.dp),
+            .padding(vertical = 12.dp, horizontal = 6.dp)
+            .graphicsLayer {
+                alpha = appear.value
+                val s = 0.85f + 0.15f * appear.value
+                scaleX = s
+                scaleY = s
+            },
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
@@ -257,7 +293,12 @@ private fun RoundAppIcon(
                     } else {
                         MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
                     },
-                    modifier = Modifier.size(13.dp)
+                    modifier = Modifier
+                        .size(13.dp)
+                        .graphicsLayer {
+                            scaleX = starScale.value
+                            scaleY = starScale.value
+                        }
                 )
             }
         }
