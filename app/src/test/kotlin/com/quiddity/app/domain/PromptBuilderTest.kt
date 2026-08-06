@@ -314,8 +314,38 @@ class PromptBuilderTest {
             senderLabels = mapOf("conv_b" to "小B"),
             userName = "小明"
         )
-        assertEquals("小明：早上好", labeled[0].content)
+        assertEquals("小明：早上好（对全体成员说）", labeled[0].content)
         assertEquals("小B：你好呀", labeled[1].content)
+    }
+
+    @Test
+    fun `toApiMessages annotates at-mention target in group mode`() {
+        val history = listOf(
+            msg("m1", Role.ASSISTANT, "@小B 在吗", senderId = "conv_a"),
+            msg("m2", Role.ASSISTANT, "@小明 宝宝", senderId = "conv_b")
+        )
+        val labeled = PromptBuilder.toApiMessages(
+            systemPrompt = "",
+            history = history,
+            senderLabels = mapOf("conv_a" to "小A", "conv_b" to "小B"),
+            userName = "小明"
+        )
+        assertEquals("小A：@小B 在吗（点名@小B）", labeled[0].content)
+        assertEquals("小B：@小明 宝宝（点名@小明）", labeled[1].content)
+    }
+
+    @Test
+    fun `toApiMessages leaves member messages without mention unannotated`() {
+        val history = listOf(
+            msg("m1", Role.ASSISTANT, "宝宝", senderId = "conv_a")
+        )
+        val labeled = PromptBuilder.toApiMessages(
+            systemPrompt = "",
+            history = history,
+            senderLabels = mapOf("conv_a" to "小A"),
+            userName = "小明"
+        )
+        assertEquals("小A：宝宝", labeled[0].content)
     }
 
     // ============================================================
@@ -356,6 +386,26 @@ class PromptBuilderTest {
     }
 
     @Test
+    fun `system prompt marks regenerate request with previous reply`() {
+        val system = PromptBuilder.buildSystemPrompt(
+            conv().copy(persona = com.quiddity.app.data.model.Persona(name = "林晚")),
+            regeneratePreviousReply = "早上好呀，今天想聊点什么？"
+        )
+        assertTrue(system.contains("「重说」请求"), "重说应在对话方式节给出语义信号")
+        assertTrue(system.contains("换一种表达方式"), "重说应要求换一种表达")
+        assertTrue(system.contains("早上好呀，今天想聊点什么？"), "上一版回复应注入供对照")
+        assertTrue(system.contains("禁止复述"), "应明确禁止复述上一版")
+    }
+
+    @Test
+    fun `system prompt without regenerate flag stays generic`() {
+        val system = PromptBuilder.buildSystemPrompt(
+            conv().copy(persona = com.quiddity.app.data.model.Persona(name = "林晚"))
+        )
+        assertFalse(system.contains("重说"), "普通回复不应携带重说指令")
+    }
+
+    @Test
     fun `group rules are generic and minimal`() {
         assertTrue(PromptBuilder.GROUP_RULES.contains("不替其他成员或用户发言"))
         assertFalse(PromptBuilder.GROUP_RULES.contains("必须包含"), "不再强制台词硬规则（由切分器根因修复兜底）")
@@ -387,6 +437,29 @@ class PromptBuilderTest {
         assertTrue(prompt.contains("你扮演的角色：小A"))
         assertTrue(prompt.contains("对话伙伴：小明"))
         assertTrue(prompt.contains("不替对方说话"))
+    }
+
+    @Test
+    fun `group system prompt carries address judgement rule`() {
+        val member = conv().copy(
+            persona = com.quiddity.app.data.model.Persona(name = "小A"),
+            userPersona = com.quiddity.app.data.model.UserPersona(name = "小明")
+        )
+        val prompt = PromptBuilder.buildGroupSystemPrompt(member, PromptBuilder.GROUP_RULES)
+        assertTrue(prompt.contains("判断说话对象"), "群聊提示词应包含接话判断规则")
+        assertTrue(prompt.contains("不要当成在叫你"), "昵称默认指向用户，不应被其他成员当成在叫自己")
+    }
+
+    @Test
+    fun `group system prompt marks regenerate request with previous reply`() {
+        val member = conv().copy(persona = com.quiddity.app.data.model.Persona(name = "小A"))
+        val prompt = PromptBuilder.buildGroupSystemPrompt(
+            member,
+            PromptBuilder.GROUP_RULES,
+            regeneratePreviousReply = "嗯？怎么了"
+        )
+        assertTrue(prompt.contains("「重说」请求"), "群聊重说应给出语义信号")
+        assertTrue(prompt.contains("嗯？怎么了"), "上一版回复应注入供对照")
     }
 
     @Test

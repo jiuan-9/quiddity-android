@@ -256,7 +256,8 @@ object PromptBuilder {
      */
     fun buildSystemPrompt(
         conv: Conversation,
-        memoryStrategy: String? = null
+        memoryStrategy: String? = null,
+        regeneratePreviousReply: String? = null
     ): String {
         val sb = StringBuilder()
         val persona = conv.persona
@@ -358,6 +359,10 @@ object PromptBuilder {
         sb.append("- 直接输出发言内容，不要加「名字：」前缀或解释。\n")
         sb.append("- 用户点「继续说」时，接着自己上一句的内容继续，不要回答自己提出的问题。\n")
         sb.append("- 不提及自己是 AI 或模型（用户明确询问时除外）。\n\n")
+        if (!regeneratePreviousReply.isNullOrBlank()) {
+            sb.append("- 本次是「重说」请求：重新构思这句话该怎么回，换一种表达方式、结构和角度重写，不要沿用上一版的原句或句式。\n")
+            sb.append("上一版回复（仅作对照，禁止复述）：").append(regeneratePreviousReply.take(600)).append("\n\n")
+        }
 
         // ===== 7. 时间库说明（主动消息开启且有查看密码时） =====
         // 让 AI 确切知道时间库查看密码与告知状态，避免在对话中编造错误密码
@@ -396,6 +401,10 @@ object PromptBuilder {
      *   仅当映射非空时给内容加「名字：」前缀；私聊/空映射行为不变。
      * @param userName 群聊场景下用户消息的名字（方案九.3：= 该成员私聊里的用户人设名字）；
      *   null 时用户消息（senderId=null）不加前缀。
+     * 群聊（senderLabels 非空）下还会追加「对谁说」标注，让成员能区分发言对象：
+     *   - 消息文本含「@名字」时标注点名对象（成员名与用户名都参与匹配）；
+     *   - 用户无点名的消息标注「对全体成员说」；
+     *   - 其他 AI 成员无点名的消息不机械标注（接话判断由系统提示词规则兜底）。
      */
     fun toApiMessages(
         systemPrompt: String,
@@ -407,13 +416,14 @@ object PromptBuilder {
         if (systemPrompt.isNotBlank()) {
             result.add(ChatMessage(role = "system", content = systemPrompt))
         }
+        val memberNames = senderLabels.values.filter { it.isNotBlank() }.toSet()
         history.forEach { msg ->
             val role = when (msg.role) {
                 Role.USER -> "user"
                 Role.ASSISTANT -> "assistant"
                 Role.SYSTEM -> "system"
             }
-            val content = when {
+            val baseContent = when {
                 msg.senderId != null && senderLabels.isNotEmpty() -> {
                     val label = senderLabels[msg.senderId] ?: msg.senderId
                     "$label：${msg.content}"
@@ -422,9 +432,36 @@ object PromptBuilder {
                     msg.role == Role.USER -> "$userName：${msg.content}"
                 else -> msg.content
             }
-            result.add(ChatMessage(role = role, content = content))
+            val marker = if (senderLabels.isNotEmpty()) {
+                buildGroupAddresseeMarker(msg.content, msg.senderId, userName, memberNames)
+            } else {
+                null
+            }
+            result.add(ChatMessage(role = role, content = baseContent + marker.orEmpty()))
         }
         return result
+    }
+
+    /**
+     * 生成单条群聊消息的「对谁说」标注（见 [toApiMessages] 的群聊规则）。
+     */
+    private fun buildGroupAddresseeMarker(
+        content: String,
+        senderId: String?,
+        userName: String?,
+        memberNames: Set<String>
+    ): String? {
+        val mentioned = buildList {
+            memberNames.filter { name -> "@$name" in content }.forEach(::add)
+            if (userName?.isNotBlank() == true && "@$userName" in content) add(userName)
+        }.distinct()
+        if (mentioned.isNotEmpty()) {
+            return "（点名${mentioned.joinToString("、") { "@$it" }}）"
+        }
+        if (senderId == null) {
+            return "（对全体成员说）"
+        }
+        return null
     }
 
     /**
@@ -588,8 +625,15 @@ $persona
     /**
      * 构造群聊成员 system 提示词（4.2）：成员人设 + 群规则 + 该成员私聊里的用户人设
      * （方案九.2：成员 A 回复时注入的用户人设 = A 私聊里的用户人设）。
+     *
+     * @param regeneratePreviousReply 重说场景下该成员上一版回复的原文（null = 正常回复）。
+     *   非空时【对话方式】会标记本次为「重说」并要求换一种表达，避免输出与上一版雷同。
      */
-    fun buildGroupSystemPrompt(member: Conversation, groupRules: String): String {
+    fun buildGroupSystemPrompt(
+        member: Conversation,
+        groupRules: String,
+        regeneratePreviousReply: String? = null
+    ): String {
         val sb = StringBuilder()
         // 说话人认知：成员名字 = 该成员 AI 角色，用户名字 = 该成员私聊里的用户人设名字
         val aiName = member.persona.name.ifBlank { "AI" }
@@ -613,7 +657,12 @@ $persona
         sb.append("- 动作、神态描写用括号括起，如（轻笑）。\n")
         sb.append("- 直接输出发言内容，不要加「名字：」前缀或解释。\n")
         sb.append("- 被用户「@」点名时优先回应；其他成员发言后按需自然接话。\n")
+        sb.append("- 判断说话对象：只有被「@自己名字」或直接叫到自己名字，才是在叫你；其他成员用「宝宝」「亲爱的」等昵称或没有明确点名时，默认是在叫用户或对全体说，不要当成在叫你、不要抢话。\n")
         sb.append("- 不提及自己是 AI 或模型（用户明确询问时除外）。\n")
+        if (!regeneratePreviousReply.isNullOrBlank()) {
+            sb.append("- 本次是「重说」请求：重新构思这句话该怎么回，换一种表达方式、结构和角度重写，不要沿用上一版的原句或句式。\n")
+            sb.append("上一版回复（仅作对照，禁止复述）：").append(regeneratePreviousReply.take(600)).append("\n")
+        }
         return sb.toString().trim()
     }
 

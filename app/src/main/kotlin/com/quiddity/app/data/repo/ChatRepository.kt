@@ -58,6 +58,71 @@ import kotlinx.serialization.json.JsonObject
 
 
 /**
+ * 聊天请求的统一载体：Chat Completions（所有服务商）或 DeepSeek Responses API
+ * （官方服务端联网搜索）。工具轮（read_memory / search_chat）对两种协议复用同一套流程。
+ *
+ * 每种载体携带自己的请求目标 URL（Completions = chat/completions 端点，
+ * Responses = /responses 端点），由 [ChatRepository.runWithToolRound] 按类型取 URL，
+ * 调用方（私聊 / 群聊）无需各自判断。
+ */
+internal sealed interface ChatRoundRequest {
+    val apiUrl: String
+    data class Completions(val request: ChatCompletionRequest, override val apiUrl: String) : ChatRoundRequest
+    data class Responses(val request: DeepSeekResponsesRequest, override val apiUrl: String) : ChatRoundRequest
+}
+
+/**
+ * 构造聊天请求：启用 DeepSeek 官方联网搜索时走 Responses API（服务端 web_search），
+ * 否则走 OpenAI 兼容 Chat Completions。
+ *
+ * @param responsesUrl 非空表示本会话已启用联网搜索且当前 API 配置支持（由 [ChatRepository.resolveWebSearch] 判定）
+ * @param tools OpenAI 兼容 function 工具（记忆策略 TOOL 时携带）；Responses 路径会附加 web_search
+ * @param tool_choice OpenAI 兼容工具调用策略（"auto" / null）
+ */
+internal fun buildChatRound(
+    access: ApiAccess.Resolved,
+    systemPrompt: String,
+    apiMessages: List<ChatMessage>,
+    maxTokens: Int,
+    temperature: Double,
+    responsesUrl: String?,
+    tools: List<ToolDefinition>?,
+    tool_choice: String?
+): ChatRoundRequest {
+    if (responsesUrl.isNullOrBlank()) {
+        return ChatRoundRequest.Completions(
+            ChatCompletionRequest(
+                model = access.model,
+                messages = apiMessages,
+                max_tokens = maxTokens,
+                temperature = temperature,
+                stream = true,
+                tools = tools,
+                tool_choice = tool_choice
+            ),
+            apiUrl = access.apiUrl
+        )
+    }
+    val responsesTools = buildList {
+        add(ResponsesTool(type = "web_search"))
+        tools.orEmpty().forEach { add(PromptBuilder.toResponsesTool(it)) }
+    }
+    return ChatRoundRequest.Responses(
+        DeepSeekResponsesRequest(
+            model = access.model,
+            input = PromptBuilder.toResponsesInput(apiMessages),
+            instructions = apiMessages.firstOrNull { it.role == "system" }?.content,
+            max_output_tokens = maxTokens,
+            temperature = temperature,
+            stream = true,
+            tools = responsesTools,
+            tool_choice = tool_choice?.let { JsonPrimitive(it) }
+        ),
+        apiUrl = responsesUrl
+    )
+}
+
+/**
  * 对话仓库：负责发起流式 API 请求，向上层暴露为 Flow<ChatStreamEvent>。
  *
  * 仓库本身只关心：构造请求、调用 API、把原始 delta 喂给协调器、把协调器产出
@@ -83,15 +148,6 @@ class ChatRepository(
         }
 ) {
 
-    /**
-     * 聊天请求的统一载体：Chat Completions（所有服务商）或 DeepSeek Responses API
-     * （官方服务端联网搜索）。工具轮（read_memory / search_chat）对两种协议复用同一套流程。
-     */
-    private sealed interface ChatRoundRequest {
-        data class Completions(val request: ChatCompletionRequest) : ChatRoundRequest
-        data class Responses(val request: DeepSeekResponsesRequest) : ChatRoundRequest
-    }
-
     /** 对外暴露的流式事件。 */
     sealed class Event {
         /** 新消息创建（含初始空 streaming 消息）。 */
@@ -114,12 +170,15 @@ class ChatRepository(
      * @param memoryStrategy 记忆策略覆盖值（null = 跟随 [Conversation.memoryStrategy]，
      *   仍为 null 时回退为随身带 CARRY）。TOOL 模式下请求携带 read_memory 工具，
      *   模型按需检索记忆，不再每轮重读压缩摘要。
+     * @param regeneratePreviousReply 重说场景下上一版回复的原文（null = 正常回复）。
+     *   非空时提示词会标记本次为「重说」并要求换一种表达，避免输出与上一版雷同。
      * @param onEvent suspend 事件回调（由 ViewModel 串行化执行）
      */
     suspend fun streamAssistantReply(
         conv: Conversation,
         history: List<Message>,
         memoryStrategy: String? = null,
+        regeneratePreviousReply: String? = null,
         onEvent: suspend (Event) -> Unit
     ) {
         val settings = settingsRepo.currentSnapshot()
@@ -134,7 +193,8 @@ class ChatRepository(
             ?: QuiddityConstants.MEMORY_STRATEGY_CARRY
         val systemPrompt = PromptBuilder.buildSystemPrompt(
             conv = conv,
-            memoryStrategy = effectiveStrategy
+            memoryStrategy = effectiveStrategy,
+            regeneratePreviousReply = regeneratePreviousReply
         )
         val contextLimit = if (conv.contextLimit > 0) conv.contextLimit else settings.globalContextLimit
         // 过滤 isNotice 提示气泡：不发给 LLM（UI 专用，非对话内容）
@@ -175,15 +235,19 @@ class ChatRepository(
             null
         )
 
-        runWithToolRound(api, access.apiUrl, access.apiKey, request, coordinator, conv, onEvent)
+        runWithToolRound(api, access.apiKey, request, coordinator, conv, onEvent)
     }
 
     /**
      * 让 AI 先发消息（空对话开场）。
+     *
+     * @param regeneratePreviousReply 重说场景下上一版开场回复的原文（null = 正常开场）。
+     *   非空时提示词会标记本次为「重说」并要求换一种表达，避免输出与上一版雷同。
      */
     suspend fun letAiStart(
         conv: Conversation,
         memoryStrategy: String? = null,
+        regeneratePreviousReply: String? = null,
         onEvent: suspend (Event) -> Unit
     ) {
         val settings = settingsRepo.currentSnapshot()
@@ -198,7 +262,8 @@ class ChatRepository(
             ?: QuiddityConstants.MEMORY_STRATEGY_CARRY
         val systemPrompt = PromptBuilder.buildSystemPrompt(
             conv = conv,
-            memoryStrategy = effectiveStrategy
+            memoryStrategy = effectiveStrategy,
+            regeneratePreviousReply = regeneratePreviousReply
         )
         // 引导：让 AI 主动发起对话
         val guidedMessages = listOf(
@@ -237,56 +302,7 @@ class ChatRepository(
             null
         )
 
-        runWithToolRound(api, access.apiUrl, access.apiKey, request, coordinator, conv, onEvent)
-    }
-
-    /**
-     * 构造聊天请求：启用 DeepSeek 官方联网搜索时走 Responses API（服务端 web_search），
-     * 否则走 OpenAI 兼容 Chat Completions。
-     *
-     * @param responsesUrl 非空表示本会话已启用联网搜索且当前 API 配置支持（由 [resolveWebSearch] 判定）
-     * @param tools OpenAI 兼容 function 工具（记忆策略 TOOL 时携带）；Responses 路径会附加 web_search
-     * @param tool_choice OpenAI 兼容工具调用策略（"auto" / null）
-     */
-    private fun buildChatRound(
-        access: ApiAccess.Resolved,
-        systemPrompt: String,
-        apiMessages: List<ChatMessage>,
-        maxTokens: Int,
-        temperature: Double,
-        responsesUrl: String?,
-        tools: List<ToolDefinition>?,
-        tool_choice: String?
-    ): ChatRoundRequest {
-        if (responsesUrl.isNullOrBlank()) {
-            return ChatRoundRequest.Completions(
-                ChatCompletionRequest(
-                    model = access.model,
-                    messages = apiMessages,
-                    max_tokens = maxTokens,
-                    temperature = temperature,
-                    stream = true,
-                    tools = tools,
-                    tool_choice = tool_choice
-                )
-            )
-        }
-        val responsesTools = buildList {
-            add(ResponsesTool(type = "web_search"))
-            tools.orEmpty().forEach { add(PromptBuilder.toResponsesTool(it)) }
-        }
-        return ChatRoundRequest.Responses(
-            DeepSeekResponsesRequest(
-                model = access.model,
-                input = PromptBuilder.toResponsesInput(apiMessages),
-                instructions = apiMessages.firstOrNull { it.role == "system" }?.content,
-                max_output_tokens = maxTokens,
-                temperature = temperature,
-                stream = true,
-                tools = responsesTools,
-                tool_choice = tool_choice?.let { JsonPrimitive(it) }
-            )
-        )
+        runWithToolRound(api, access.apiKey, request, coordinator, conv, onEvent)
     }
 
     /**
@@ -307,10 +323,12 @@ class ChatRepository(
      * 通用流式驱动（含 read_memory 工具轮）：
      * 第一轮如聚合到工具调用，回填检索结果后发起第二轮（最多一轮，防死循环），
      * 最后由 [StreamCoordinator] 负责正确的 NewMessage/UpdateMessage/CompleteMessage 派发。
+     *
+     * 请求目标 URL 由 [ChatRoundRequest] 自身携带（Completions / Responses 端点不同），
+     * 私聊与群聊统一在此按类型取值，不再由调用点各自传 URL。
      */
     private suspend fun runWithToolRound(
         api: ChatApi,
-        apiUrl: String,
         apiKey: String,
         request: ChatRoundRequest,
         coordinator: StreamCoordinator,
@@ -322,6 +340,7 @@ class ChatRepository(
          */
         contentTransform: (String) -> String = { it }
     ) {
+        val apiUrl = request.apiUrl
         val firstRoundCalls = runSingleStream(
             api, apiUrl, apiKey, request, coordinator, onEvent, contentTransform
         ) ?: return
@@ -399,7 +418,8 @@ class ChatRepository(
                     messages = toolMessages,
                     tools = null,
                     tool_choice = null
-                )
+                ),
+                apiUrl = request.apiUrl
             )
         }
         is ChatRoundRequest.Responses -> {
@@ -409,7 +429,8 @@ class ChatRepository(
                     input = items,
                     tools = null,
                     tool_choice = null
-                )
+                ),
+                apiUrl = request.apiUrl
             )
         }
     }
@@ -665,12 +686,15 @@ class ChatRepository(
      * @param group 群聊会话（群规则 / 群聊小本本）
      * @param transcript 群聊转述（[com.quiddity.app.domain.PromptBuilder.buildGroupTranscript] 产出）
      * @param senderId 发言人会话 id（写入消息 senderId）
+     * @param regeneratePreviousReply 重说场景下该成员上一版回复的原文（null = 正常回复）。
+     *   非空时提示词会标记本次为「重说」并要求换一种表达，避免输出与上一版雷同。
      */
     suspend fun streamGroupMemberReply(
         member: Conversation,
         group: Conversation,
         transcript: List<Message>,
         senderId: String,
+        regeneratePreviousReply: String? = null,
         onEvent: suspend (Event) -> Unit
     ) {
         val settings = settingsRepo.currentSnapshot()
@@ -690,7 +714,8 @@ class ChatRepository(
             tier = resolveMemberTier(member, settings),
             senderNames = senderNames,
             userName = member.userPersona.name.takeIf { it.isNotBlank() },
-            webSearchResponsesUrl = resolveWebSearch(settings, member)
+            webSearchResponsesUrl = resolveWebSearch(settings, member),
+            regeneratePreviousReply = regeneratePreviousReply
         )
         // 模型有时会误输出「名字：」前缀（如回复开头带其他成员名），
         // 在事件派发前剥掉，保证落库/展示内容不带任何名字前缀（方案五）。
@@ -723,11 +748,11 @@ class ChatRepository(
                     p.singleMessageTokens,
                     p.senderId
                 )
-                val roundRequest = p.responsesRequest?.let { ChatRoundRequest.Responses(it) }
-                    ?: ChatRoundRequest.Completions(p.request)
-                val effectiveApiUrl = p.responsesApiUrl ?: p.apiUrl
+                val roundRequest = p.responsesRequest
+                    ?.let { ChatRoundRequest.Responses(it, p.responsesApiUrl ?: p.apiUrl) }
+                    ?: ChatRoundRequest.Completions(p.request, p.apiUrl)
                 runWithToolRound(
-                    api, effectiveApiUrl, p.apiKey, roundRequest, coordinator, group, cleanEvent
+                    api, p.apiKey, roundRequest, coordinator, group, cleanEvent
                 ) { prefixStripper.accept(it) }
             },
             onFailure = { emitError(onEvent, it, "") }

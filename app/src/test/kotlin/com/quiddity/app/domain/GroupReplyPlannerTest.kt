@@ -218,8 +218,30 @@ class GroupReplyPlannerTest {
             userName = "小明"
         ).getOrThrow()
         val userMessages = plan.request.messages.filter { it.role == "user" }
-        assertEquals("小明：大家好", userMessages[0].content)
+        assertEquals("小明：大家好（对全体成员说）", userMessages[0].content)
         assertEquals("小A：测试消息 m2", userMessages[1].content)
+    }
+
+    @Test
+    fun `regenerate previous reply flows into group system prompt`() {
+        val settings = AppSettings.Default.copy(catalog = listOf(catalogEntry("cat_a")))
+        val plan = GroupReplyPlanner.buildPlan(
+            settings = settings,
+            member = member().copy(
+                persona = com.quiddity.app.data.model.Persona(name = "小A"),
+                userPersona = com.quiddity.app.data.model.UserPersona(name = "小明")
+            ),
+            group = group(),
+            transcript = listOf(msg("m1", "member_a")),
+            senderId = "member_a",
+            tier = ApiCatalogManager.ModelTier.BASIC,
+            senderNames = mapOf("member_a" to "小A"),
+            userName = "小明",
+            regeneratePreviousReply = "嗯？怎么了"
+        ).getOrThrow()
+        val systemContent = plan.request.messages.first { it.role == "system" }.content.orEmpty()
+        assertTrue(systemContent.contains("「重说」请求"), "重说信号应进入群聊系统提示词")
+        assertTrue(systemContent.contains("嗯？怎么了"), "上一版回复应注入供对照")
     }
 
     @Test

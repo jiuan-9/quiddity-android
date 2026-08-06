@@ -73,6 +73,8 @@ object GroupReplyPlanner {
      * @param userName 用户消息的名字（方案九.3：= 该成员私聊用户人设里的名字）
      * @param webSearchResponsesUrl 该成员启用官方联网搜索时的 Responses API 端点；
      *   非空时本计划改为构造 Responses API 请求（由调用方按能力解析，null = 不启用）
+     * @param regeneratePreviousReply 重说场景下该成员上一版回复的原文（null = 正常回复）。
+     *   非空时系统提示词会标记本次为「重说」并要求换一种表达，避免输出与上一版雷同。
      * @return 成功返回 [Plan]；API 解析失败返回失败结果（含用户提示）
      */
     fun buildPlan(
@@ -84,7 +86,8 @@ object GroupReplyPlanner {
         tier: ApiCatalogManager.ModelTier,
         senderNames: Map<String, String> = emptyMap(),
         userName: String? = null,
-        webSearchResponsesUrl: String? = null
+        webSearchResponsesUrl: String? = null,
+        regeneratePreviousReply: String? = null
     ): Result<Plan> {
         val access = ApiAccess.resolve(settings, member)
         if (access is ApiAccess.Failure) {
@@ -92,7 +95,11 @@ object GroupReplyPlanner {
         }
         access as ApiAccess.Resolved
 
-        val systemPrompt = PromptBuilder.buildGroupSystemPrompt(member, PromptBuilder.GROUP_RULES)
+        val systemPrompt = PromptBuilder.buildGroupSystemPrompt(
+            member,
+            PromptBuilder.GROUP_RULES,
+            regeneratePreviousReply
+        )
         val apiMessages = PromptBuilder.toApiMessages(systemPrompt, transcript, senderNames, userName)
         val maxTokens = member.maxTokens ?: settings.globalMaxTokens
         val singleMsgTokens = member.singleMessageTokens ?: settings.globalSingleMessageTokens

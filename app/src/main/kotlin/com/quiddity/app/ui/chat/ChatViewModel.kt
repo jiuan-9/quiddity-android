@@ -611,6 +611,16 @@ class ChatViewModel(
 
         // 定位最后一条 USER 消息：保留 0..lastUserIndex（含 USER），删除其后的所有 AI 消息。
         val lastUserIndex = current.indexOfLast { it.role == Role.USER }
+        // 上一版回复原文（重说提示词对照用）：常规轮次 = USER 之后的所有 AI 消息；
+        // AI 开场轮 = 全部消息。让模型知道上一版说了什么，才能有意识地换一种表达。
+        val previousReplies = (if (lastUserIndex >= 0) {
+            current.subList(lastUserIndex + 1, current.size)
+        } else {
+            current
+        }).filterNot { it.isNotice }
+            .mapNotNull { it.content.takeIf { c -> c.isNotBlank() } }
+            .joinToString("\n")
+            .takeIf { it.isNotBlank() }
         if (lastUserIndex >= 0) {
             // 常规轮次：删除最后一条 USER 之后的所有 AI 消息，再重新生成整轮回复
             val newHistory = current.subList(0, lastUserIndex + 1).toList()
@@ -619,7 +629,8 @@ class ChatViewModel(
                 chatRepository.streamAssistantReply(
                     conv,
                     newHistory,
-                    effectiveMemoryStrategy(conv)
+                    effectiveMemoryStrategy(conv),
+                    previousReplies
                 ) { event ->
                     handleStreamEvent(event)
                     if (event is ChatRepository.Event.CompleteMessage) {
@@ -635,7 +646,8 @@ class ChatViewModel(
                 conversationRepository.replaceMessages(conversationId, emptyList())
                 chatRepository.letAiStart(
                     conv,
-                    effectiveMemoryStrategy(conv)
+                    effectiveMemoryStrategy(conv),
+                    previousReplies
                 ) { event ->
                     handleStreamEvent(event)
                     if (event is ChatRepository.Event.CompleteMessage) {
@@ -706,6 +718,12 @@ class ChatViewModel(
         val senderId = current[targetIndex].senderId ?: return
         val member = conversationRepository.getConversation(senderId) ?: return
         val newHistory = current.subList(0, targetIndex).toList()
+        // 上一版回复原文（含目标消息及之后的消息）：供重说提示词对照，要求换一种表达。
+        val previousReplies = current.subList(targetIndex, current.size)
+            .filterNot { it.isNotice }
+            .mapNotNull { it.content.takeIf { c -> c.isNotBlank() } }
+            .joinToString("\n")
+            .takeIf { it.isNotBlank() }
         groupStreamJob?.cancel()
         groupStreamJob = viewModelScope.launch {
             _isGenerating.value = true
@@ -715,7 +733,8 @@ class ChatViewModel(
                     member = member,
                     group = group,
                     transcript = newHistory,
-                    senderId = senderId
+                    senderId = senderId,
+                    regeneratePreviousReply = previousReplies
                 ) { event ->
                     handleStreamEvent(event)
                 }
