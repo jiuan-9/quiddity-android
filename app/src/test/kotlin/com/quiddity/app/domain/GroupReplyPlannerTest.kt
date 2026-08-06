@@ -273,7 +273,7 @@ class GroupReplyPlannerTest {
 
         val systemContent = plan.request.messages.first { it.role == "system" }.content.orEmpty()
         assertTrue(systemContent.contains("判断说话对象"), "B 的提示词应包含接话判断规则")
-        assertTrue(systemContent.contains("默认是在叫用户或对全体说"), "昵称应默认指向用户")
+        assertTrue(systemContent.contains("默认是叫用户"), "昵称应默认指向用户")
         assertTrue(systemContent.contains("不要当成在叫你"), "B 不应把昵称当成在叫自己")
 
         val transcriptMessage = plan.request.messages.first { it.role == "assistant" }.content.orEmpty()

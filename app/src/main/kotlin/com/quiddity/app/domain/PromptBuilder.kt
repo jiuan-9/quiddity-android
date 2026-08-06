@@ -268,8 +268,8 @@ object PromptBuilder {
         sb.append("【角色与对话双方】\n")
         sb.append("你扮演的角色：").append(aiName).append("\n")
         sb.append("对话伙伴：").append(userName).append("\n")
-        sb.append("人设与场景描述以第三人称书写：「").append(aiName).append("」指你本人，「").append(userName)
-            .append("」指对话伙伴；你只以「").append(aiName).append("」的身份发言，不替对方说话。\n\n")
+        sb.append("「").append(aiName).append("」指你本人，「").append(userName)
+            .append("」指对话伙伴；你只以「").append(aiName).append("」身份发言，不替对方说话。\n\n")
 
         // ===== 2. AI 人设（用户内容，原样注入） =====
         sb.append("【AI 人设】\n")
@@ -355,9 +355,9 @@ object PromptBuilder {
         // ===== 6. 对话方式（用户可配置的表达风格 + 应用机制） =====
         sb.append("【对话方式】\n")
         sb.append(buildConversationStyleLine(conv.replyStyle)).append("\n")
-        sb.append("- 动作、神态描写用括号括起，如（轻笑）。\n")
-        sb.append("- 直接输出发言内容，不要加「名字：」前缀或解释。\n")
-        sb.append("- 用户点「继续说」时，接着自己上一句的内容继续，不要回答自己提出的问题。\n")
+        sb.append("- 动作/神态用括号括起，如（轻笑）。\n")
+        sb.append("- 直接发言，不加「名字：」前缀或解释。\n")
+        sb.append("- 「继续说」时接着自己上一句继续，不回答自己的问题。\n")
         sb.append("- 不提及自己是 AI 或模型（用户明确询问时除外）。\n\n")
         if (!regeneratePreviousReply.isNullOrBlank()) {
             sb.append("- 本次是「重说」请求：重新构思这句话该怎么回，换一种表达方式、结构和角度重写，不要沿用上一版的原句或句式。\n")
@@ -391,7 +391,7 @@ object PromptBuilder {
         QuiddityConstants.REPLY_STYLE_DETAILED ->
             "回复可以充分展开，描写细腻、篇幅不限，不必刻意压缩。"
         else ->
-            "回复的表达方式完全遵循人设中的性格与期望，不做额外限制。"
+            "表达方式完全遵循人设，不做额外限制。"
     }
 
     /**
@@ -641,8 +641,8 @@ $persona
         sb.append("【角色与对话双方】\n")
         sb.append("你扮演的角色：").append(aiName).append("\n")
         sb.append("对话伙伴：").append(userName).append("\n")
-        sb.append("群聊转述中的「").append(aiName).append("」指你本人，「").append(userName)
-            .append("」指你的对话伙伴；你只以「").append(aiName).append("」的身份发言，不替对方说话。\n\n")
+        sb.append("转述中「").append(aiName).append("」指你本人，「").append(userName)
+            .append("」指对话伙伴；你只以「").append(aiName).append("」身份发言，不替对方说话。\n\n")
         sb.append("【AI 人设】\n").append(buildPersonaSnippet(member)).append("\n\n")
         buildUserPersonaSnippet(member.userPersona)?.let { userSection ->
             sb.append(userSection).append("\n\n")
@@ -654,10 +654,10 @@ $persona
         // 群聊特有约束（@点名优先回应、不替他人发言）也一并收进本段，避免规则被埋在列表末尾失效。
         sb.append("【对话方式】\n")
         sb.append(buildConversationStyleLine(member.replyStyle)).append("\n")
-        sb.append("- 动作、神态描写用括号括起，如（轻笑）。\n")
-        sb.append("- 直接输出发言内容，不要加「名字：」前缀或解释。\n")
-        sb.append("- 被用户「@」点名时优先回应；其他成员发言后按需自然接话。\n")
-        sb.append("- 判断说话对象：只有被「@自己名字」或直接叫到自己名字，才是在叫你；其他成员用「宝宝」「亲爱的」等昵称或没有明确点名时，默认是在叫用户或对全体说，不要当成在叫你、不要抢话。\n")
+        sb.append("- 动作/神态用括号括起，如（轻笑）。\n")
+        sb.append("- 直接发言，不加「名字：」前缀或解释。\n")
+        sb.append("- 被用户「@」点名时优先回应；其他成员发言后按需接话。\n")
+        sb.append("- 判断说话对象：被「@自己名字」或直接叫到自己名字才算在叫你；其他成员用昵称（如宝宝）或没点名时，默认是叫用户，不要当成在叫你、不要抢话。\n")
         sb.append("- 不提及自己是 AI 或模型（用户明确询问时除外）。\n")
         if (!regeneratePreviousReply.isNullOrBlank()) {
             sb.append("- 本次是「重说」请求：重新构思这句话该怎么回，换一种表达方式、结构和角度重写，不要沿用上一版的原句或句式。\n")
@@ -714,9 +714,9 @@ $persona
      * 群聊规则（4.2 群聊成员 system 提示词的群规则部分）。
      */
     const val GROUP_RULES =
-        "1. 你正在参与一场群聊，群聊中有用户和其他 AI 成员。\n" +
-        "2. 发言前先完整阅读群聊转述，保持人设一致。\n" +
-        "3. 只说你作为该角色会说的话，不替其他成员或用户发言。"
+        "1. 你在群聊中，成员包括用户和其他 AI 成员。\n" +
+        "2. 先读完整群聊转述再发言，保持人设一致。\n" +
+        "3. 只说你会说的话，不替其他成员或用户发言。"
 
     /**
      * 构造"该不该我接话"的判断指令（4.2）：成员人设 + 群聊转述 + 输出约束。

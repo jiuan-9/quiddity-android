@@ -381,7 +381,7 @@ class PromptBuilderTest {
         assertTrue(system.contains("【角色与对话双方】"))
         assertTrue(system.contains("你扮演的角色：林晚"))
         assertTrue(system.contains("对话伙伴：小明"))
-        assertTrue(system.contains("只以「林晚」的身份发言"))
+        assertTrue(system.contains("只以「林晚」身份发言"))
         assertTrue(system.contains("不替对方说话"))
     }
 
@@ -421,8 +421,8 @@ class PromptBuilderTest {
         )
         val prompt = PromptBuilder.buildGroupSystemPrompt(member, PromptBuilder.GROUP_RULES)
         assertTrue(prompt.contains("【对话方式】"), "群聊提示词应包含对话方式节")
-        assertTrue(prompt.contains("动作、神态描写用括号括起，如（轻笑）。"), "括号动作规则应带示例：$prompt")
-        assertTrue(prompt.contains("不要加「名字：」前缀或解释"), "前缀规则应在对话方式节：$prompt")
+        assertTrue(prompt.contains("动作/神态用括号括起，如（轻笑）。"), "括号动作规则应带示例：$prompt")
+        assertTrue(prompt.contains("不加「名字：」前缀或解释"), "前缀规则应在对话方式节：$prompt")
         assertTrue(prompt.contains("被用户「@」点名时优先回应"), "@点名规则应在对话方式节：$prompt")
         assertTrue(prompt.contains("不提及自己是 AI 或模型"), "AI 身份纪律应在对话方式节：$prompt")
     }
@@ -465,7 +465,7 @@ class PromptBuilderTest {
     @Test
     fun `conversation style lines give users autonomy`() {
         assertEquals(
-            "回复的表达方式完全遵循人设中的性格与期望，不做额外限制。",
+            "表达方式完全遵循人设，不做额外限制。",
             PromptBuilder.buildConversationStyleLine(QuiddityConstants.REPLY_STYLE_FOLLOW_PERSONA)
         )
         assertTrue(
