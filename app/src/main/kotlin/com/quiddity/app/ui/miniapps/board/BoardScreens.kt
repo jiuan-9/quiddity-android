@@ -24,7 +24,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.rounded.DonutLarge
 import androidx.compose.material.icons.rounded.DonutSmall
+import androidx.compose.material.icons.rounded.Computer
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.SmartToy
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -104,8 +106,11 @@ fun BoardGameSelectScreen(
 @Composable
 fun BoardModeSelectScreen(
     game: BoardGameType,
+    checking: Boolean,
+    error: String?,
     onBack: () -> Unit,
     onInvite: () -> Unit,
+    onVsComputer: () -> Unit,
     onVsAi: () -> Unit
 ) {
     BackHandler(onBack = onBack)
@@ -135,12 +140,55 @@ fun BoardModeSelectScreen(
         )
         Spacer(Modifier.size(16.dp))
         GameTypeCard(
-            icon = Icons.Rounded.DonutLarge,
-            title = "与 AI 对战",
-            subtitle = "直接使用当前 API 配置的 AI 棋手",
+            icon = Icons.Rounded.Computer,
+            title = "与电脑对战",
+            subtitle = "无需联网，本地棋力即时应手",
             accent = MaterialTheme.colorScheme.secondary,
+            onClick = onVsComputer
+        )
+        Spacer(Modifier.size(16.dp))
+        GameTypeCard(
+            icon = Icons.Rounded.SmartToy,
+            title = "与 AI 对战",
+            subtitle = "使用当前 API 配置的 AI 棋手（需联网）",
+            accent = MaterialTheme.colorScheme.tertiary,
             onClick = onVsAi
         )
+        error?.let {
+            Text(
+                text = it,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(top = 12.dp, start = 4.dp)
+            )
+        }
+    }
+    if (checking) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.35f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                tonalElevation = 6.dp
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 18.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
+                    Text(
+                        text = "正在检测 AI 接口…",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            }
+        }
     }
 }
 

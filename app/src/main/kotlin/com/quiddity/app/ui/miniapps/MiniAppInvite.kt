@@ -55,9 +55,20 @@ class MiniAppInviteManager(
         )
     }
 
-    /** 解析当前 API 配置的访问凭证（与 AI 对战 / 无角色场景使用）。 */
-    fun resolveDefaultAccess(): ApiAccess.Resolved? =
-        resolveAccess(Conversation(id = "miniapp_default", createdAt = 0, updatedAt = 0))
+    /**
+     * 解析当前 API 配置并做连接检测（"与 AI 对战"使用）。
+     * 未配置或连接失败返回 null——调用方应明确提示，而不是降级成电脑。
+     */
+    suspend fun resolveDefaultAccessWithCheck(): ApiAccess.Resolved? {
+        val settings = settingsRepository.currentSnapshot()
+        val entry = settings.catalog.firstOrNull { it.id == settings.activeCatalogId }
+            ?: settings.catalog.firstOrNull()
+            ?: return null
+        val key = apiCatalogManager.decryptKey(entry)
+        val ok = apiCatalogManager.testConnection(entry.apiUrl, key, entry.apiModel).isSuccess
+        if (!ok) return null
+        return resolveAccess(Conversation(id = "miniapp_default", createdAt = 0, updatedAt = 0))
+    }
 
     private fun resolveAccess(conv: Conversation): ApiAccess.Resolved? {
         val settings = settingsRepository.currentSnapshot()

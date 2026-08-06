@@ -137,12 +137,14 @@ fun MiniAppsCenterScreen(
             } else {
                 item(key = "fav_row") {
                     LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(end = 8.dp)
                     ) {
                         items(MiniAppRegistry.all.filter { it.id in favorites }, key = { it.id }) { app ->
-                            CompactAppCard(
+                            RoundAppIcon(
                                 app = app,
+                                isFavorite = true,
+                                onToggleFavorite = { onToggleFavorite(app.id) },
                                 onClick = { onOpenApp(app.id) }
                             )
                         }
@@ -153,13 +155,20 @@ fun MiniAppsCenterScreen(
             item(key = "all_header") {
                 SectionHeader("全部小应用")
             }
-            items(MiniAppRegistry.all, key = { it.id }) { app ->
-                MiniAppCard(
-                    app = app,
-                    isFavorite = app.id in favorites,
-                    onToggleFavorite = { onToggleFavorite(app.id) },
-                    onClick = { onOpenApp(app.id) }
-                )
+            item(key = "all_row") {
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(end = 8.dp)
+                ) {
+                    items(MiniAppRegistry.all, key = { it.id }) { app ->
+                        RoundAppIcon(
+                            app = app,
+                            isFavorite = app.id in favorites,
+                            onToggleFavorite = { onToggleFavorite(app.id) },
+                            onClick = { onOpenApp(app.id) }
+                        )
+                    }
+                }
             }
         }
     }
@@ -177,63 +186,56 @@ private fun SectionHeader(title: String) {
 }
 
 @Composable
-private fun MiniAppCard(
+private fun RoundAppIcon(
     app: MiniApp,
     isFavorite: Boolean,
     onToggleFavorite: () -> Unit,
     onClick: () -> Unit
 ) {
-    Surface(
+    Column(
         modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(22.dp))
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(22.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        border = androidx.compose.foundation.BorderStroke(
-            1.dp,
-            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)
-        )
+            .width(92.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 12.dp, horizontal = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Row(
-            modifier = Modifier.padding(18.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(16.dp)
+        Box(
+            modifier = Modifier.size(64.dp),
+            contentAlignment = Alignment.Center
         ) {
             Box(
                 modifier = Modifier
-                    .size(52.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)),
+                    .size(64.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f))
+                    .border(
+                        1.dp,
+                        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
+                        CircleShape
+                    ),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = app.icon,
                     contentDescription = app.name,
                     tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                    modifier = Modifier.size(26.dp)
+                    modifier = Modifier.size(30.dp)
                 )
             }
-            Column(Modifier.weight(1f)) {
-                Text(
-                    text = app.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Spacer(Modifier.size(2.dp))
-                Text(
-                    text = app.description,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
+            // 收藏星标：圆形图标右上角的小徽章
             Box(
                 modifier = Modifier
-                    .size(40.dp)
+                    .align(Alignment.TopEnd)
+                    .size(22.dp)
                     .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surface)
+                    .border(
+                        1.dp,
+                        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                        CircleShape
+                    )
                     .clickable(onClick = onToggleFavorite),
                 contentAlignment = Alignment.Center
             ) {
@@ -243,48 +245,11 @@ private fun MiniAppCard(
                     tint = if (isFavorite) {
                         MaterialTheme.colorScheme.tertiary
                     } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
                     },
-                    modifier = Modifier.size(22.dp)
+                    modifier = Modifier.size(13.dp)
                 )
             }
-        }
-    }
-}
-
-@Composable
-private fun CompactAppCard(
-    app: MiniApp,
-    onClick: () -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .width(96.dp)
-            .clip(RoundedCornerShape(18.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerLow)
-            .border(
-                1.dp,
-                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-                RoundedCornerShape(18.dp)
-            )
-            .clickable(onClick = onClick)
-            .padding(vertical = 14.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        Box(
-            modifier = Modifier
-                .size(46.dp)
-                .clip(RoundedCornerShape(14.dp))
-                .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = app.icon,
-                contentDescription = app.name,
-                tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier.size(24.dp)
-            )
         }
         Text(
             text = app.name,

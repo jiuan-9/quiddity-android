@@ -44,6 +44,7 @@ sealed interface BoardRoute {
 
 enum class BoardGameMode {
     INVITE_CHARACTER,
+    VS_COMPUTER,
     VS_AI
 }
 
@@ -117,17 +118,43 @@ class BoardViewModel(
         _uiState.update { it.copy(route = BoardRoute.Invite(game), inviteError = null) }
     }
 
-    fun onChooseVsAi(game: BoardGameType) {
-        val access = inviteManager.resolveDefaultAccess()
+    /** 与电脑对战：固定使用本地棋力，无需联网，不与 AI 混在一起。 */
+    fun onChooseVsComputer(game: BoardGameType) {
         startSession(
             game = game,
-            mode = BoardGameMode.VS_AI,
-            opponentName = "AI 棋手",
+            mode = BoardGameMode.VS_COMPUTER,
+            opponentName = "电脑棋手",
             opponentPersona = null,
             conversationId = null,
-            access = access,
-            notice = if (access == null) "未配置可用 API，已切换为本地电脑对弈" else null
+            access = null,
+            notice = null
         )
+    }
+
+    /** 与 AI 对战：必须能连上已配置的 AI 接口，否则明确报错，不降级成电脑。 */
+    fun onChooseVsAi(game: BoardGameType) {
+        _uiState.update { it.copy(inviteChecking = true, inviteError = null) }
+        viewModelScope.launch {
+            val access = inviteManager.resolveDefaultAccessWithCheck()
+            if (access == null) {
+                _uiState.update {
+                    it.copy(
+                        inviteChecking = false,
+                        inviteError = "无法连接 AI 接口：未配置或连接失败。请先在 设置 → 模型配置 中配置，或改用“与电脑对战”。"
+                    )
+                }
+            } else {
+                startSession(
+                    game = game,
+                    mode = BoardGameMode.VS_AI,
+                    opponentName = "AI 棋手",
+                    opponentPersona = null,
+                    conversationId = null,
+                    access = access,
+                    notice = null
+                )
+            }
+        }
     }
 
     /** 邀请角色：先检测 API 连接，成功则 LLM 对手；失败则本地电脑兜底，不阻塞开始。 */
