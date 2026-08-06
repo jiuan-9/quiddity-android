@@ -253,7 +253,7 @@ class PromptBuilderTest {
         assertTrue(prompt.contains("小明"), "该成员私聊里的用户人设名字应注入 system 提示词")
         assertTrue(prompt.contains("程序员"), "该成员私聊里的用户人设应注入 system 提示词")
         assertTrue(prompt.contains("群聊规则"), "应包含群聊规则节")
-        assertTrue(prompt.contains("禁止替其他成员或用户发言"), "应包含群聊规则内容")
+        assertTrue(prompt.contains("不替其他成员或用户发言"), "应包含群聊规则内容")
     }
 
     @Test
@@ -323,36 +323,44 @@ class PromptBuilderTest {
     // ============================================================
 
     @Test
-    fun `system prompt includes reply discipline exactly once and at top`() {
-        val system = PromptBuilder.buildSystemPrompt(conv())
-        assertTrue(system.startsWith("【回复纪律（最高优先级）】"), system.take(40))
-        assertEquals(1, "【回复纪律（最高优先级）】".toRegex().findAll(system).count())
-        assertTrue(system.contains("只说你自己的话"))
-        assertTrue(system.contains("禁止替用户说话"))
-        assertTrue(system.contains("单次回复保持简短自然"))
-        assertTrue(system.contains("不要回答自己上一句提出的问题"))
-        assertTrue(system.contains("每次回复必须包含实际说出口的台词"))
-    }
-
-    @Test
-    fun `system prompt states who the ai and user are`() {
+    fun `system prompt follows generic template with clean sections`() {
         val system = PromptBuilder.buildSystemPrompt(
             conv().copy(
-                persona = com.quiddity.app.data.model.Persona(name = "林晚"),
-                userPersona = com.quiddity.app.data.model.UserPersona(name = "小明")
+                persona = com.quiddity.app.data.model.Persona(
+                    name = "林晚",
+                    persona = "咖啡店店长",
+                    worldBackground = "都市世界，现代都市",
+                    desired = "温柔耐心"
+                ),
+                userPersona = com.quiddity.app.data.model.UserPersona(name = "小明"),
+                scene = "傍晚的咖啡店",
+                memory = "小明喜欢拿铁",
+                compressedMemory = "他们经常在咖啡店见面"
             )
         )
+        // 通用模板：身份认知在最前，各节职责单一，无补丁式堆叠
+        assertTrue(system.startsWith("【角色与对话双方】"), system.take(40))
+        listOf("【角色与对话双方】", "【AI 人设】", "【用户信息】", "【世界与场景】", "【对话方式】").forEach { section ->
+            assertEquals(1, section.toRegex().findAll(system).count(), "每节应恰好出现一次：$section")
+        }
+        assertTrue(system.contains("【历史对话摘要】"), "记忆节应携带压缩摘要")
+        assertTrue(system.contains("世界背景：都市世界，现代都市"), "世界背景应常驻")
+        assertTrue(system.contains("当前场景：傍晚的咖啡店"), "场景应在首轮注入")
+        assertFalse(system.contains("【回复纪律"), "不应再有补丁式回复纪律块")
+        // 身份认知：谁是谁 + 只说自己角色的发言
         assertTrue(system.contains("【角色与对话双方】"))
-        assertTrue(system.contains("你扮演的角色名字：林晚"))
-        assertTrue(system.contains("正在与你对话的用户名字：小明"))
-        assertTrue(system.contains("人设与场景描述中的「林晚」均指你本人"))
+        assertTrue(system.contains("你扮演的角色：林晚"))
+        assertTrue(system.contains("对话伙伴：小明"))
+        assertTrue(system.contains("只以「林晚」的身份发言"))
+        assertTrue(system.contains("不替对方说话"))
     }
 
     @Test
-    fun `group rules require actual speech lines`() {
-        assertTrue(PromptBuilder.GROUP_RULES.contains("每次发言必须包含至少一句实际台词"))
-        assertTrue(PromptBuilder.GROUP_RULES.contains("禁止替其他成员或用户发言"))
+    fun `group rules are generic and minimal`() {
+        assertTrue(PromptBuilder.GROUP_RULES.contains("不替其他成员或用户发言"))
+        assertTrue(PromptBuilder.GROUP_RULES.contains("不要加名字前缀"))
         assertTrue(PromptBuilder.GROUP_RULES.contains("被用户「@」点名时优先回应"))
+        assertFalse(PromptBuilder.GROUP_RULES.contains("必须包含"), "不再强制台词硬规则（由切分器根因修复兜底）")
     }
 
     @Test
@@ -362,7 +370,29 @@ class PromptBuilderTest {
             userPersona = com.quiddity.app.data.model.UserPersona(name = "小明")
         )
         val prompt = PromptBuilder.buildGroupSystemPrompt(member, PromptBuilder.GROUP_RULES)
-        assertTrue(prompt.contains("你扮演的角色名字：小A"))
-        assertTrue(prompt.contains("正在与你对话的用户名字：小明"))
+        assertTrue(prompt.contains("你扮演的角色：小A"))
+        assertTrue(prompt.contains("对话伙伴：小明"))
+        assertTrue(prompt.contains("不替对方说话"))
+    }
+
+    @Test
+    fun `conversation style lines give users autonomy`() {
+        assertEquals(
+            "回复的表达方式完全遵循人设中的性格与期望，不做额外限制。",
+            PromptBuilder.buildConversationStyleLine(QuiddityConstants.REPLY_STYLE_FOLLOW_PERSONA)
+        )
+        assertTrue(
+            PromptBuilder.buildConversationStyleLine(QuiddityConstants.REPLY_STYLE_CONCISE)
+                .contains("简短自然")
+        )
+        assertTrue(
+            PromptBuilder.buildConversationStyleLine(QuiddityConstants.REPLY_STYLE_DETAILED)
+                .contains("篇幅不限")
+        )
+        // 未知值回退为跟随人设
+        assertEquals(
+            PromptBuilder.buildConversationStyleLine(QuiddityConstants.REPLY_STYLE_FOLLOW_PERSONA),
+            PromptBuilder.buildConversationStyleLine("UNKNOWN")
+        )
     }
 }

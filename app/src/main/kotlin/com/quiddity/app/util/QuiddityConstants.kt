@@ -118,6 +118,14 @@ object QuiddityConstants {
     /** 群聊默认名前缀（新群聊 1、2、3…，方案二.4）。 */
     const val GROUP_DEFAULT_TITLE_PREFIX = "新群聊"
 
+    // ===== 对话风格（用户自主权：表达方式由用户选择，默认完全跟随人设） =====
+    /** 跟随人设：不做额外限制（默认）。 */
+    const val REPLY_STYLE_FOLLOW_PERSONA = "FOLLOW_PERSONA"
+    /** 简洁自然：回复简短，像日常聊天。 */
+    const val REPLY_STYLE_CONCISE = "CONCISE"
+    /** 细腻详细：回复充分展开，篇幅不限。 */
+    const val REPLY_STYLE_DETAILED = "DETAILED"
+
     // ===== 快速设定 =====
     /** 快速设定的 max_tokens 上限（全面档 5000 汉字，按 ~1.6 token/字 预留余量）。 */
     const val QUICK_SETUP_MAX_TOKENS = 8_000

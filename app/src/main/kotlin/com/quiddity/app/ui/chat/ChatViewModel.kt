@@ -1046,6 +1046,23 @@ class ChatViewModel(
     }
 
     /**
+     * 设置会话的对话风格（【对话方式】注入用，用户自主权设置）。
+     * 合法值见 [QuiddityConstants.REPLY_STYLE_*]；未知值回退为跟随人设。
+     */
+    fun updateReplyStyle(style: String) {
+        val conv = conversation.value ?: return
+        val safe = when (style) {
+            QuiddityConstants.REPLY_STYLE_CONCISE,
+            QuiddityConstants.REPLY_STYLE_DETAILED -> style
+            else -> QuiddityConstants.REPLY_STYLE_FOLLOW_PERSONA
+        }
+        if (conv.replyStyle == safe) return
+        viewModelScope.launch {
+            conversationRepository.updateConversation(conv.copy(replyStyle = safe))
+        }
+    }
+
+    /**
      * 人设精调编译状态（UI 据此显示加载动画 / 错误反馈）。
      *
      * - Idle：未在编译

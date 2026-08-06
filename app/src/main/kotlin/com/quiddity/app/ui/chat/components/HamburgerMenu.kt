@@ -48,6 +48,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Compress
 import androidx.compose.material.icons.filled.DeleteSweep
@@ -75,6 +76,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -530,7 +532,12 @@ fun HamburgerMenu(
                                         timeLibraryViewStep =
                                             if (conversation?.timeLibraryPasswordUnlocked == true) 2 else 1
                                     },
-                                    onOpenSearchChat = { currentPanel = HamburgerPanel.SearchChat }
+                                    onOpenSearchChat = { currentPanel = HamburgerPanel.SearchChat },
+                                    replyStyle = conversation?.replyStyle
+                                        ?: QuiddityConstants.REPLY_STYLE_FOLLOW_PERSONA,
+                                    onReplyStyleChange = { style ->
+                                        viewModel.updateReplyStyle(style)
+                                    }
                                 )
                             }
                         }
@@ -1468,8 +1475,12 @@ private fun MainMenuContent(
     onClearMessages: () -> Unit,
     onActiveMessageChange: (Boolean) -> Unit,
     onViewTimeLibrary: () -> Unit,
-    onOpenSearchChat: () -> Unit
+    onOpenSearchChat: () -> Unit,
+    replyStyle: String,
+    onReplyStyleChange: (String) -> Unit
 ) {
+    var showReplyStyleDialog by remember { mutableStateOf(false) }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1565,6 +1576,15 @@ private fun MainMenuContent(
                     conversation.scene.trim() else "未设置",
                 onClick = { onPanelSelected(HamburgerPanel.Scene) },
                 expandableSubtitle = true
+            )
+            MenuRow(
+                title = "对话风格",
+                subtitle = when (replyStyle) {
+                    QuiddityConstants.REPLY_STYLE_CONCISE -> "简洁自然"
+                    QuiddityConstants.REPLY_STYLE_DETAILED -> "细腻详细"
+                    else -> "跟随人设（默认）"
+                },
+                onClick = { showReplyStyleDialog = true }
             )
 
             // 模型配置
@@ -1676,6 +1696,90 @@ private fun MainMenuContent(
             )
             }
         }
+    }
+
+    // ===== 对话风格选择弹窗（用户自主权：表达方式由用户决定，默认完全跟随人设） =====
+    if (showReplyStyleDialog) {
+        val options = listOf(
+            Triple(
+                QuiddityConstants.REPLY_STYLE_FOLLOW_PERSONA,
+                "跟随人设",
+                "完全按 AI 人设中的性格与期望表达，不做额外限制（默认）"
+            ),
+            Triple(
+                QuiddityConstants.REPLY_STYLE_CONCISE,
+                "简洁自然",
+                "回复尽量简短自然，像日常聊天"
+            ),
+            Triple(
+                QuiddityConstants.REPLY_STYLE_DETAILED,
+                "细腻详细",
+                "回复充分展开，描写细腻、篇幅不限"
+            )
+        )
+        AlertDialog(
+            onDismissRequest = { showReplyStyleDialog = false },
+            title = { Text("对话风格") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    options.forEach { (style, label, desc) ->
+                        val selected = replyStyle == style
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(
+                                    if (selected) {
+                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                                    } else {
+                                        Color.Transparent
+                                    }
+                                )
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null
+                                ) {
+                                    onReplyStyleChange(style)
+                                    showReplyStyleDialog = false
+                                }
+                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = label,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                    color = if (selected) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurface
+                                    }
+                                )
+                                Text(
+                                    text = desc,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                )
+                            }
+                            if (selected) {
+                                Icon(
+                                    imageVector = Icons.Filled.Check,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showReplyStyleDialog = false }) {
+                    Text("完成")
+                }
+            }
+        )
     }
 }
 

@@ -47,7 +47,7 @@ import kotlinx.serialization.json.JsonPrimitive
  *
  * 字段命名规范（全文件统一，跨提示词一致，对准应用内设置填空项）：
  * - AI 人设：【名字】【身份背景】【性格】【外观】【世界背景】【期望特质】
- * - 用户人设（【对话伙伴信息】下）：名字 / 身份 / 性别 / 年龄 / 外观
+ * - 用户人设（【用户信息】下）：名字 / 身份 / 性别 / 年龄 / 外观
  * - 其他：【当前场景】【历史对话摘要】【需要记住的事】
  *
  * 多消息切分不再由提示词驱动：[MessageStreamCoordinator] 在流式输出阶段按句末标点 +
@@ -236,25 +236,18 @@ object PromptBuilder {
     const val LET_AI_START_GUIDE = "（请主动开启第一句：以你的角色身份说出一句自然的开场白，必须包含实际台词）"
 
     /**
-     * 对话纪律：置于 system 提示词最前（人设之前），随每次请求发送。
-     * 同时承载"说话人认知 / 台词完整性 / 长度控制 / 继续说语义"四项纪律。
-     */
-    const val REPLY_DISCIPLINE = "【回复纪律（最高优先级）】\n" +
-        "1. 你是谁：你是人设中「AI 名字」这个角色，「用户名字」是正在与你对话的人；人设与场景描述以第三人称书写，其中出现的这两个名字分别指你本人和对方。\n" +
-        "2. 只说你自己的话：回复中只允许出现这个角色自己的台词、动作和内心活动。用户说过的话是用户的，你自己说过的话是你自己的；禁止替用户说话，禁止把用户的话当成自己的话，禁止用旁白复述对话双方或把对话写成第三人称故事。\n" +
-        "3. 每次回复必须包含实际说出口的台词：括号内的动作、神态只是辅助，可以放在台词前后，但绝不能只写动作没有台词。\n" +
-        "4. 单次回复保持简短自然：像日常聊天一样一次只说一小段，不要一口气把整段剧情、全部想法或完整对话过程全部输出。\n" +
-        "5. 用户点「继续说」时，接着你自己上一句的内容继续说，不要回答自己上一句提出的问题，不要重复已经说过的话。\n" +
-        "6. 不提及自己是 AI 或模型（用户明确询问时除外）。"
-
-    /**
      * 组装聊天 system 提示词。
      *
-     * 组装顺序：
-     * 1. AI 人设（精调结果优先；精调结果不含名字/世界背景，需单独透传，修复过去精调后两字段丢失的问题）
-     * 2. 用户人设
-     * 3. 场景
-     * 4. 记忆（6.4 随身带 / 6.5 小抄两种组装，按记忆策略分支）
+     * 通用模板（不再叠加补丁块），各节职责单一：
+     * 1. 【角色与对话双方】——身份认知（机器必需的最小组件：谁是谁、只说自己角色的发言）
+     * 2. 【AI 人设】——用户内容原样注入（精调结果优先，名字/世界背景单独透传）
+     * 3. 【用户信息】——用户人设原样注入
+     * 4. 【世界与场景】——世界背景常驻 + 当前场景仅在首轮注入（避免场景崩塌）
+     * 5. 【记忆】——随身带 / 小抄两种组装
+     * 6. 【对话方式】——用户可配置的表达风格 + 应用机制（括号动作、不加前缀、继续说语义）
+     *
+     * 设计原则：提示词只承载"身份 + 用户内容 + 少量应用机制"，不强制任何表达风格；
+     * 表达风格由 [Conversation.replyStyle] 决定（默认完全跟随人设，用户可自主选择）。
      *
      * @param memoryStrategy 记忆策略覆盖值（null = 跟随 [Conversation.memoryStrategy]，
      *   仍为 null 时回退为随身带现状）。完整级默认策略由 2.0.0 运行时按模型分级解析后传入。
@@ -264,59 +257,49 @@ object PromptBuilder {
         memoryStrategy: String? = null
     ): String {
         val sb = StringBuilder()
-
-        // ===== 0. 对话纪律（最高优先级，置于人设之前） =====
-        sb.append(REPLY_DISCIPLINE).append("\n\n")
-
-        // ===== 0.5 角色与对话双方（说话人认知：让 LLM 明确谁是谁） =====
-        val aiName = conv.persona.name.ifBlank { "AI" }
-        val userName = conv.userPersona.name.ifBlank { "用户" }
-        sb.append("【角色与对话双方】\n")
-        sb.append("你扮演的角色名字：").append(aiName).append("\n")
-        sb.append("正在与你对话的用户名字：").append(userName).append("\n")
-        sb.append("人设与场景描述中的「").append(aiName).append("」均指你本人，「").append(userName)
-            .append("」均指你的对话伙伴。\n\n")
-
-        // ===== 1. AI 人设 =====
         val persona = conv.persona
+        val aiName = persona.name.ifBlank { "AI" }
+        val userName = conv.userPersona.name.ifBlank { "用户" }
+
+        // ===== 1. 角色与对话双方（身份认知） =====
+        sb.append("【角色与对话双方】\n")
+        sb.append("你扮演的角色：").append(aiName).append("\n")
+        sb.append("对话伙伴：").append(userName).append("\n")
+        sb.append("人设与场景描述以第三人称书写：「").append(aiName).append("」指你本人，「").append(userName)
+            .append("」指对话伙伴；你只以「").append(aiName).append("」的身份发言，不替对方说话。\n\n")
+
+        // ===== 2. AI 人设（用户内容，原样注入） =====
+        sb.append("【AI 人设】\n")
         if (conv.compileEnabled && !persona.compiledPersona.isNullOrBlank()) {
-            // 精调结果：身份背景 / 性格 / 外观 / 期望特质
             sb.append(persona.compiledPersona).append("\n\n")
-            // 名字、世界背景不参与精调，直接透传
             if (persona.name.isNotBlank()) {
-                sb.append("【名字】").append(persona.name).append("\n\n")
-            }
-            if (persona.worldBackground.isNotBlank()) {
-                sb.append("【世界背景】").append(persona.worldBackground).append("\n\n")
+                sb.append("名字：").append(persona.name).append("\n")
             }
         } else {
-            // 未精调：原始字段直接拼接（身份背景为空时回退默认身份，确保 AI 有角色定位）
             if (persona.name.isNotBlank()) {
-                sb.append("【名字】").append(persona.name).append("\n\n")
+                sb.append("名字：").append(persona.name).append("\n")
             }
             val effectivePersona = persona.persona.ifBlank { QuiddityConstants.DEFAULT_AI_IDENTITY }
             if (effectivePersona.isNotBlank()) {
-                sb.append("【身份背景】\n").append(effectivePersona).append("\n\n")
+                sb.append("身份背景：").append(effectivePersona).append("\n")
             }
             if (persona.character.isNotBlank()) {
-                sb.append("【性格】").append(persona.character).append("\n\n")
+                sb.append("性格：").append(persona.character).append("\n")
             }
             if (persona.appearance.isNotBlank()) {
-                sb.append("【外观】").append(persona.appearance).append("\n\n")
-            }
-            if (persona.worldBackground.isNotBlank()) {
-                sb.append("【世界背景】").append(persona.worldBackground).append("\n\n")
+                sb.append("外观：").append(persona.appearance).append("\n")
             }
             if (persona.desired.isNotBlank()) {
-                sb.append("【期望特质】\n").append(persona.desired).append("\n\n")
+                sb.append("期望特质：").append(persona.desired).append("\n")
             }
         }
+        sb.append("\n")
 
-        // ===== 2. 用户人设 =====
+        // ===== 3. 用户信息 =====
         val user = conv.userPersona
         if (user.name.isNotBlank() || user.identity.isNotBlank() || user.gender.isNotBlank()
             || user.age.isNotBlank() || user.appearance.isNotBlank()) {
-            sb.append("【对话伙伴信息】\n")
+            sb.append("【用户信息】\n")
             if (user.name.isNotBlank()) sb.append("- 名字：").append(user.name).append("\n")
             if (user.identity.isNotBlank()) sb.append("- 身份：").append(user.identity).append("\n")
             if (user.gender.isNotBlank()) sb.append("- 性别：").append(user.gender).append("\n")
@@ -325,14 +308,20 @@ object PromptBuilder {
             sb.append("\n")
         }
 
-        // ===== 3. 场景 =====
-        // 当前规则：场景仅在首轮注入（sceneInjected=false）。注入一次后由对话上文延续场景，
-        // 避免反复重发静态场景导致 LLM 跑回最开始场景（场景崩塌）。场景被修改时 sceneInjected 重置为 false。
-        if (conv.scene.isNotBlank() && !conv.sceneInjected) {
-            sb.append("【当前场景】\n").append(conv.scene).append("\n\n")
+        // ===== 4. 世界与场景（世界背景常驻；当前场景仅在首轮注入） =====
+        val sceneInjectedThisRound = conv.scene.isNotBlank() && !conv.sceneInjected
+        if (persona.worldBackground.isNotBlank() || sceneInjectedThisRound) {
+            sb.append("【世界与场景】\n")
+            if (persona.worldBackground.isNotBlank()) {
+                sb.append("世界背景：").append(persona.worldBackground).append("\n")
+            }
+            if (sceneInjectedThisRound) {
+                sb.append("当前场景：").append(conv.scene).append("\n")
+            }
+            sb.append("\n")
         }
 
-        // ===== 4. 记忆（6.4 随身带 / 6.5 小抄两种组装） =====
+        // ===== 5. 记忆（6.4 随身带 / 6.5 小抄两种组装） =====
         val effectiveStrategy = memoryStrategy
             ?: conv.memoryStrategy
             ?: QuiddityConstants.MEMORY_STRATEGY_CARRY
@@ -360,7 +349,15 @@ object PromptBuilder {
             }
         }
 
-        // ===== 5. 时间库说明（主动消息开启且有查看密码时） =====
+        // ===== 6. 对话方式（用户可配置的表达风格 + 应用机制） =====
+        sb.append("【对话方式】\n")
+        sb.append(buildConversationStyleLine(conv.replyStyle)).append("\n")
+        sb.append("- 动作、神态描写用括号括起，如（轻笑）。\n")
+        sb.append("- 直接输出发言内容，不要加「名字：」前缀或解释。\n")
+        sb.append("- 用户点「继续说」时，接着自己上一句的内容继续，不要回答自己提出的问题。\n")
+        sb.append("- 不提及自己是 AI 或模型（用户明确询问时除外）。\n\n")
+
+        // ===== 7. 时间库说明（主动消息开启且有查看密码时） =====
         // 让 AI 确切知道时间库查看密码与告知状态，避免在对话中编造错误密码
         if (conv.activeMessageEnabled && conv.timeLibraryPassword.isNotBlank()) {
             sb.append("【时间库查看密码】\n")
@@ -374,6 +371,20 @@ object PromptBuilder {
         }
 
         return sb.toString().trim()
+    }
+
+    /**
+     * 生成【对话方式】的表达风格指引（用户可配置，默认完全跟随人设）。
+     *
+     * @param style [QuiddityConstants.REPLY_STYLE_*] 之一；未知值回退为跟随人设。
+     */
+    fun buildConversationStyleLine(style: String): String = when (style) {
+        QuiddityConstants.REPLY_STYLE_CONCISE ->
+            "回复尽量简短自然，像日常聊天，避免长篇大论。"
+        QuiddityConstants.REPLY_STYLE_DETAILED ->
+            "回复可以充分展开，描写细腻、篇幅不限，不必刻意压缩。"
+        else ->
+            "回复的表达方式完全遵循人设中的性格与期望，不做额外限制。"
     }
 
     /**
@@ -505,15 +516,15 @@ $persona
         val sb = StringBuilder()
         if (conv.compileEnabled && !p.compiledPersona.isNullOrBlank()) {
             sb.append(p.compiledPersona)
-            if (p.name.isNotBlank()) sb.append("\n【名字】").append(p.name)
-            if (p.worldBackground.isNotBlank()) sb.append("\n【世界背景】").append(p.worldBackground)
+            if (p.name.isNotBlank()) sb.append("\n名字：").append(p.name)
+            if (p.worldBackground.isNotBlank()) sb.append("\n世界背景：").append(p.worldBackground)
         } else {
-            if (p.name.isNotBlank()) sb.append("【名字】").append(p.name).append("\n")
-            sb.append("【身份背景】").append(p.persona.ifBlank { QuiddityConstants.DEFAULT_AI_IDENTITY }).append("\n")
-            if (p.character.isNotBlank()) sb.append("【性格】").append(p.character).append("\n")
-            if (p.appearance.isNotBlank()) sb.append("【外观】").append(p.appearance).append("\n")
-            if (p.worldBackground.isNotBlank()) sb.append("【世界背景】").append(p.worldBackground).append("\n")
-            if (p.desired.isNotBlank()) sb.append("【期望特质】").append(p.desired).append("\n")
+            if (p.name.isNotBlank()) sb.append("名字：").append(p.name).append("\n")
+            sb.append("身份背景：").append(p.persona.ifBlank { QuiddityConstants.DEFAULT_AI_IDENTITY }).append("\n")
+            if (p.character.isNotBlank()) sb.append("性格：").append(p.character).append("\n")
+            if (p.appearance.isNotBlank()) sb.append("外观：").append(p.appearance).append("\n")
+            if (p.worldBackground.isNotBlank()) sb.append("世界背景：").append(p.worldBackground).append("\n")
+            if (p.desired.isNotBlank()) sb.append("期望特质：").append(p.desired).append("\n")
         }
         return sb.toString().trim()
     }
@@ -555,22 +566,23 @@ $persona
         val aiName = member.persona.name.ifBlank { "AI" }
         val userName = member.userPersona.name.ifBlank { "用户" }
         sb.append("【角色与对话双方】\n")
-        sb.append("你扮演的角色名字：").append(aiName).append("\n")
-        sb.append("正在与你对话的用户名字：").append(userName).append("\n")
+        sb.append("你扮演的角色：").append(aiName).append("\n")
+        sb.append("对话伙伴：").append(userName).append("\n")
         sb.append("群聊转述中的「").append(aiName).append("」指你本人，「").append(userName)
-            .append("」指你的对话伙伴。\n\n")
-        sb.append(buildPersonaSnippet(member)).append("\n\n")
+            .append("」指你的对话伙伴；你只以「").append(aiName).append("」的身份发言，不替对方说话。\n\n")
+        sb.append("【AI 人设】\n").append(buildPersonaSnippet(member)).append("\n\n")
         buildUserPersonaSnippet(member.userPersona)?.let { userSection ->
             sb.append(userSection).append("\n\n")
         }
         if (groupRules.isNotBlank()) {
-            sb.append("【群聊规则】\n").append(groupRules)
+            sb.append("【群聊规则】\n").append(groupRules).append("\n")
         }
+        sb.append(buildConversationStyleLine(member.replyStyle)).append("\n")
         return sb.toString().trim()
     }
 
     /**
-     * 用户人设片段（【对话伙伴信息】），全空时返回 null。
+     * 用户人设片段（【用户信息】），全空时返回 null。
      */
     private fun buildUserPersonaSnippet(user: com.quiddity.app.data.model.UserPersona): String? {
         if (user.name.isBlank() && user.identity.isBlank() && user.gender.isBlank() &&
@@ -579,7 +591,7 @@ $persona
             return null
         }
         val sb = StringBuilder()
-        sb.append("【对话伙伴信息】\n")
+        sb.append("【用户信息】\n")
         if (user.name.isNotBlank()) sb.append("- 名字：").append(user.name).append("\n")
         if (user.identity.isNotBlank()) sb.append("- 身份：").append(user.identity).append("\n")
         if (user.gender.isNotBlank()) sb.append("- 性别：").append(user.gender).append("\n")
@@ -618,11 +630,10 @@ $persona
      */
     const val GROUP_RULES =
         "1. 你正在参与一场群聊，群聊中有用户和其他 AI 成员。\n" +
-        "2. 每次发言前先完整阅读群聊转述，保持你的人设一致。\n" +
-        "3. 只说你作为该角色会说的话：禁止替其他成员或用户发言，禁止把别人的话当成自己的话，禁止用旁白复述整个群聊过程或写成故事。\n" +
-        "4. 直接输出发言内容，不要输出名字前缀、冒号或任何解释。\n" +
-        "5. 每次发言必须包含至少一句实际台词；括号内的动作、神态只是辅助，不能只发动作描写。\n" +
-        "6. 被用户「@」点名时优先回应@你的内容；单次发言保持简短自然，不要一次把所有人的话都说完。"
+        "2. 发言前先完整阅读群聊转述，保持人设一致。\n" +
+        "3. 只说你作为该角色会说的话，不替其他成员或用户发言。\n" +
+        "4. 直接输出发言内容，不要加名字前缀、冒号或解释。\n" +
+        "5. 动作、神态用括号描写；被用户「@」点名时优先回应。"
 
     /**
      * 构造"该不该我接话"的判断指令（4.2）：成员人设 + 群聊转述 + 输出约束。

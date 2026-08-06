@@ -156,6 +156,14 @@ data class Conversation(
      * 每次输入防抖写入；空字符串表示从未填写。
      */
     val quickSetupDraft: String = "",
+    /**
+     * 对话风格（用户自主权设置）：
+     * - [QuiddityConstants.REPLY_STYLE_FOLLOW_PERSONA] = 完全跟随人设（默认）
+     * - [QuiddityConstants.REPLY_STYLE_CONCISE] = 简洁自然
+     * - [QuiddityConstants.REPLY_STYLE_DETAILED] = 细腻详细
+     * 写入 system 提示词的【对话方式】节；旧数据缺省时回退为跟随人设。
+     */
+    val replyStyle: String = QuiddityConstants.REPLY_STYLE_FOLLOW_PERSONA,
     val apiCatalogId: String? = null,
     val maxTokens: Int? = null,
     val singleMessageTokens: Int? = null,

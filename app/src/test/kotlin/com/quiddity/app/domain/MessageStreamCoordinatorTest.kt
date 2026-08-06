@@ -87,6 +87,56 @@ class MessageStreamCoordinatorTest {
     }
 
     @Test
+    fun `trailing action bracket merges into previous speech message`() {
+        // 根因回归：流以"动作括号"收尾时，不得留下只有动作没有下文的悬空气泡
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("我好想你。")
+        coord.accept("（轻轻抱住你）")
+        val finalizeSignals = coord.finalize()
+        val updates = finalizeSignals.filterIsInstance<StreamCoordinator.Signal.Update>()
+        assertEquals(1, updates.size, "收尾应通过 Update 把动作合并进上一条消息")
+        assertEquals(
+            "我好想你。（轻轻抱住你）",
+            updates[0].message.content,
+            "动作括号应拼接到上一条台词之后"
+        )
+        assertEquals(
+            listOf("我好想你。（轻轻抱住你）"),
+            coord.snapshot().map { it.content },
+            "快照中不应再有独立的悬空动作消息"
+        )
+    }
+
+    @Test
+    fun `bracket only reply becomes single final message`() {
+        // 整条回复只有动作（没有台词）：作为一条完整回复输出，而不是悬空片段
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("（把脸埋在你胸口，声音闷闷的）")
+        coord.finalize()
+        val snap = coord.snapshot()
+        assertEquals(1, snap.size, "整条回复只有动作时应为单条消息")
+        assertEquals("（把脸埋在你胸口，声音闷闷的）", snap[0].content)
+        assertEquals(false, snap[0].isStreaming, "finalize 后应为完成状态")
+    }
+
+    @Test
+    fun `pending bracket visible in snapshot before following content`() {
+        // 括号已闭合但后续内容未到时，快照应包含该括号段（不丢字、不悬空）
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("（点头）")
+        assertEquals(
+            listOf("（点头）"),
+            coord.snapshot().map { it.content },
+            "未触发 flush 的括号段也应出现在快照中"
+        )
+        coord.accept("你好。")
+        assertEquals(
+            listOf("（点头）", "你好。"),
+            coord.snapshot().map { it.content }
+        )
+    }
+
+    @Test
     fun `single chinese period splits into one completed message`() {
         val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
         val signals = coord.accept("你好。")

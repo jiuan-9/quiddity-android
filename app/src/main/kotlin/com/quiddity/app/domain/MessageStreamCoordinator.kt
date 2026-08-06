@@ -61,7 +61,13 @@ interface StreamCoordinator {
 private data class Segment(
     val text: String,
     val consumeEnd: Int,
-    val emit: Boolean
+    val emit: Boolean,
+    /**
+     * 是否为括号段。括号段采用"延迟发出"策略：
+     * 先暂存，等后续实质内容到达时再按序发出，避免流结束时留下
+     * 只有动作没有下文的悬空气泡；若流直接结束，则合并回上一条消息。
+     */
+    val isBracket: Boolean = false
 )
 
 /**
@@ -117,6 +123,11 @@ class MessageStreamCoordinator(
     private val buffer = StringBuilder()
     private val completed: MutableList<Message> = mutableListOf()
     private val knownIds: MutableSet<String> = LinkedHashSet()
+    /**
+     * 已完整闭合但尚未发出的括号段：`(预占索引, 文本)`。
+     * 预占索引保证与后续流式消息的 id 不冲突。
+     */
+    private val pendingBrackets = mutableListOf<Pair<Int, String>>()
     private var currentIndex = 0
     private var currentStartTs = startTimestamp
 
@@ -132,16 +143,14 @@ class MessageStreamCoordinator(
                 // 从 buffer 移除已消费部分
                 consumeFromBuffer(seg.consumeEnd)
                 if (seg.emit && seg.text.isNotBlank()) {
-                    val completedMsg = buildMessageFromContent(seg.text, streaming = false)
-                    if (knownIds.add(completedMsg.id)) {
-                        signals += StreamCoordinator.Signal.New(completedMsg)
+                    if (seg.isBracket) {
+                        // 括号段延迟发出：预占索引，等后续内容触发时再 flush
+                        pendingBrackets += currentIndex to seg.text
+                        currentIndex++
                     } else {
-                        signals += StreamCoordinator.Signal.Update(completedMsg)
+                        flushPendingBrackets(signals)
+                        emitCompleted(signals, seg.text)
                     }
-                    signals += StreamCoordinator.Signal.Complete(completedMsg)
-                    completed += completedMsg
-                    currentIndex++
-                    currentStartTs = System.currentTimeMillis()
                 }
                 continue
             }
@@ -150,24 +159,16 @@ class MessageStreamCoordinator(
                 val forced = buffer.toString().trim()
                 buffer.clear()
                 if (forced.isNotEmpty()) {
-                    val completedMsg = buildMessageFromContent(forced, streaming = false)
-                    if (knownIds.add(completedMsg.id)) {
-                        signals += StreamCoordinator.Signal.New(completedMsg)
-                    } else {
-                        signals += StreamCoordinator.Signal.Update(completedMsg)
-                    }
-                    signals += StreamCoordinator.Signal.Complete(completedMsg)
-                    completed += completedMsg
-                    currentIndex++
-                    currentStartTs = System.currentTimeMillis()
+                    flushPendingBrackets(signals)
+                    emitCompleted(signals, forced)
                 }
                 continue
             }
             break
         }
 
-        // 单条更新（当前 buffer 内容）
-        if (buffer.isNotEmpty() || signals.isEmpty()) {
+        // 单条更新（当前 buffer 内容）：buffer 为空时不发出（避免空消息）
+        if (buffer.isNotEmpty()) {
             val current = buildMessage(streaming = true)
             if (knownIds.add(current.id)) {
                 signals += StreamCoordinator.Signal.New(current)
@@ -181,6 +182,22 @@ class MessageStreamCoordinator(
 
     override fun finalize(): List<StreamCoordinator.Signal> {
         val signals = mutableListOf<StreamCoordinator.Signal>()
+        // 流结束时仍有滞留括号段：合并进最后一条已发消息（或作为整条回复发出），
+        // 根因修复——不再留下"只有动作没有下文"的悬空气泡。
+        if (pendingBrackets.isNotEmpty()) {
+            val trailing = pendingBrackets.joinToString("") { it.second }
+            pendingBrackets.clear()
+            when {
+                buffer.isNotEmpty() -> buffer.append(trailing)
+                completed.isNotEmpty() -> {
+                    val lastIdx = completed.lastIndex
+                    val merged = completed[lastIdx].copy(content = completed[lastIdx].content + trailing)
+                    completed[lastIdx] = merged
+                    signals += StreamCoordinator.Signal.Update(merged)
+                }
+                else -> buffer.append(trailing)
+            }
+        }
         // buffer 为空说明全部内容已在 accept 阶段切分完成（或流本就无内容），无需收尾
         if (buffer.isEmpty()) return signals
         val finalMsg = buildMessage(streaming = false)
@@ -197,10 +214,48 @@ class MessageStreamCoordinator(
 
     override fun snapshot(): List<Message> {
         val out = completed.toMutableList()
-        if (buffer.isNotEmpty() || completed.isEmpty()) {
+        // 尚未被后续内容触发的括号段也计入快照（索引已预占，与最终发出时一致）
+        pendingBrackets.forEach { (idx, text) ->
+            out += buildMessageFromContentAt(idx, text, streaming = false)
+        }
+        if (buffer.isNotEmpty() || (completed.isEmpty() && pendingBrackets.isEmpty())) {
             out += buildMessage(streaming = buffer.isNotEmpty())
         }
         return out
+    }
+
+    /**
+     * 按预占索引发出括号段（索引已预留，id 不与后续流式消息冲突）。
+     */
+    private fun flushPendingBrackets(signals: MutableList<StreamCoordinator.Signal>) {
+        pendingBrackets.forEach { (idx, text) ->
+            val completedMsg = buildMessageFromContentAt(idx, text, streaming = false)
+            if (knownIds.add(completedMsg.id)) {
+                signals += StreamCoordinator.Signal.New(completedMsg)
+            } else {
+                signals += StreamCoordinator.Signal.Update(completedMsg)
+            }
+            signals += StreamCoordinator.Signal.Complete(completedMsg)
+            completed += completedMsg
+            currentStartTs = System.currentTimeMillis()
+        }
+        pendingBrackets.clear()
+    }
+
+    /**
+     * 用当前索引发出完成消息并推进索引。
+     */
+    private fun emitCompleted(signals: MutableList<StreamCoordinator.Signal>, text: String) {
+        val completedMsg = buildMessageFromContentAt(currentIndex, text, streaming = false)
+        currentIndex++
+        if (knownIds.add(completedMsg.id)) {
+            signals += StreamCoordinator.Signal.New(completedMsg)
+        } else {
+            signals += StreamCoordinator.Signal.Update(completedMsg)
+        }
+        signals += StreamCoordinator.Signal.Complete(completedMsg)
+        completed += completedMsg
+        currentStartTs = System.currentTimeMillis()
     }
 
     // ==================== 句末标点 + 括号切分核心 ====================
@@ -285,7 +340,8 @@ class MessageStreamCoordinator(
                 return Segment(
                     text = bracketContent,
                     consumeEnd = closeIdx + 1,
-                    emit = hasInnerContent
+                    emit = hasInnerContent,
+                    isBracket = true
                 )
             } else if (isOpenQuote(ch)) {
                 quoteStack.addLast(QuoteFrame(ch))
@@ -457,10 +513,14 @@ class MessageStreamCoordinator(
     )
 
     /**
-     * 用指定内容构建消息（用于切分后的完成消息）。
+     * 用指定索引与内容构建完成消息（括号段使用预占索引，避免 id 冲突）。
      */
-    private fun buildMessageFromContent(content: String, streaming: Boolean): Message = Message(
-        id = buildCurrentId(),
+    private fun buildMessageFromContentAt(
+        index: Int,
+        content: String,
+        streaming: Boolean
+    ): Message = Message(
+        id = "${conversationId}_${runId}_ai_$index",
         conversationId = conversationId,
         role = com.quiddity.app.data.model.Role.ASSISTANT,
         content = content,
