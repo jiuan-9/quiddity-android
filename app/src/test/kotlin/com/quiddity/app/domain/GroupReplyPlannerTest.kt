@@ -245,6 +245,46 @@ class GroupReplyPlannerTest {
     }
 
     @Test
+    fun `member B sees A endearment without being treated as addressee`() {
+        val settings = AppSettings.Default.copy(catalog = listOf(catalogEntry("cat_b")))
+        val transcript = listOf(
+            Message(
+                id = "m1",
+                conversationId = "group_1",
+                role = Role.ASSISTANT,
+                content = "今天的天气挺不错的，你觉得呢宝贝？",
+                timestamp = now,
+                senderId = "member_a"
+            )
+        )
+        val plan = GroupReplyPlanner.buildPlan(
+            settings = settings,
+            member = member(id = "member_b").copy(
+                persona = com.quiddity.app.data.model.Persona(name = "小B", character = "温柔"),
+                userPersona = com.quiddity.app.data.model.UserPersona(name = "小明")
+            ),
+            group = group(),
+            transcript = transcript,
+            senderId = "member_b",
+            tier = ApiCatalogManager.ModelTier.BASIC,
+            senderNames = mapOf("member_a" to "小A"),
+            userName = "小明"
+        ).getOrThrow()
+
+        val systemContent = plan.request.messages.first { it.role == "system" }.content.orEmpty()
+        assertTrue(systemContent.contains("判断说话对象"), "B 的提示词应包含接话判断规则")
+        assertTrue(systemContent.contains("默认是在叫用户或对全体说"), "昵称应默认指向用户")
+        assertTrue(systemContent.contains("不要当成在叫你"), "B 不应把昵称当成在叫自己")
+
+        val transcriptMessage = plan.request.messages.first { it.role == "assistant" }.content.orEmpty()
+        assertEquals(
+            "小A：今天的天气挺不错的，你觉得呢宝贝？",
+            transcriptMessage,
+            "无 @ 点名的成员消息不应被机械标注，交给规则判断"
+        )
+    }
+
+    @Test
     fun `failure when no catalog configured`() {
         val settings = AppSettings.Default.copy(catalog = emptyList())
         val result = GroupReplyPlanner.buildPlan(
