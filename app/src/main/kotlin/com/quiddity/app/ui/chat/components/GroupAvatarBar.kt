@@ -72,7 +72,7 @@ import com.quiddity.app.ui.components.AiAvatar
 fun GroupAvatarBar(
     members: List<Conversation>,
     queue: List<GroupReplyQueue.Item>,
-    onTap: (String) -> Unit,
+    onTap: (Conversation) -> Unit,
     modifier: Modifier = Modifier
 ) {
     Row(
@@ -85,7 +85,7 @@ fun GroupAvatarBar(
             GroupMemberAvatar(
                 member = member,
                 position = position,
-                onClick = { onTap(member.id) }
+                onClick = { onTap(member) }
             )
             Spacer(modifier = Modifier.size(10.dp))
         }

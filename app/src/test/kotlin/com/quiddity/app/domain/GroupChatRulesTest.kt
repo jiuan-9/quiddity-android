@@ -110,4 +110,34 @@ class GroupChatRulesTest {
         assertTrue(GroupChatRules.buildGroupConversation("g", "t", listOf("a", "b", "c"), now, now)
             .memberConversationIds.size <= QuiddityConstants.GROUP_MAX_MEMBERS)
     }
+
+    @Test
+    fun `mentioned member ids parsed from text in occurrence order`() {
+        val members = listOf(
+            group("a").copy(persona = Persona(name = "林晚")),
+            group("b").copy(persona = Persona(name = "苏晴")),
+            group("c").copy(persona = Persona(name = ""))
+        )
+        val ids = GroupChatRules.mentionedMemberIds(
+            "@林晚 在吗 @苏晴 一起吃饭",
+            members
+        )
+        assertEquals(listOf("a", "b"), ids, "按文本中出现顺序：@林晚 先出现，@苏晴 后出现")
+    }
+
+    @Test
+    fun `mentioned member ids empty when no at or blank name`() {
+        val members = listOf(group("a").copy(persona = Persona(name = "林晚")))
+        assertEquals(emptyList(), GroupChatRules.mentionedMemberIds("没有点名", members))
+        assertEquals(emptyList(), GroupChatRules.mentionedMemberIds("", members))
+    }
+
+    @Test
+    fun `mentioned member ids deduplicate`() {
+        val members = listOf(group("a").copy(persona = Persona(name = "林晚")))
+        assertEquals(
+            listOf("a"),
+            GroupChatRules.mentionedMemberIds("@林晚 在吗 @林晚", members)
+        )
+    }
 }

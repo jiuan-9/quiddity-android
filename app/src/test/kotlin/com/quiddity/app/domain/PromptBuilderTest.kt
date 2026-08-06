@@ -253,7 +253,7 @@ class PromptBuilderTest {
         assertTrue(prompt.contains("小明"), "该成员私聊里的用户人设名字应注入 system 提示词")
         assertTrue(prompt.contains("程序员"), "该成员私聊里的用户人设应注入 system 提示词")
         assertTrue(prompt.contains("群聊规则"), "应包含群聊规则节")
-        assertTrue(prompt.contains("不要替别人发言"), "应包含群聊规则内容")
+        assertTrue(prompt.contains("禁止替其他成员或用户发言"), "应包含群聊规则内容")
     }
 
     @Test
@@ -327,13 +327,42 @@ class PromptBuilderTest {
         val system = PromptBuilder.buildSystemPrompt(conv())
         assertTrue(system.startsWith("【回复纪律（最高优先级）】"), system.take(40))
         assertEquals(1, "【回复纪律（最高优先级）】".toRegex().findAll(system).count())
-        assertTrue(system.contains("只以人设身份对用户说话"))
+        assertTrue(system.contains("只说你自己的话"))
+        assertTrue(system.contains("禁止替用户说话"))
+        assertTrue(system.contains("单次回复保持简短自然"))
         assertTrue(system.contains("不要回答自己上一句提出的问题"))
         assertTrue(system.contains("每次回复必须包含实际说出口的台词"))
     }
 
     @Test
+    fun `system prompt states who the ai and user are`() {
+        val system = PromptBuilder.buildSystemPrompt(
+            conv().copy(
+                persona = com.quiddity.app.data.model.Persona(name = "林晚"),
+                userPersona = com.quiddity.app.data.model.UserPersona(name = "小明")
+            )
+        )
+        assertTrue(system.contains("【角色与对话双方】"))
+        assertTrue(system.contains("你扮演的角色名字：林晚"))
+        assertTrue(system.contains("正在与你对话的用户名字：小明"))
+        assertTrue(system.contains("人设与场景描述中的「林晚」均指你本人"))
+    }
+
+    @Test
     fun `group rules require actual speech lines`() {
         assertTrue(PromptBuilder.GROUP_RULES.contains("每次发言必须包含至少一句实际台词"))
+        assertTrue(PromptBuilder.GROUP_RULES.contains("禁止替其他成员或用户发言"))
+        assertTrue(PromptBuilder.GROUP_RULES.contains("被用户「@」点名时优先回应"))
+    }
+
+    @Test
+    fun `group system prompt includes identity mapping`() {
+        val member = conv().copy(
+            persona = com.quiddity.app.data.model.Persona(name = "小A"),
+            userPersona = com.quiddity.app.data.model.UserPersona(name = "小明")
+        )
+        val prompt = PromptBuilder.buildGroupSystemPrompt(member, PromptBuilder.GROUP_RULES)
+        assertTrue(prompt.contains("你扮演的角色名字：小A"))
+        assertTrue(prompt.contains("正在与你对话的用户名字：小明"))
     }
 }

@@ -81,4 +81,26 @@ object GroupChatRules {
         member.persona.name.isBlank() -> "AI 名未设置"
         else -> null
     }
+
+    /**
+     * 从消息文本中解析被 @ 点名的成员 id（按文本中出现顺序去重）。
+     *
+     * 匹配规则：成员 AI 名字前带「@」即视为被点名（如"@林晚 在吗"）。
+     * 仅在群聊使用；成员名字为空或文本不含 @ 时返回空列表。
+     */
+    fun mentionedMemberIds(text: String, members: List<Conversation>): List<String> {
+        if (text.isBlank()) return emptyList()
+        val nameToId = members.mapNotNull { member ->
+            val name = member.persona.name
+            if (name.isNotBlank()) name to member.id else null
+        }
+        if (nameToId.isEmpty()) return emptyList()
+        return nameToId
+            .mapNotNull { (name, id) ->
+                text.indexOf("@$name").takeIf { it >= 0 }?.let { it to id }
+            }
+            .sortedBy { it.first }
+            .map { it.second }
+            .distinct()
+    }
 }

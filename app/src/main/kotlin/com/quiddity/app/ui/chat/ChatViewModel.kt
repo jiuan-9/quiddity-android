@@ -209,6 +209,20 @@ class ChatViewModel(
         if (groupQueueEngine.contains(memberId)) return
         // 上下文定格（方案四.8）：只冻结已完成的群聊消息，流式中的半截消息不入上下文
         val frozen = _messages.value.filterNot { it.isNotice || it.isStreaming }
+        enqueueGroupMemberWithFrozen(memberId, frozen)
+    }
+
+    /**
+     * 入队指定成员（使用调用方提供的冻结快照）。
+     *
+     * @param frozen 该成员回复时的上下文快照（方案四.8：点击/发送那一刻定格）
+     */
+    private fun enqueueGroupMemberWithFrozen(memberId: String, frozen: List<Message>) {
+        if (!isGroup()) return
+        val group = conversation.value ?: return
+        if (memberId !in group.memberConversationIds) return
+        if (groupStreamJob?.isActive == true && groupQueueEngine.isFull) return
+        if (groupQueueEngine.contains(memberId)) return
         if (!groupQueueEngine.enqueue(memberId, frozen)) return
         syncGroupQueue()
         if (groupStreamJob?.isActive != true) startGroupQueueProcessor()
@@ -392,6 +406,7 @@ class ChatViewModel(
 
     /**
      * 群聊用户消息：直接追加进群聊记录（方案三.1/四.8），不触发自动回复。
+     * 消息中带「@名字」点名时，被点名的成员自动入队回复（受队列容量限制）。
      */
     private fun sendGroupUserMessage(text: String, conv: Conversation) {
         sendDelayJob?.cancel()
@@ -406,6 +421,15 @@ class ChatViewModel(
                     timestamp = now
                 )
                 conversationRepository.appendMessage(userMsg)
+                // @ 点名：冻结快照必须包含本条刚发送的消息（_messages 异步更新，不能依赖）
+                val frozen = (_messages.value.filterNot { it.id == userMsg.id } + userMsg)
+                    .filterNot { it.isNotice || it.isStreaming }
+                val members = conversation.value?.memberConversationIds.orEmpty()
+                    .mapNotNull { conversationRepository.getConversation(it) }
+                com.quiddity.app.domain.GroupChatRules.mentionedMemberIds(text, members)
+                    .forEach { memberId ->
+                        enqueueGroupMemberWithFrozen(memberId, frozen)
+                    }
             }
         }
     }
@@ -587,25 +611,36 @@ class ChatViewModel(
 
         // 定位最后一条 USER 消息：保留 0..lastUserIndex（含 USER），删除其后的所有 AI 消息。
         val lastUserIndex = current.indexOfLast { it.role == Role.USER }
-        val newHistory = if (lastUserIndex >= 0) {
-            current.subList(0, lastUserIndex + 1).toList()
+        if (lastUserIndex >= 0) {
+            // 常规轮次：删除最后一条 USER 之后的所有 AI 消息，再重新生成整轮回复
+            val newHistory = current.subList(0, lastUserIndex + 1).toList()
+            runStream {
+                conversationRepository.replaceMessages(conversationId, newHistory)
+                chatRepository.streamAssistantReply(
+                    conv,
+                    newHistory,
+                    effectiveMemoryStrategy(conv)
+                ) { event ->
+                    handleStreamEvent(event)
+                    if (event is ChatRepository.Event.CompleteMessage) {
+                        markSceneInjectedIfUnchanged(sceneAtStart)
+                    }
+                }
+            }
         } else {
-            // 无 USER 消息（如 letAiStart 开场）：退化为仅删除最后一条 AI
-            current.dropLast(1)
-        }
-
-        runStream {
-            // 1. 移除当前轮次的所有 AI 消息（原子替换整张表）
-            conversationRepository.replaceMessages(conversationId, newHistory)
-            // 2. 用删除后的 history 重新触发 AI 回复
-            chatRepository.streamAssistantReply(
-                conv,
-                newHistory,
-                effectiveMemoryStrategy(conv)
-            ) { event ->
-                handleStreamEvent(event)
-                if (event is ChatRepository.Event.CompleteMessage) {
-                    markSceneInjectedIfUnchanged(sceneAtStart)
+            // AI 开场轮（"让 AI 先说"，无 USER 消息）：整轮全部重说。
+            // 修复：旧实现只删最后一条并把 assistant 结尾历史直接续写，
+            // 导致只重生成最后一句、前面句子全部残留。
+            runStream {
+                conversationRepository.replaceMessages(conversationId, emptyList())
+                chatRepository.letAiStart(
+                    conv,
+                    effectiveMemoryStrategy(conv)
+                ) { event ->
+                    handleStreamEvent(event)
+                    if (event is ChatRepository.Event.CompleteMessage) {
+                        markSceneInjectedIfUnchanged(sceneAtStart)
+                    }
                 }
             }
         }
@@ -1100,9 +1135,6 @@ class ChatViewModel(
             oldPersonaName = conv.persona.name,
             newPersonaName = result.persona.name
         )
-        // 构造提示气泡内容：世界类型（世界背景前4个字）+ 当前场景
-        val worldType = result.persona.worldBackground.take(4)
-        val noticeContent = buildNoticeContent(worldType, result.scene)
         viewModelScope.launch {
             withContext(NonCancellable) {
                 conversationRepository.updateConversation(
@@ -1115,17 +1147,6 @@ class ChatViewModel(
                         sceneInjected = false
                     )
                 )
-                if (noticeContent.isNotBlank()) {
-                    val noticeMsg = Message(
-                        id = IdGenerator.newId(IdGenerator.Prefix.USER_MESSAGE),
-                        conversationId = conv.id,
-                        role = Role.SYSTEM,
-                        content = noticeContent,
-                        timestamp = System.currentTimeMillis(),
-                        isNotice = true
-                    )
-                    conversationRepository.appendMessage(noticeMsg)
-                }
             }
         }
     }
@@ -1154,23 +1175,6 @@ class ChatViewModel(
             withContext(NonCancellable) {
                 conversationRepository.updateConversation(conv.copy(quickSetupDraft = draft))
             }
-        }
-    }
-
-    /**
-     * 构造快速设定提示气泡内容：世界类型 + 场景。
-     * - 世界类型为世界背景前4个汉字（LLM 按规则在 [世界背景] 字段首写4字世界类型）；
-     * - 场景为 [当前场景] 内容；
-     * - 两者皆有 → "世界类型 · 场景"；仅一项 → 该项；皆空 → 返回空串（不插气泡）。
-     */
-    private fun buildNoticeContent(worldType: String, scene: String): String {
-        val wt = worldType.trim()
-        val sc = scene.trim()
-        return when {
-            wt.isNotBlank() && sc.isNotBlank() -> "$wt · $sc"
-            wt.isNotBlank() -> wt
-            sc.isNotBlank() -> sc
-            else -> ""
         }
     }
 

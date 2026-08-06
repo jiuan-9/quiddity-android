@@ -1,6 +1,7 @@
 package com.quiddity.app.ui.chat.components
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
@@ -39,6 +40,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,6 +49,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -59,6 +62,7 @@ import com.quiddity.app.ui.theme.Motion
 import com.quiddity.app.util.DateUtils
 import com.quiddity.app.util.MarkdownParser
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 /*
  * ============================================================================
@@ -167,6 +171,43 @@ fun MessageBubble(
         if (isStreaming) wasStreamed = true
     }
 
+    // ===== 气泡/头像淡入动画（首次出现时整体淡入 + 轻微上浮，不再硬生生插入） =====
+    val entryAlpha = remember(message.id) { Animatable(0f) }
+    val entryOffsetY = remember(message.id) { Animatable(0f) }
+    val entryOffsetPx = with(LocalDensity.current) { 10.dp.toPx() }
+    LaunchedEffect(message.id) {
+        entryOffsetY.snapTo(entryOffsetPx)
+        launch {
+            entryAlpha.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedDecelerate)
+            )
+        }
+        launch {
+            entryOffsetY.animateTo(
+                targetValue = 0f,
+                animationSpec = tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedDecelerate)
+            )
+        }
+    }
+
+    // ===== 流式文字淡入（内容增长时整段柔和淡入，而非逐字蹦出） =====
+    val streamRevealAlpha = remember(message.id) { Animatable(1f) }
+    val streamedLength = remember(message.id) { mutableIntStateOf(0) }
+    LaunchedEffect(message.id, fullContent.length, isStreaming) {
+        val prev = streamedLength.intValue
+        if (isStreaming && fullContent.length > prev) {
+            streamRevealAlpha.snapTo(0.7f)
+            streamRevealAlpha.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(200, easing = Motion.EasingEmphasizedDecelerate)
+            )
+        } else if (!isStreaming) {
+            streamRevealAlpha.snapTo(1f)
+        }
+        streamedLength.intValue = fullContent.length
+    }
+
     val bubbleInteractionSource = remember { MutableInteractionSource() }
     val isBubblePressed by bubbleInteractionSource.collectIsPressedAsState()
     // bubbleScale 用 State 持有而非 by 委托：按压动画期间值变化只在 graphicsLayer draw phase 读取，零重组
@@ -229,12 +270,20 @@ fun MessageBubble(
         if (!isStreaming) grayifyBrackets(fullContent, bracketGrayEnabled, grayColor) else null
     }
     val effectiveAnnotated = annotatedContent ?: stableAnnotated ?: grayifyBrackets(fullContent, bracketGrayEnabled, grayColor)
+    // 群聊：@提及蓝色高亮（叠加在括号灰化之上）
+    val displayAnnotated = remember(fullContent, effectiveAnnotated, isGroupChat) {
+        if (isGroupChat) highlightMentions(fullContent, effectiveAnnotated, MentionHighlightColor) else effectiveAnnotated
+    }
 
     // ===== 气泡主体 =====
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 4.dp)
+            .graphicsLayer {
+                alpha = entryAlpha.value
+                translationY = entryOffsetY.value
+            }
     ) {
         // 群聊发言者名字（方案十二.1-2：气泡上方显示名字；用户显示「我」）
         if (senderName != null && !multiSelectMode) {
@@ -474,11 +523,15 @@ fun MessageBubble(
                                 TypingIndicator()
                             } else {
                                 SelectableMessageText(
-                                    text = effectiveAnnotated,
+                                    text = displayAnnotated,
                                     textColor = textColor,
                                     onBubbleClick = if (multiSelectMode) onSelectToggle else (if (isUser) onBubbleClick else null),
                                     onLongClick = if (multiSelectMode || !isUser) null else onLongClick,
-                                    modifier = Modifier.widthIn(max = BubbleInnerMaxWidth)
+                                    modifier = Modifier
+                                        .widthIn(max = BubbleInnerMaxWidth)
+                                        .graphicsLayer {
+                                            alpha = if (isStreaming) streamRevealAlpha.value else 1f
+                                        }
                                 )
                                 if (isStreaming) {
                                     Spacer(modifier = Modifier.size(2.dp))

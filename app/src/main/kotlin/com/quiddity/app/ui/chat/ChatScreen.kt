@@ -174,6 +174,29 @@ fun ChatScreen(
         viewModel.groupMembers()
     }
 
+    // ===== 场景/世界提示气泡（派生自会话数据，长存且随设置实时更新） =====
+    // - 内容 = 世界类型（仅当世界背景前4字为"xx世界"时）+ 当前场景；
+    // - 用户未在世界背景前写"xx世界"时只显示场景；
+    // - 不落库为消息：删除聊天记录、清空消息都不会影响它。
+    val sceneNoticeContent = remember(
+        conversation?.scene,
+        conversation?.persona?.worldBackground
+    ) {
+        val scene = conversation?.scene?.trim().orEmpty()
+        val world = conversation?.persona?.worldBackground?.trim().orEmpty()
+        val worldType = if (world.length >= 4 && world.take(4).endsWith("世界")) {
+            world.take(4)
+        } else {
+            ""
+        }
+        when {
+            worldType.isNotBlank() && scene.isNotBlank() -> "$worldType · $scene"
+            worldType.isNotBlank() -> worldType
+            scene.isNotBlank() -> scene
+            else -> ""
+        }
+    }
+
     // ===== 私聊用户名强制（方案九.4/6：未设置用户名不能发送，进入会话先弹窗） =====
     var showUserNameDialog by rememberSaveable { mutableStateOf(false) }
     var userNameInput by rememberSaveable { mutableStateOf("") }
@@ -771,10 +794,10 @@ fun ChatScreen(
                                 isGenerating = isGenerating
                             )
                         }
-                        // 提示气泡显示在顶部，不遮挡居中的"让AI先说"按钮
+                        // 场景/世界提示气泡显示在顶部，不遮挡居中的"让AI先说"按钮
                         Column(modifier = Modifier.fillMaxWidth()) {
-                            messages.filter { it.isNotice }.forEach { msg ->
-                                NoticeBubble(content = msg.content)
+                            if (sceneNoticeContent.isNotBlank()) {
+                                NoticeBubble(content = sceneNoticeContent)
                             }
                         }
                     }
@@ -788,9 +811,9 @@ fun ChatScreen(
                             verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
                             items(
-                                items = messages.asReversed(),
+                                items = messages.asReversed().filterNot { it.isNotice },
                                 key = { it.id },
-                                contentType = { if (it.isNotice) "notice" else it.role.name }
+                                contentType = { it.role.name }
                             ) { message ->
                                 // 关键性能优化：key(message.id) + 独立 composable 让 ChatScreen 重组时
                                 // message 内容未变的气泡完全跳过重组（流式每个 token 触发 messages 变化，
@@ -826,55 +849,60 @@ fun ChatScreen(
                                             horizontal = if (multiSelectMode && !message.isNotice) 4.dp else 0.dp
                                         )
                                 ) {
-                                    if (message.isNotice) {
-                                        NoticeBubble(content = message.content)
-                                    } else {
-                                        key(message.id) {
-                                            MessageBubbleItem(
-                                                message = message,
-                                                isLastAi = message.role == Role.ASSISTANT &&
-                                                    messages.lastOrNull { !it.isNotice }?.id == message.id,
-                                                isGroupChat = isGroupChat,
-                                                inMultiSelect = multiSelectMode,
-                                                isGenerating = isGenerating,
-                                                userAvatarUri = settings.userAvatarUri,
-                                                aiAvatarUri = conversation?.persona?.aiAvatarUri,
-                                                aiName = conversation?.persona?.name,
-                                                senderName = if (message.role == Role.USER) {
-                                                    if (isGroupChat) "我" else null
-                                                } else {
-                                                    if (isGroupChat) {
-                                                        message.senderId?.let {
-                                                            senderNameMap[it]
-                                                                ?.takeIf { name -> name.isNotBlank() }
-                                                                ?: "未知成员"
-                                                        }
-                                                    } else null
-                                                },
-                                                senderAvatarUri = if (isGroupChat) {
-                                                    message.senderId?.let { senderAvatarMap[it] }
-                                                } else null,
-                                                bracketGrayEnabled = settings.bracketGrayEnabled,
-                                                typingDelayEnabled = settings.typingDelayEnabled,
-                                                typingDelayMsPerChar = settings.typingDelayMsPerChar,
-                                                isSelected = selectedMessageIds.contains(message.id),
-                                                isHighlighted = highlightMessageId == message.id,
-                                                isWithdrawing = expandedActionId == message.id,
-                                                isActionsExpanded = expandedActionId == message.id,
-                                                viewModel = viewModel,
-                                                onEnterMultiSelect = ::enterMultiSelect,
-                                                onToggleSelection = ::toggleSelection,
-                                                onToggleActions = {
-                                                    expandedActionId = if (expandedActionId == message.id) {
-                                                        null
-                                                    } else {
-                                                        message.id
+                                    key(message.id) {
+                                        MessageBubbleItem(
+                                            message = message,
+                                            isLastAi = message.role == Role.ASSISTANT &&
+                                                messages.lastOrNull { !it.isNotice }?.id == message.id,
+                                            isGroupChat = isGroupChat,
+                                            inMultiSelect = multiSelectMode,
+                                            isGenerating = isGenerating,
+                                            userAvatarUri = settings.userAvatarUri,
+                                            aiAvatarUri = conversation?.persona?.aiAvatarUri,
+                                            aiName = conversation?.persona?.name,
+                                            senderName = if (message.role == Role.USER) {
+                                                if (isGroupChat) "我" else null
+                                            } else {
+                                                if (isGroupChat) {
+                                                    message.senderId?.let {
+                                                        senderNameMap[it]
+                                                            ?.takeIf { name -> name.isNotBlank() }
+                                                            ?: "未知成员"
                                                     }
-                                                },
-                                                onStartRewrite = { rewritingMessageId = it; expandedActionId = null }
-                                            )
-                                        }
+                                                } else null
+                                            },
+                                            senderAvatarUri = if (isGroupChat) {
+                                                message.senderId?.let { senderAvatarMap[it] }
+                                            } else null,
+                                            bracketGrayEnabled = settings.bracketGrayEnabled,
+                                            typingDelayEnabled = settings.typingDelayEnabled,
+                                            typingDelayMsPerChar = settings.typingDelayMsPerChar,
+                                            isSelected = selectedMessageIds.contains(message.id),
+                                            isHighlighted = highlightMessageId == message.id,
+                                            isWithdrawing = expandedActionId == message.id,
+                                            isActionsExpanded = expandedActionId == message.id,
+                                            viewModel = viewModel,
+                                            onEnterMultiSelect = ::enterMultiSelect,
+                                            onToggleSelection = ::toggleSelection,
+                                            onToggleActions = {
+                                                expandedActionId = if (expandedActionId == message.id) {
+                                                    null
+                                                } else {
+                                                    message.id
+                                                }
+                                            },
+                                            onStartRewrite = { rewritingMessageId = it; expandedActionId = null }
+                                        )
                                     }
+                                }
+
+                            }
+
+                            // 场景/世界提示气泡：固定在消息列表最顶部（reverseLayout 的最后一项），
+                            // 长存、随场景设置实时更新
+                            if (sceneNoticeContent.isNotBlank()) {
+                                item(key = "scene_notice_bubble", contentType = { "notice" }) {
+                                    NoticeBubble(content = sceneNoticeContent)
                                 }
                             }
 
@@ -926,7 +954,7 @@ fun ChatScreen(
                         },
                         // 群聊成员头像栏（方案十一：并入输入框容器、靠左、随键盘一起动）
                         header = if (isGroupChat) {
-                            {
+                            { mentionScope ->
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -939,7 +967,16 @@ fun ChatScreen(
                                     GroupAvatarBar(
                                         members = groupMembers,
                                         queue = groupQueue,
-                                        onTap = { memberId -> viewModel.enqueueGroupMember(memberId) }
+                                        onTap = { member ->
+                                            val memberName = member.persona?.name.orEmpty()
+                                            if (mentionScope.isMentionPending && memberName.isNotBlank()) {
+                                                // @ 点名：把「@名字」（蓝色）插入输入框
+                                                mentionScope.insertMention(memberName)
+                                            } else {
+                                                // 普通点名回复：头像点击触发该成员回复
+                                                viewModel.enqueueGroupMember(member.id)
+                                            }
+                                        }
                                     )
                                 }
                             }
@@ -1084,10 +1121,20 @@ private fun EmptyChatState(
 
 @Composable
 private fun ThinkingBubble(aiAvatarUri: String?) {
+    val fadeInAlpha = remember { Animatable(0f) }
+    LaunchedEffect(Unit) {
+        fadeInAlpha.animateTo(
+            targetValue = 1f,
+            animationSpec = tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedDecelerate)
+        )
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp),
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .graphicsLayer {
+                alpha = fadeInAlpha.value
+            },
         horizontalArrangement = Arrangement.Start,
         verticalAlignment = Alignment.Top
     ) {

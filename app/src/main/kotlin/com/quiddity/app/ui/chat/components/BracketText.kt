@@ -3,8 +3,12 @@ package com.quiddity.app.ui.chat.components
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
+
+/** @ 提及高亮色（蓝色），输入框与消息气泡共用。 */
+internal val MentionHighlightColor = Color(0xFF4C9BFF)
 
 /*
  * ============================================================================
@@ -129,4 +133,32 @@ fun grayifyBrackets(
             append(text.substring(cursor))
         }
     }
+}
+
+/**
+ * 群聊 @ 提及高亮：在已有 AnnotatedString（如括号灰化结果）之上叠加蓝色高亮。
+ *
+ * 匹配 `@名字`（@ 后到空白/下一个 @ 为止），用 [color] + 加粗着色；
+ * 文本不含 @ 或无可匹配片段时原样返回，零开销。
+ */
+fun highlightMentions(
+    text: String,
+    base: AnnotatedString,
+    color: Color
+): AnnotatedString {
+    if (!text.contains('@')) return base
+    val matches = Regex("@[^\\s@]+").findAll(text).toList()
+    if (matches.isEmpty()) return base
+    val mentionSpans = matches.map { match ->
+        AnnotatedString.Range(
+            item = SpanStyle(color = color, fontWeight = FontWeight.SemiBold),
+            start = match.range.first,
+            end = match.range.last + 1
+        )
+    }
+    return AnnotatedString(
+        text = base.text,
+        spanStyles = base.spanStyles + mentionSpans,
+        paragraphStyles = base.paragraphStyles
+    )
 }

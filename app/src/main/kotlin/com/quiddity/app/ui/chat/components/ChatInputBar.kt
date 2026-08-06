@@ -10,7 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -39,7 +39,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
 /*
@@ -75,6 +80,23 @@ import androidx.compose.ui.unit.dp
  */
 enum class ChatInputBarLineCapacity { GROUP, PRIVATE }
 
+/**
+ * 群聊头像栏交互上下文（由 [ChatInputBar] 提供给 header）。
+ *
+ * - [isMentionPending]：当前输入是否处于"打出 @ 待选人"状态（输入末尾为 @）；
+ * - [insertMention]：把 `@名字`（蓝色高亮）插入输入框。
+ */
+class MentionInputScope internal constructor(
+    private val isMentionPendingState: () -> Boolean,
+    private val insert: (String) -> Unit
+) {
+    val isMentionPending: Boolean get() = isMentionPendingState()
+    fun insertMention(name: String) = insert(name)
+}
+
+/** 匹配 `@名字` 提及片段（@ 后到空白/下一个 @ 为止）。 */
+private val MentionPattern = Regex("@[^\\s@]+")
+
 // 当前规则：圆角 24dp 输入框；群聊固定 2 行、私聊按群聊整体高度换算的固定容量；
 // 回车发送策略由 enterToSend 决定；壁纸模式下玻璃质感；
 // 发送按钮三态（正常/停止/压缩置灰）；群聊成员头像栏并入输入框容器顶部（方案十一）。
@@ -91,10 +113,12 @@ fun ChatInputBar(
     onTextChange: ((String) -> Unit)? = null,
     isCompressing: Boolean = false,
     // 输入框容器内的顶部内容（群聊成员头像栏，随输入框一起动）
-    header: (@Composable () -> Unit)? = null,
+    header: (@Composable (MentionInputScope) -> Unit)? = null,
     lineCapacity: ChatInputBarLineCapacity = ChatInputBarLineCapacity.PRIVATE
 ) {
-    var text by rememberSaveable { mutableStateOf("") }
+    var textFieldValue by rememberSaveable(stateSaver = TextFieldValue.Saver) {
+        mutableStateOf(TextFieldValue(""))
+    }
 
     val density = LocalDensity.current
     // 固定尺寸换算：成员栏 56dp（头像 44dp + 上下 padding 12dp）、输入框内部留白 24dp
@@ -112,14 +136,55 @@ fun ChatInputBar(
         ChatInputBarLineCapacity.PRIVATE ->
             ((fieldMaxPx - fieldInternalPadPx) / lineHeightPx).coerceAtLeast(1)
     }
+    // 固定尺寸：不随输入行数变化（超出 maxLines 的内容在框内滚动）
+    val fixedFieldHeightPx = fieldMaxPx
+
+    val text = textFieldValue.text
+
+    fun insertMention(name: String) {
+        if (name.isBlank()) return
+        val current = textFieldValue.text
+        val base = current.trimEnd()
+        val newText = if (base.endsWith("@")) {
+            base.dropLast(1) + "@$name "
+        } else {
+            "$base @$name "
+        }
+        textFieldValue = TextFieldValue(newText, selection = TextRange(newText.length))
+        onTextChange?.invoke(newText)
+    }
+
+    val mentionScope = remember {
+        MentionInputScope(
+            isMentionPendingState = { textFieldValue.text.trimEnd().endsWith("@") },
+            insert = { name -> insertMention(name) }
+        )
+    }
 
     fun trySend() {
         if (!enabled) return
-        val v = text.trim()
+        val v = textFieldValue.text.trim()
         if (v.isNotEmpty() && !isCompressing && (allowSendWhileGenerating || !isGenerating)) {
             onSend(v)
-            text = ""
+            textFieldValue = TextFieldValue("")
             onTextChange?.invoke("")
+        }
+    }
+
+    // @ 提及蓝色高亮：从纯文本重建 AnnotatedString，长度不变，不影响光标定位
+    val annotatedValue = remember(text) {
+        buildAnnotatedString {
+            append(text)
+            MentionPattern.findAll(text).forEach { match ->
+                addStyle(
+                    SpanStyle(
+                        color = MentionHighlightColor,
+                        fontWeight = FontWeight.SemiBold
+                    ),
+                    match.range.first,
+                    match.range.last + 1
+                )
+            }
         }
     }
 
@@ -148,7 +213,7 @@ fun ChatInputBar(
                         .fillMaxWidth()
                         .padding(start = 8.dp, end = 8.dp, bottom = 4.dp)
                 ) {
-                    header()
+                    header(mentionScope)
                 }
             }
             Row(
@@ -156,15 +221,15 @@ fun ChatInputBar(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 TextField(
-                    value = text,
-                    onValueChange = {
-                        text = it
-                        onTextChange?.invoke(it)
+                    value = textFieldValue.copy(annotatedString = annotatedValue),
+                    onValueChange = { newValue ->
+                        textFieldValue = newValue
+                        onTextChange?.invoke(newValue.text)
                     },
                     enabled = enabled,
                     modifier = Modifier
                         .weight(1f)
-                        .heightIn(min = 48.dp, max = with(density) { fieldMaxPx.toDp() }),
+                        .height(with(density) { fixedFieldHeightPx.toDp() }),
                     placeholder = {
                         Text(
                             text = "输入消息…",

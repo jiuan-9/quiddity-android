@@ -553,6 +553,7 @@ fun HamburgerMenu(
                                 QuickSetupPanel(
                                     currentTier = tier,
                                     hasExistingContent = hasExisting,
+                                    hasMessages = messages.any { !it.isNotice },
                                     initialDraft = conv.quickSetupDraft,
                                     onDraftChange = { draft ->
                                         viewModel.updateQuickSetupDraft(draft)
@@ -562,8 +563,13 @@ fun HamburgerMenu(
                                     },
                                     onApply = { rawText, selectedTier ->
                                         viewModel.applyQuickSetupResult(rawText, selectedTier)
+                                    },
+                                    onFinished = {
                                         currentPanel = null
                                         onDismiss()
+                                    },
+                                    onClearMessages = {
+                                        viewModel.clearConversationMessages()
                                     },
                                     onBack = { currentPanel = null }
                                 )

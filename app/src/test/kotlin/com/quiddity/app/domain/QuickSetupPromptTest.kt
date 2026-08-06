@@ -69,6 +69,24 @@ class QuickSetupPromptTest {
     }
 
     @Test
+    fun `system prompt enforces name scene and perspective rules`() {
+        val sys = QuickSetupPrompt.QUICK_SETUP_SYSTEM_PROMPT
+        assertTrue(sys.contains("2～4 个字的正常人名"), "名字必须是正常人名而非昵称/长句")
+        assertTrue(sys.contains("禁止\"小X\"式昵称") || sys.contains("禁止“小X”式昵称"), "禁止随意昵称")
+        assertTrue(sys.contains("[当前场景]只写 1～2 句必要信息"), "场景必须简洁")
+        assertTrue(sys.contains("第三人称客观视角"), "必须第三人称客观视角")
+        assertTrue(sys.contains("禁止出现「你」「我」"), "禁止你/我")
+    }
+
+    @Test
+    fun `user prompt includes perspective requirement`() {
+        val userPrompt = QuickSetupPrompt.buildQuickSetupUserPrompt("温柔的学姐", QuickSetupTier.COMPREHENSIVE)
+        assertTrue(userPrompt.contains("第三人称客观视角"))
+        assertTrue(userPrompt.contains("禁止出现「你」「我」"))
+        assertTrue(userPrompt.contains("2～4 字正常人名"))
+    }
+
+    @Test
     fun `missing required field keys per tier`() {
         val empty = QuickSetupResult(
             persona = Persona.Empty,

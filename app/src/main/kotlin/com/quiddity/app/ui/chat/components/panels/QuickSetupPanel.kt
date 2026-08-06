@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoFixHigh
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -100,10 +101,13 @@ import kotlinx.coroutines.launch
 fun QuickSetupPanel(
     currentTier: ApiCatalogManager.ModelTier,
     hasExistingContent: Boolean,
+    hasMessages: Boolean = false,
     initialDraft: String = "",
     onDraftChange: (String) -> Unit = {},
     onGenerate: suspend (String, QuickSetupTier) -> String,
     onApply: (String, QuickSetupTier) -> Unit,
+    onFinished: () -> Unit = {},
+    onClearMessages: () -> Unit = {},
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -118,11 +122,23 @@ fun QuickSetupPanel(
     var resultText by rememberSaveable { mutableStateOf<String?>(null) }
     var toastMsg by remember { mutableStateOf<String?>(null) }
     var pendingApplyText by remember { mutableStateOf<String?>(null) }
+    var pendingClearMessages by remember { mutableStateOf(false) }
 
     toastMsg?.let { msg ->
         LaunchedEffect(msg) {
             Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
             toastMsg = null
+        }
+    }
+
+    // 应用结果：先落盘（onApply），再询问是否清除聊天记录，全部结束后回调 onFinished 关闭面板
+    fun performApply(text: String, tier: QuickSetupTier) {
+        onApply(text, tier)
+        if (hasMessages) {
+            pendingClearMessages = true
+        } else {
+            toastMsg = "已填入人设"
+            onFinished()
         }
     }
 
@@ -177,12 +193,47 @@ fun QuickSetupPanel(
                     pendingApplyText = editedText
                     resultText = null
                 } else {
-                    onApply(editedText, selectedTier)
+                    performApply(editedText, selectedTier)
                     resultText = null
-                    toastMsg = "已填入人设"
                 }
             },
             onCancel = { resultText = null }
+        )
+    }
+
+    // ===== 填入后询问是否清除现有聊天记录（是/否） =====
+    if (pendingClearMessages) {
+        AlertDialog(
+            onDismissRequest = {
+                pendingClearMessages = false
+                toastMsg = "已填入人设"
+                onFinished()
+            },
+            title = { Text("清除聊天记录") },
+            text = { Text("是否直接清除现有聊天记录？") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingClearMessages = false
+                        onClearMessages()
+                        toastMsg = "已填入人设"
+                        onFinished()
+                    }
+                ) {
+                    Text("是", fontWeight = FontWeight.SemiBold)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        pendingClearMessages = false
+                        toastMsg = "已填入人设"
+                        onFinished()
+                    }
+                ) {
+                    Text("否")
+                }
+            }
         )
     }
 
@@ -193,9 +244,8 @@ fun QuickSetupPanel(
             message = "当前已有人设 / 用户人设 / 场景 / 记忆内容，填入将直接覆盖，此操作不可撤销。确认填入？",
             confirmText = "确认覆盖",
             onConfirm = {
-                onApply(textToApply, selectedTier)
+                performApply(textToApply, selectedTier)
                 pendingApplyText = null
-                toastMsg = "已填入人设"
             },
             onDismiss = { pendingApplyText = null }
         )
@@ -537,9 +587,10 @@ private fun QuickSetupResultDialog(
                         label = "身份", value = userIdentity, onValueChange = { userIdentity = it },
                         isError = "user_identity" in currentMissing
                     )
-                    SectionField(
-                        label = "性别", value = userGender, onValueChange = { userGender = it },
-                        singleLine = true, isError = "user_gender" in currentMissing
+                    GenderSelector(
+                        value = userGender,
+                        onValueChange = { userGender = it },
+                        isError = "user_gender" in currentMissing
                     )
                     SectionField(
                         label = "年龄", value = userAge, onValueChange = { userAge = it },
@@ -627,6 +678,68 @@ private fun SectionField(
         isError = isError
     )
     Spacer(modifier = Modifier.size(8.dp))
+}
+
+/**
+ * 性别选择器：男 / 女 / 暂不设置 三选一（替代填空，避免 LLM 返回的杂值）。
+ * LLM 返回的"男性/女生"等写法自动归一到标准选项。
+ */
+@Composable
+private fun GenderSelector(
+    value: String,
+    onValueChange: (String) -> Unit,
+    isError: Boolean
+) {
+    val options = listOf("男", "女", "暂不设置")
+    val normalized = normalizeGender(value)
+    Text(
+        text = "性别",
+        style = MaterialTheme.typography.labelSmall,
+        color = if (isError) MaterialTheme.colorScheme.error
+        else MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    Spacer(modifier = Modifier.size(4.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        options.forEach { option ->
+            val selected = normalized == option
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(
+                        if (selected) {
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                        } else {
+                            MaterialTheme.colorScheme.surfaceContainerLow
+                        }
+                    )
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { onValueChange(option) }
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = option,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (selected) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    }
+                )
+            }
+        }
+    }
+    Spacer(modifier = Modifier.size(8.dp))
+}
+
+/** 把 LLM 返回的性别写法归一到标准选项。 */
+private fun normalizeGender(raw: String): String = when (raw.trim()) {
+    "男", "男性", "男生", "male", "Male" -> "男"
+    "女", "女性", "女生", "female", "Female" -> "女"
+    else -> "暂不设置"
 }
 
 /**
