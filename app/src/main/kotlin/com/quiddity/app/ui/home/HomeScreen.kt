@@ -486,10 +486,10 @@ fun HomeScreen(
         // 顶部常驻提示（仅在列表顶部且未下拉时显示）
         AnimatedVisibility(
             visible = atTop && pullDp == 0f && !isMultiSelect && !pullTriggered,
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .windowInsetsPadding(WindowInsets.statusBars)
-                .padding(top = 68.dp)
+        modifier = Modifier
+            .align(Alignment.TopCenter)
+            .windowInsetsPadding(WindowInsets.statusBars)
+            .padding(top = 76.dp)
         ) {
             Text(
                 text = "下拉进入小应用",

@@ -82,6 +82,8 @@ object ServiceLocator {
         private set
     lateinit var miniAppSessionRepository: MiniAppSessionRepository
         private set
+    lateinit var miniAppInviteManager: com.quiddity.app.ui.miniapps.MiniAppInviteManager
+        private set
     lateinit var chatRepository: ChatRepository
         private set
 
@@ -129,6 +131,11 @@ object ServiceLocator {
             characterRepository = characterRepository
         )
         miniAppSessionRepository = MiniAppSessionRepository(conversationRepository)
+        miniAppInviteManager = com.quiddity.app.ui.miniapps.MiniAppInviteManager(
+            miniAppSessionRepository,
+            settingsRepository,
+            apiCatalogManager
+        )
         docsProvider = DocsProvider(apiCatalogManager)
         chatRepository = ChatRepository(chatApi, conversationRepository, settingsRepository)
         alarmScheduler = AlarmScheduler(appContext)

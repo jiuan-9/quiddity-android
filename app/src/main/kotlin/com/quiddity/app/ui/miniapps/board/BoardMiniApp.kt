@@ -36,8 +36,7 @@ object BoardMiniApp : MiniApp {
             factory = BoardViewModelFactory(
                 sessionRepository = ServiceLocator.miniAppSessionRepository,
                 characterRepository = ServiceLocator.characterRepository,
-                settingsRepository = ServiceLocator.settingsRepository,
-                apiCatalogManager = ServiceLocator.apiCatalogManager,
+                inviteManager = ServiceLocator.miniAppInviteManager,
                 chatApi = ServiceLocator.chatApi
             )
         )

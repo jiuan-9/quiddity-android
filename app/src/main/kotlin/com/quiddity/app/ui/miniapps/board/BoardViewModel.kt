@@ -4,13 +4,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.quiddity.app.data.model.Character
-import com.quiddity.app.data.model.Conversation
 import com.quiddity.app.data.remote.ChatApi
 import com.quiddity.app.data.repo.ApiAccess
 import com.quiddity.app.data.repo.CharacterRepository
 import com.quiddity.app.data.repo.MiniAppSessionRepository
-import com.quiddity.app.data.repo.SettingsRepository
-import com.quiddity.app.domain.ApiCatalogManager
 import com.quiddity.app.domain.board.BoardBot
 import com.quiddity.app.domain.board.BoardGameType
 import com.quiddity.app.domain.board.BoardState
@@ -20,6 +17,7 @@ import com.quiddity.app.domain.board.MoveOutcome
 import com.quiddity.app.domain.board.PassOutcome
 import com.quiddity.app.domain.board.Stone
 import com.quiddity.app.util.IdGenerator
+import com.quiddity.app.ui.miniapps.MiniAppInviteManager
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -94,8 +92,7 @@ data class BoardUiState(
 class BoardViewModel(
     private val sessionRepository: MiniAppSessionRepository,
     private val characterRepository: CharacterRepository,
-    private val settingsRepository: SettingsRepository,
-    private val apiCatalogManager: ApiCatalogManager,
+    private val inviteManager: MiniAppInviteManager,
     private val chatApi: ChatApi
 ) : ViewModel() {
 
@@ -121,7 +118,7 @@ class BoardViewModel(
     }
 
     fun onChooseVsAi(game: BoardGameType) {
-        val access = resolveDefaultAccess()
+        val access = inviteManager.resolveDefaultAccess()
         startSession(
             game = game,
             mode = BoardGameMode.VS_AI,
@@ -138,28 +135,18 @@ class BoardViewModel(
         val game = (_uiState.value.route as? BoardRoute.Invite)?.game ?: return
         _uiState.update { it.copy(inviteChecking = true, inviteError = null) }
         viewModelScope.launch {
-            val settings = settingsRepository.currentSnapshot()
-            val entry = settings.catalog.firstOrNull { it.id == settings.activeCatalogId }
-                ?: settings.catalog.firstOrNull()
-            val llmOk = entry?.let { e ->
-                apiCatalogManager.testConnection(e.apiUrl, apiCatalogManager.decryptKey(e), e.apiModel).isSuccess
-            } ?: false
-
-            val conversation = sessionRepository.findOrCreateCharacterConversation(character)
-            val opponentName = character.persona.name.ifBlank { "神秘角色" }
-            sessionRepository.appendInviteBubble(
-                conversation.id,
-                BoardMiniApp.inviteBubbleText(game, opponentName)
-            )
+            val invite = inviteManager.prepare(character) { name ->
+                BoardMiniApp.inviteBubbleText(game, name)
+            }
 
             startSession(
                 game = game,
                 mode = BoardGameMode.INVITE_CHARACTER,
-                opponentName = opponentName,
-                opponentPersona = buildPersonaText(character),
-                conversationId = conversation.id,
-                access = if (llmOk) resolveAccess(conversation) else null,
-                notice = if (llmOk) null else "API 连接失败，已切换为本地电脑对弈"
+                opponentName = invite.opponentName,
+                opponentPersona = invite.opponentPersona,
+                conversationId = invite.conversationId,
+                access = invite.access,
+                notice = if (invite.access == null) "API 连接失败，已切换为本地电脑对弈" else null
             )
         }
     }
@@ -419,24 +406,6 @@ class BoardViewModel(
         return "《棋盘·${session.gameType.displayName}》对局：你执${session.userStone.label}，$result（$reason，共 ${board.moveCount} 手$scoreText）。"
     }
 
-    private fun resolveDefaultAccess(): ApiAccess.Resolved? =
-        resolveAccess(Conversation(id = "miniapp_default", createdAt = 0, updatedAt = 0))
-
-    private fun resolveAccess(conv: Conversation): ApiAccess.Resolved? {
-        val settings = settingsRepository.currentSnapshot()
-        return ApiAccess.resolve(settings, conv) as? ApiAccess.Resolved
-    }
-
-    private fun buildPersonaText(character: Character): String {
-        val parts = listOfNotNull(
-            character.persona.persona.takeIf { it.isNotBlank() }?.let { "身份：$it" },
-            character.persona.character.takeIf { it.isNotBlank() }?.let { "性格：$it" },
-            character.persona.appearance.takeIf { it.isNotBlank() }?.let { "外貌：$it" },
-            character.persona.worldBackground.takeIf { it.isNotBlank() }?.let { "背景：$it" }
-        )
-        return parts.joinToString("；")
-    }
-
     private companion object {
         const val LOCAL_BOT_CHAT_NOTICE_PREFIX = "（本地电脑）"
     }
@@ -445,8 +414,7 @@ class BoardViewModel(
 class BoardViewModelFactory(
     private val sessionRepository: MiniAppSessionRepository,
     private val characterRepository: CharacterRepository,
-    private val settingsRepository: SettingsRepository,
-    private val apiCatalogManager: ApiCatalogManager,
+    private val inviteManager: MiniAppInviteManager,
     private val chatApi: ChatApi
 ) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
@@ -454,8 +422,7 @@ class BoardViewModelFactory(
         return BoardViewModel(
             sessionRepository,
             characterRepository,
-            settingsRepository,
-            apiCatalogManager,
+            inviteManager,
             chatApi
         ) as T
     }
