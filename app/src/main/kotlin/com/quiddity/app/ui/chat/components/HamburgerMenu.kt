@@ -486,6 +486,9 @@ fun HamburgerMenu(
                                     onGroupBackground = {
                                         currentPanel = HamburgerPanel.GroupBackground
                                     },
+                                    onGroupScene = {
+                                        currentPanel = HamburgerPanel.GroupScene
+                                    },
                                     onWallpaper = {
                                         currentPanel = HamburgerPanel.Wallpaper
                                     },
@@ -494,7 +497,9 @@ fun HamburgerMenu(
                                     },
                                     onSearchChat = { currentPanel = HamburgerPanel.SearchChat },
                                     onClearMessages = { pendingClearMessages = true },
-                                    onDeleteConversation = { pendingDeleteConversation = true }
+                                    onDeleteConversation = { pendingDeleteConversation = true },
+                                    darkMode = settings.darkMode,
+                                    onDarkModeChange = { dark -> settingsViewModel.setDarkMode(dark) }
                                 )
                             } else {
                                 MainMenuContent(
@@ -794,6 +799,18 @@ fun HamburgerMenu(
                                     onBack = { currentPanel = null },
                                     onSave = { text ->
                                         viewModel.updateGroupBackground(text)
+                                        currentPanel = null
+                                    }
+                                )
+                            }
+                        }
+                        HamburgerPanel.GroupScene -> {
+                            conversation?.let { conv ->
+                                GroupScenePanel(
+                                    currentText = conv.groupScene,
+                                    onBack = { currentPanel = null },
+                                    onSave = { text ->
+                                        viewModel.updateGroupScene(text)
                                         currentPanel = null
                                     }
                                 )
@@ -1485,7 +1502,7 @@ private fun TimeLibraryDetailDialog(
 internal enum class HamburgerPanel {
     QuickSetup, Persona, UserPersona, Scene, ApiSelector, ApiEditor,
     Wallpaper, Compression, SearchChat,
-    GroupName, GroupContextLimit, GroupMembers, GroupBackground
+    GroupName, GroupContextLimit, GroupMembers, GroupBackground, GroupScene
 }
 
 // ==================== 主菜单 ====================
@@ -1977,11 +1994,14 @@ private fun GroupMenuContent(
     onContextLimit: () -> Unit,
     onStopModeChange: (String) -> Unit,
     onGroupBackground: () -> Unit,
+    onGroupScene: () -> Unit,
     onWallpaper: () -> Unit,
     onManageMembers: () -> Unit,
     onSearchChat: () -> Unit,
     onClearMessages: () -> Unit,
-    onDeleteConversation: () -> Unit
+    onDeleteConversation: () -> Unit,
+    darkMode: Boolean,
+    onDarkModeChange: (Boolean) -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -2039,6 +2059,13 @@ private fun GroupMenuContent(
                     expandableSubtitle = true
                 )
                 MenuRow(
+                    title = "群聊场景",
+                    subtitle = if (conversation?.groupScene?.isNotBlank() == true)
+                        conversation.groupScene.trim() else "未设置（可选）",
+                    onClick = onGroupScene,
+                    expandableSubtitle = true
+                )
+                MenuRow(
                     title = "群名称",
                     subtitle = conversation?.title?.ifBlank { "新群聊" } ?: "新群聊",
                     onClick = onRename
@@ -2063,6 +2090,12 @@ private fun GroupMenuContent(
                 )
             }
             MenuSectionCard(title = "外观") {
+                ToggleMenuRow(
+                    title = "深色模式",
+                    subtitle = if (darkMode) "当前：暗色" else "当前：亮色",
+                    checked = darkMode,
+                    onCheckedChange = onDarkModeChange
+                )
                 MenuRow(
                     title = "群聊壁纸",
                     subtitle = if (conversation?.wallpaperUri != null) "已设置" else "未设置",
@@ -2292,6 +2325,73 @@ private fun GroupBackgroundPanel(
         Spacer(modifier = Modifier.size(8.dp))
         Text(
             text = "这段文字会注入到每个成员回复时的提示词里，塑造群聊整体氛围；清空后保存即移除。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.size(16.dp))
+        TextButton(onClick = { onSave(text) }) {
+            Text("保存")
+        }
+    }
+}
+
+/**
+ * 群聊场景编辑面板：群聊作为多人场景时的情境描述，注入所有成员的回复提示词；
+ * 清空输入并保存 = 移除群聊场景。
+ */
+@Composable
+private fun GroupScenePanel(
+    currentText: String,
+    onBack: () -> Unit,
+    onSave: (String) -> Unit
+) {
+    var text by rememberSaveable { mutableStateOf(currentText) }
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "群聊场景",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { onBack() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack, "返回",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+        Spacer(modifier = Modifier.size(16.dp))
+        OutlinedTextField(
+            value = text,
+            onValueChange = { text = it },
+            label = { Text("群聊场景") },
+            placeholder = { Text("例如：你们几个朋友正在一场篝火晚会上，夜空晴朗，周围是树林") },
+            minLines = 4,
+            maxLines = 8,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(modifier = Modifier.size(8.dp))
+        Text(
+            text = "群聊作为多人场景的情境描述，会注入到每个成员回复时的提示词里；清空后保存即移除。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )

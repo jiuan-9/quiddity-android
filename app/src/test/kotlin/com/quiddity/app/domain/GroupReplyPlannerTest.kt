@@ -306,6 +306,27 @@ class GroupReplyPlannerTest {
     }
 
     @Test
+    fun `group scene flows into every member system prompt`() {
+        val settings = AppSettings.Default.copy(catalog = listOf(catalogEntry("cat_a")))
+        val plan = GroupReplyPlanner.buildPlan(
+            settings = settings,
+            member = member().copy(
+                persona = com.quiddity.app.data.model.Persona(name = "小A"),
+                userPersona = com.quiddity.app.data.model.UserPersona(name = "小明")
+            ),
+            group = group().copy(groupScene = "你们正在一场篝火晚会上。"),
+            transcript = listOf(msg("m1", "member_a")),
+            senderId = "member_a",
+            tier = ApiCatalogManager.ModelTier.BASIC,
+            senderNames = mapOf("member_a" to "小A"),
+            userName = "小明"
+        ).getOrThrow()
+        val systemContent = plan.request.messages.first { it.role == "system" }.content.orEmpty()
+        assertTrue(systemContent.contains("【群聊场景】"), "群聊场景应进入成员系统提示词")
+        assertTrue(systemContent.contains("你们正在一场篝火晚会上。"), "群聊场景内容应原样注入")
+    }
+
+    @Test
     fun `failure when no catalog configured`() {
         val settings = AppSettings.Default.copy(catalog = emptyList())
         val result = GroupReplyPlanner.buildPlan(

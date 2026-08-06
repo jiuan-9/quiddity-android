@@ -1644,6 +1644,15 @@ class ChatViewModel(
         }
     }
 
+    /** 设置群聊场景（多人场景描述，注入所有成员的回复提示词）。 */
+    fun updateGroupScene(text: String) {
+        val group = conversation.value ?: return
+        if (!isGroup()) return
+        viewModelScope.launch {
+            conversationRepository.updateConversation(group.copy(groupScene = text.trim()))
+        }
+    }
+
     /**
      * 添加群聊成员（方案十.5 + 需求）：逐个校验（用户名 / AI 名 / API 测试），
      * 通过的角色加入（头像栏/成员列表显示），未通过的返回 (成员id, 原因) 列表，

@@ -482,6 +482,25 @@ class PromptBuilderTest {
     }
 
     @Test
+    fun `group system prompt injects group scene`() {
+        val member = conv().copy(persona = com.quiddity.app.data.model.Persona(name = "小A"))
+        val prompt = PromptBuilder.buildGroupSystemPrompt(
+            member,
+            PromptBuilder.GROUP_RULES,
+            groupScene = "你们几个朋友正在一场篝火晚会上，夜空晴朗。"
+        )
+        assertTrue(prompt.contains("【群聊场景】"), "群聊场景应作为独立节注入")
+        assertTrue(prompt.contains("你们几个朋友正在一场篝火晚会上，夜空晴朗。"), "群聊场景内容应原样注入")
+    }
+
+    @Test
+    fun `group system prompt without scene omits section`() {
+        val member = conv().copy(persona = com.quiddity.app.data.model.Persona(name = "小A"))
+        val prompt = PromptBuilder.buildGroupSystemPrompt(member, PromptBuilder.GROUP_RULES)
+        assertFalse(prompt.contains("【群聊场景】"), "未设置场景时不应注入该节")
+    }
+
+    @Test
     fun `conversation style lines give users autonomy`() {
         assertEquals(
             "表达方式完全遵循人设，不做额外限制。",

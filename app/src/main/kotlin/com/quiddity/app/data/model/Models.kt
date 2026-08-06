@@ -318,7 +318,13 @@ data class Conversation(
      * 注入每个成员回复时的 system 提示词【群聊背景】节，塑造群聊整体氛围；
      * 空字符串 = 不注入（不影响默认群聊规则）。
      */
-    val groupBackground: String = ""
+    val groupBackground: String = "",
+    /**
+     * 群聊场景（仅 type=GROUP 使用）：群聊作为多人场景时的情境描述，
+     * 注入每个成员回复时的 system 提示词【群聊场景】节；
+     * 空字符串 = 不注入。
+     */
+    val groupScene: String = ""
 )
 
 /**

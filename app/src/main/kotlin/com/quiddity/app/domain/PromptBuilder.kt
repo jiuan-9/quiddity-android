@@ -630,12 +630,15 @@ $persona
      *   非空时【对话方式】会标记本次为「重说」并要求换一种表达，避免输出与上一版雷同。
      * @param groupBackground 群聊背景 / 群规（null/空白 = 不注入）。
      *   作为【群聊背景】节注入，所有成员回复时都可见，塑造群聊整体氛围。
+     * @param groupScene 群聊场景（null/空白 = 不注入）。
+     *   作为【群聊场景】节注入，描述群聊作为多人场景时的情境。
      */
     fun buildGroupSystemPrompt(
         member: Conversation,
         groupRules: String,
         regeneratePreviousReply: String? = null,
-        groupBackground: String? = null
+        groupBackground: String? = null,
+        groupScene: String? = null
     ): String {
         val sb = StringBuilder()
         // 说话人认知：成员名字 = 该成员 AI 角色，用户名字 = 该成员私聊里的用户人设名字
@@ -652,6 +655,9 @@ $persona
         }
         if (!groupBackground.isNullOrBlank()) {
             sb.append("【群聊背景】\n").append(groupBackground.trim()).append("\n\n")
+        }
+        if (!groupScene.isNullOrBlank()) {
+            sb.append("【群聊场景】\n").append(groupScene.trim()).append("\n\n")
         }
         if (groupRules.isNotBlank()) {
             sb.append("【群聊规则】\n").append(groupRules).append("\n")
