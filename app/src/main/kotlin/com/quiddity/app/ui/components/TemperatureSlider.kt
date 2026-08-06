@@ -71,7 +71,7 @@ fun TemperatureSlider(
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text(
-                text = "采样温度",
+                text = "温度",
                 style = MaterialTheme.typography.bodyLarge,
                 color = if (enabled) {
                     MaterialTheme.colorScheme.onSurface

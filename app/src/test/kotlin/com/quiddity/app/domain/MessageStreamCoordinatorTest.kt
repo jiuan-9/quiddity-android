@@ -716,4 +716,55 @@ class MessageStreamCoordinatorTest {
             "私聊消息 senderId 默认应为 null（兼容旧数据）"
         )
     }
+
+    @Test
+    fun `reasoning becomes its own thinking message before content`() {
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.acceptReasoning("用户想要一段代码，")
+        coord.acceptReasoning("先分析需求。")
+        coord.accept("好的，代码是：")
+        coord.accept("println 1。")
+        coord.finalize()
+        val snap = coord.snapshot()
+        assertEquals(2, snap.size, "思考与回复应各占一条消息")
+        val thinking = snap.first()
+        assertTrue(thinking.isThinking, "第一条应为思考消息")
+        assertEquals("用户想要一段代码，先分析需求。", thinking.content)
+        assertTrue(snap[1].isThinking.not(), "第二条为普通回复")
+        assertEquals("好的，代码是：println 1。", snap[1].content)
+    }
+
+    @Test
+    fun `reasoning finalized on stream end when no content`() {
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.acceptReasoning("只思考没有回复。")
+        val signals = coord.finalize()
+        val snap = coord.snapshot()
+        assertEquals(1, snap.size)
+        assertTrue(snap.first().isThinking)
+        assertTrue(snap.first().isStreaming.not(), "finalize 后思考消息应为完成态")
+        assertTrue(signals.any { it is StreamCoordinator.Signal.Complete })
+    }
+
+    @Test
+    fun `thinking message ids never collide with content ids`() {
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.acceptReasoning("思考内容。")
+        coord.accept("回复内容。")
+        coord.finalize()
+        val ids = coord.snapshot().map { it.id }
+        assertEquals(ids.size, ids.toSet().size, "思考与回复消息 id 必须互不冲突")
+    }
+
+    @Test
+    fun `reasoning after content started is ignored`() {
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("正常回复。")
+        coord.acceptReasoning("迟到的思考被忽略。")
+        coord.finalize()
+        val snap = coord.snapshot()
+        assertEquals(1, snap.size)
+        assertEquals("正常回复。", snap.first().content)
+        assertTrue(snap.first().isThinking.not())
+    }
 }

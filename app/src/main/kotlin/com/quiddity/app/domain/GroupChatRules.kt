@@ -97,10 +97,33 @@ object GroupChatRules {
         if (nameToId.isEmpty()) return emptyList()
         return nameToId
             .mapNotNull { (name, id) ->
-                text.indexOf("@$name").takeIf { it >= 0 }?.let { it to id }
+                if (isMentionedAt(text, name)) {
+                    text.indexOf("@$name") to id
+                } else {
+                    null
+                }
             }
             .sortedBy { it.first }
             .map { it.second }
             .distinct()
+    }
+
+    /**
+     * 判断文本中是否以「@名字」点名：@ 后必须紧跟完整名字，且名字后必须是
+     * 空白 / 标点 / 文本结尾。避免「@小明」误命中「@小明哥」「@小明abc」这类
+     * 更长词的前缀（子串匹配的误报根因）。
+     */
+    fun isMentionedAt(text: String, name: String): Boolean {
+        if (text.isBlank() || name.isBlank()) return false
+        val marker = "@$name"
+        var from = 0
+        while (true) {
+            val idx = text.indexOf(marker, from)
+            if (idx < 0) return false
+            val after = idx + marker.length
+            // 名字后必须是边界（结尾 / 空白 / 非字母数字），否则继续向后找
+            if (after >= text.length || !text[after].isLetterOrDigit()) return true
+            from = after
+        }
     }
 }

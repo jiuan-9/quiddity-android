@@ -64,6 +64,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.automirrored.filled.Article
 import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.automirrored.filled.Notes
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Storage
@@ -102,6 +103,7 @@ import kotlin.math.roundToInt
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.quiddity.app.di.ServiceLocator
 import com.quiddity.app.data.model.ImportMode
+import com.quiddity.app.data.model.ImportPlan
 import com.quiddity.app.ui.components.ActiveMessagePermissionCard
 import com.quiddity.app.ui.components.ConfirmDialog
 import com.quiddity.app.ui.components.ExpandableText
@@ -193,10 +195,12 @@ fun SettingsBottomSheet(
     var toastMsg by remember { mutableStateOf<String?>(null) }
     // 主动消息总开关：开启后先弹"已了解该功能"提示，确认后才持久化
     var showProactiveDialog by remember { mutableStateOf(false) }
-    // 导入抉择：已有数据时暂存 payload，弹窗让用户选择替换/合并/取消
-    var pendingImportPayload by remember {
-        mutableStateOf<com.quiddity.app.data.model.ExportPayload?>(null)
+    // 导入抉择：已有数据时暂存解析计划（payload + 跳过清单），弹窗让用户选择替换/合并/取消
+    var pendingImportPlan by remember {
+        mutableStateOf<ImportPlan?>(null)
     }
+    // 导出确认：备份文件包含加密的模型密钥，导出前提示妥善保管
+    var showExportConfirm by remember { mutableStateOf(false) }
     // 导入后需重填密钥的模型配置名称清单（3.2 解密自检失败项）
     var pendingKeyRefill by remember { mutableStateOf<List<String>?>(null) }
     var visible by remember { mutableStateOf(false) }
@@ -263,13 +267,15 @@ fun SettingsBottomSheet(
                         }
                         // 已有数据时弹窗让用户抉择导入方式；无数据时直接合并导入
                         if (viewModel.hasExistingData()) {
-                            pendingImportPayload = plan.payload
+                            pendingImportPlan = plan
                         } else {
-                            viewModel.importAllPayload(plan.payload, mode = ImportMode.MERGE)
-                            toastMsg = if (plan.skipItems.isEmpty()) {
-                                "导入成功"
-                            } else {
-                                "导入成功（${plan.skipItems.size} 项已跳过）"
+                            val (restored, assetSkips) = DataPorter.restoreAssets(context, plan.payload)
+                            val ok = viewModel.importAllPayload(restored, mode = ImportMode.MERGE)
+                            val totalSkips = plan.skipItems.size + assetSkips.size
+                            toastMsg = when {
+                                !ok -> "导入失败：写入数据失败，请重试"
+                                totalSkips == 0 -> "导入成功"
+                                else -> "导入成功（$totalSkips 项已跳过）"
                             }
                         }
                     }
@@ -371,12 +377,17 @@ fun SettingsBottomSheet(
                     .fillMaxWidth()
                     .heightIn(max = screenHeight * 0.8f)
                     .fillMaxHeight()
-                    .graphicsLayer {
+                .graphicsLayer {
                     // 整个面板跟随拖动偏移（1:1，draw phase 读取，零重组）
                     translationY = dragOffsetYState.floatValue.coerceAtLeast(0f)
                 },
-                color = MaterialTheme.colorScheme.surface,
+                // 毛玻璃半透明面板：透出壁纸背景，文字保持可读
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.86f),
                 shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+                ),
                 tonalElevation = 3.dp,
                 shadowElevation = 8.dp
             ) {
@@ -433,6 +444,14 @@ fun SettingsBottomSheet(
                                 else "全部文本统一颜色",
                                 checked = settings.bracketGrayEnabled,
                                 onCheckedChange = { viewModel.setBracketGrayEnabled(it) }
+                            )
+                            ToggleRow(
+                                icon = Icons.AutoMirrored.Filled.Notes,
+                                title = "Markdown 渲染",
+                                subtitle = if (settings.markdownEnabled) "标题、加粗、列表、链接等按 Markdown 样式显示"
+                                else "全部按纯文本显示",
+                                checked = settings.markdownEnabled,
+                                onCheckedChange = { viewModel.setMarkdownEnabled(it) }
                             )
                             ToggleRow(
                                 icon = Icons.Filled.FormatSize,
@@ -534,7 +553,7 @@ fun SettingsBottomSheet(
                             }
                             ClickableRow(
                                 icon = Icons.Filled.FormatSize,
-                                title = "默认采样温度",
+                                title = "默认温度",
                                 subtitle = temperatureSubtitle,
                                 onClick = { showTemperatureEditor = !showTemperatureEditor }
                             )
@@ -544,7 +563,7 @@ fun SettingsBottomSheet(
                                     .fillMaxWidth()
                                     .padding(horizontal = 16.dp, vertical = 3.dp),
                                 shape = RoundedCornerShape(14.dp),
-                                color = MaterialTheme.colorScheme.surfaceContainerLow
+                                color = com.quiddity.app.ui.components.glassCardColor()
                             ) {
                                 Column(
                                     modifier = Modifier.padding(16.dp),
@@ -624,7 +643,7 @@ fun SettingsBottomSheet(
                                 title = "数据导出",
                                 subtitle = "导出全部设置与会话",
                                 onClick = {
-                                    exportLauncher.launch("quiddity-backup-${IdGenerator.newUuid()}.json")
+                                    showExportConfirm = true
                                 }
                             )
                             ClickableRow(
@@ -793,10 +812,28 @@ fun SettingsBottomSheet(
             )
         }
 
+        // 导出前确认：备份包含加密密钥，提醒用户妥善保管
+        if (showExportConfirm) {
+            ConfirmDialog(
+                title = "导出数据",
+                message = "备份文件包含全部会话、设置与模型配置的加密密钥。" +
+                    "密钥以设备绑定方式加密（仅本设备可解），请将备份文件保存在安全位置；" +
+                    "换机恢复时需在模型配置中重新填写密钥。",
+                confirmText = "继续导出",
+                cancelText = "取消",
+                onConfirm = {
+                    showExportConfirm = false
+                    exportLauncher.launch("quiddity-backup-${IdGenerator.newUuid()}.json")
+                },
+                onDismiss = { showExportConfirm = false }
+            )
+        }
+
         // 导入抉择弹窗：已有数据时让用户选择替换/合并/取消
-        pendingImportPayload?.let { payload ->
+        pendingImportPlan?.let { plan ->
+            val payload = plan.payload
             Dialog(
-                onDismissRequest = { pendingImportPayload = null },
+                onDismissRequest = { pendingImportPlan = null },
                 properties = DialogProperties(usePlatformDefaultWidth = false)
             ) {
                 Surface(
@@ -828,7 +865,7 @@ fun SettingsBottomSheet(
                         Surface(
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(12.dp),
-                            color = MaterialTheme.colorScheme.surfaceContainerLow
+                            color = com.quiddity.app.ui.components.glassCardColor()
                         ) {
                             Text(
                                 text = "提示：你也可以在会话内汉堡菜单中单独导入人设卡或对话记录",
@@ -843,34 +880,58 @@ fun SettingsBottomSheet(
                             horizontalArrangement = Arrangement.End,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            TextButton(onClick = { pendingImportPayload = null }) {
+                            TextButton(onClick = { pendingImportPlan = null }) {
                                 Text("取消")
                             }
                             Spacer(modifier = Modifier.size(4.dp))
                             TextButton(onClick = {
-                                val p = payload
-                                pendingImportPayload = null
+                                val p = plan
+                                pendingImportPlan = null
                                 scope.launch {
-                                    viewModel.importAllPayload(p, mode = ImportMode.MERGE)
-                                    toastMsg = "导入成功（已合并）"
+                                    val (restored, assetSkips) = DataPorter.restoreAssets(context, p.payload)
+                                    val ok = viewModel.importAllPayload(restored, mode = ImportMode.MERGE)
+                                    val totalSkips = p.skipItems.size + assetSkips.size
+                                    toastMsg = if (!ok) {
+                                        "导入失败：写入数据失败，请重试"
+                                    } else if (totalSkips == 0) {
+                                        "导入成功（已合并）"
+                                    } else {
+                                        "导入成功（已合并，$totalSkips 项已跳过）"
+                                    }
                                 }
                             }) { Text("合并") }
                             Spacer(modifier = Modifier.size(4.dp))
                             TextButton(onClick = {
-                                val p = payload
-                                pendingImportPayload = null
+                                val p = plan
+                                pendingImportPlan = null
                                 scope.launch {
-                                    viewModel.importAllPayload(p, mode = ImportMode.CHARACTERS_ONLY)
-                                    toastMsg = "角色库已导入"
+                                    val (restored, assetSkips) = DataPorter.restoreAssets(context, p.payload)
+                                    val ok = viewModel.importAllPayload(restored, mode = ImportMode.CHARACTERS_ONLY)
+                                    val totalSkips = p.skipItems.size + assetSkips.size
+                                    toastMsg = if (!ok) {
+                                        "导入失败：写入数据失败，请重试"
+                                    } else if (totalSkips == 0) {
+                                        "角色库已导入"
+                                    } else {
+                                        "角色库已导入（$totalSkips 项已跳过）"
+                                    }
                                 }
                             }) { Text("仅导入角色库") }
                             Spacer(modifier = Modifier.size(4.dp))
                             TextButton(onClick = {
-                                val p = payload
-                                pendingImportPayload = null
+                                val p = plan
+                                pendingImportPlan = null
                                 scope.launch {
-                                    viewModel.importAllPayload(p, mode = ImportMode.REPLACE)
-                                    toastMsg = "导入成功（已替换）"
+                                    val (restored, assetSkips) = DataPorter.restoreAssets(context, p.payload)
+                                    val ok = viewModel.importAllPayload(restored, mode = ImportMode.REPLACE)
+                                    val totalSkips = p.skipItems.size + assetSkips.size
+                                    toastMsg = if (!ok) {
+                                        "导入失败：写入数据失败，已回滚本机数据"
+                                    } else if (totalSkips == 0) {
+                                        "导入成功（已替换）"
+                                    } else {
+                                        "导入成功（已替换，$totalSkips 项已跳过）"
+                                    }
                                 }
                             }) { Text("替换", color = MaterialTheme.colorScheme.error) }
                         }
@@ -1005,10 +1066,10 @@ private fun SettingsSectionCard(
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 6.dp)
             .clip(RoundedCornerShape(20.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.45f))
+            .background(com.quiddity.app.ui.components.glassCardColor())
             .border(
                 width = 1.dp,
-                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f),
+                color = com.quiddity.app.ui.components.glassCardBorderColor(),
                 shape = RoundedCornerShape(20.dp)
             )
             .padding(horizontal = 4.dp, vertical = 6.dp)
@@ -1065,7 +1126,7 @@ private fun FontSizeRow(
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 3.dp)
             .clip(RoundedCornerShape(14.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .background(com.quiddity.app.ui.components.glassCardColor())
     ) {
         Column(
             modifier = Modifier
@@ -1133,7 +1194,7 @@ private fun ToggleRow(
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 3.dp)
             .clip(RoundedCornerShape(14.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .background(com.quiddity.app.ui.components.glassCardColor())
     ) {
         Row(
             modifier = Modifier
@@ -1189,7 +1250,7 @@ private fun ClickableRow(
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 3.dp)
             .clip(RoundedCornerShape(14.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .background(com.quiddity.app.ui.components.glassCardColor())
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,

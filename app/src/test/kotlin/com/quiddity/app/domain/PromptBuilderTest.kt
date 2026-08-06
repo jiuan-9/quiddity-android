@@ -517,24 +517,4 @@ class PromptBuilderTest {
         assertFalse(backgroundPrompt.contains("【群聊场景】"), "背景模式不应出现【群聊场景】节")
     }
 
-    @Test
-    fun `conversation style lines give users autonomy`() {
-        assertEquals(
-            "表达方式完全遵循人设，不做额外限制。",
-            PromptBuilder.buildConversationStyleLine(QuiddityConstants.REPLY_STYLE_FOLLOW_PERSONA)
-        )
-        assertTrue(
-            PromptBuilder.buildConversationStyleLine(QuiddityConstants.REPLY_STYLE_CONCISE)
-                .contains("简短自然")
-        )
-        assertTrue(
-            PromptBuilder.buildConversationStyleLine(QuiddityConstants.REPLY_STYLE_DETAILED)
-                .contains("篇幅不限")
-        )
-        // 未知值回退为跟随人设
-        assertEquals(
-            PromptBuilder.buildConversationStyleLine(QuiddityConstants.REPLY_STYLE_FOLLOW_PERSONA),
-            PromptBuilder.buildConversationStyleLine("UNKNOWN")
-        )
-    }
 }

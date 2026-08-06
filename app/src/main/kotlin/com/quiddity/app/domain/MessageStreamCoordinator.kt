@@ -46,6 +46,11 @@ interface StreamCoordinator {
     }
 
     fun accept(delta: String): List<Signal>
+    /**
+     * 接收 DeepSeek 思考内容增量（reasoning_content）。
+     * 思考内容单独成一条 isThinking 消息，普通内容开始或流结束时自动完成。
+     */
+    fun acceptReasoning(delta: String): List<Signal>
     fun finalize(): List<Signal>
     fun snapshot(): List<Message>
 }
@@ -114,6 +119,12 @@ class MessageStreamCoordinator(
     private val splitEnabled: Boolean = true,
     private val startTimestamp: Long = System.currentTimeMillis(),
     /**
+     * 内部思考模式（提示词方式）：要求模型输出「【思考】...【回答】...」，
+     * 客户端把【思考】段拆成独立思考消息，【回答】段作为正式回复。
+     * 任意模型可用，不依赖服务端 reasoning_content 字段。
+     */
+    private val internalThinking: Boolean = false,
+    /**
      * 发言人会话 id（群聊消息从创建起带发言人，2.0.0 使用）。
      * 私聊为 null（默认值，向后兼容）。
      */
@@ -130,12 +141,96 @@ class MessageStreamCoordinator(
     private val pendingBrackets = mutableListOf<Pair<Int, String>>()
     private var currentIndex = 0
     private var currentStartTs = startTimestamp
+    // ===== 思考消息（DeepSeek reasoning_content）状态 =====
+    private val thinkingBuffer = StringBuilder()
+    private var thinkingIndex = 0
+    private var thinkingEmitted = false
+    private var thinkingStartTs = 0L
+    private var contentStarted = false
+
+    override fun acceptReasoning(delta: String): List<StreamCoordinator.Signal> {
+        if (delta.isEmpty()) return emptyList()
+        // 思考内容只出现在普通内容之前；内容开始后的异常 reasoning 直接忽略
+        if (contentStarted) return emptyList()
+        val signals = mutableListOf<StreamCoordinator.Signal>()
+        thinkingBuffer.append(delta)
+        if (!thinkingEmitted) {
+            thinkingEmitted = true
+            thinkingStartTs = System.currentTimeMillis()
+            val msg = buildThinkingMessage(streaming = true)
+            knownIds.add(msg.id)
+            signals += StreamCoordinator.Signal.New(msg)
+        } else {
+            signals += StreamCoordinator.Signal.Update(buildThinkingMessage(streaming = true))
+        }
+        // 思考内容硬上限保护：超限即完成当前思考消息（防 OOM）
+        if (thinkingBuffer.length >= hardCharLimit()) {
+            signals += completeThinking()
+        }
+        return signals
+    }
 
     override fun accept(delta: String): List<StreamCoordinator.Signal> {
         if (delta.isEmpty()) return emptyList()
-        buffer.append(delta)
-
         val signals = mutableListOf<StreamCoordinator.Signal>()
+        if (internalThinking && !contentStarted) {
+            // 内部思考：正式回答（【回答】标记）出现前，所有内容视为思考
+            thinkingBuffer.append(delta)
+            val accumulated = thinkingBuffer.toString()
+            val answerMarker = "【回答】"
+            val answerIdx = accumulated.indexOf(answerMarker)
+            if (answerIdx < 0) {
+                val stripped = stripThinkingMarker(accumulated)
+                if (accumulated.isNotEmpty() && stripped.isEmpty()) {
+                    // 仍是【思考】标记前缀（跨 delta 未完整）：继续累积，不发出
+                    return signals
+                }
+                thinkingBuffer.setLength(0)
+                thinkingBuffer.append(stripped)
+                if (thinkingBuffer.isNotEmpty()) {
+                    thinkingEmitted = true
+                    if (thinkingStartTs == 0L) thinkingStartTs = System.currentTimeMillis()
+                    val msg = buildThinkingMessage(streaming = true)
+                    if (knownIds.add(msg.id)) {
+                        signals += StreamCoordinator.Signal.New(msg)
+                    } else {
+                        signals += StreamCoordinator.Signal.Update(msg)
+                    }
+                }
+                // 思考内容过长仍无【回答】：强制切分，避免无限累积
+                if (thinkingBuffer.length >= hardCharLimit()) {
+                    signals += completeThinking()
+                    contentStarted = true
+                }
+                return signals
+            }
+            // 找到【回答】：思考段完成，剩余内容进入正式回复 buffer
+            val thinkPart = accumulated.substring(0, answerIdx)
+            val rest = accumulated.substring(answerIdx + answerMarker.length)
+            thinkingBuffer.setLength(0)
+            val thinkContent = stripThinkingMarker(thinkPart).trim()
+            if (thinkContent.isNotEmpty()) {
+                thinkingBuffer.append(thinkContent)
+                thinkingEmitted = true
+                if (thinkingStartTs == 0L) thinkingStartTs = System.currentTimeMillis()
+                signals += completeThinking()
+            } else {
+                // 模型直接回答（未输出思考内容）
+                thinkingEmitted = false
+                thinkingBuffer.clear()
+            }
+            contentStarted = true
+            buffer.append(rest)
+        } else {
+            // 普通内容已开始：此后的 reasoning 一律忽略（思考只出现在回复之前）
+            contentStarted = true
+            // 普通内容开始：先完成尚未收尾的思考消息（思考单独占一条消息）
+            if (thinkingEmitted || thinkingBuffer.isNotEmpty()) {
+                signals += completeThinking()
+            }
+            buffer.append(delta)
+        }
+
         // 循环切分：一次 delta 可能包含多个切分点，全部切出
         while (true) {
             val seg = findNextCompleteSegment()
@@ -182,6 +277,16 @@ class MessageStreamCoordinator(
 
     override fun finalize(): List<StreamCoordinator.Signal> {
         val signals = mutableListOf<StreamCoordinator.Signal>()
+        if (internalThinking && !contentStarted) {
+            // 模型未按格式输出【回答】：把已累积内容作为正式回复（不拆分思考）
+            val full = stripThinkingMarker(thinkingBuffer.toString()).trim()
+            thinkingBuffer.setLength(0)
+            if (full.isNotEmpty()) buffer.append(full)
+            thinkingEmitted = false
+            contentStarted = true
+        }
+        // 流结束时思考消息仍未收尾：完成它（思考单独占一条消息）
+        signals += completeThinking()
         // 流结束时仍有滞留括号段：合并进最后一条已发消息（或作为整条回复发出），
         // 根因修复——不再留下"只有动作没有下文"的悬空气泡。
         if (pendingBrackets.isNotEmpty()) {
@@ -236,6 +341,10 @@ class MessageStreamCoordinator(
 
     override fun snapshot(): List<Message> {
         val out = completed.toMutableList()
+        // 尚未完成的思考消息计入快照（与最终发出时一致）
+        if (thinkingEmitted || thinkingBuffer.isNotBlank()) {
+            out += buildThinkingMessage(streaming = thinkingEmitted)
+        }
         // 尚未被后续内容触发的括号段也计入快照（索引已预占，与最终发出时一致）
         pendingBrackets.forEach { (idx, text) ->
             out += buildMessageFromContentAt(idx, text, streaming = false)
@@ -558,6 +667,53 @@ class MessageStreamCoordinator(
         isStreaming = streaming,
         senderId = senderId
     )
+
+    private fun buildThinkingMessage(streaming: Boolean): Message = Message(
+        id = "${conversationId}_${runId}_think_$thinkingIndex",
+        conversationId = conversationId,
+        role = com.quiddity.app.data.model.Role.ASSISTANT,
+        content = thinkingBuffer.toString(),
+        timestamp = if (thinkingStartTs > 0L) thinkingStartTs else startTimestamp,
+        tokenCount = TokenEstimator.estimate(thinkingBuffer.toString()),
+        isStreaming = streaming,
+        isThinking = true,
+        senderId = senderId
+    )
+
+    /**
+     * 剥离内部思考的「【思考】」标记（支持跨 delta 的前缀累积）。
+     * - 文本以完整标记开头 → 去掉标记；
+     * - 文本是标记的不完整前缀（如「【思」）→ 返回空串（继续累积）；
+     * - 其他情况原样返回。
+     */
+    private fun stripThinkingMarker(text: String): String {
+        val marker = "【思考】"
+        if (text.startsWith(marker)) return text.removePrefix(marker)
+        if (marker.startsWith(text)) return ""
+        return text
+    }
+
+    /**
+     * 完成当前思考消息：发出 New/Complete（或对已流式消息 Update+Complete），
+     * 重置思考状态并推进思考索引。
+     */
+    private fun completeThinking(): List<StreamCoordinator.Signal> {
+        if (!thinkingEmitted && thinkingBuffer.isEmpty()) return emptyList()
+        val signals = mutableListOf<StreamCoordinator.Signal>()
+        val completedMsg = buildThinkingMessage(streaming = false)
+        if (knownIds.add(completedMsg.id)) {
+            signals += StreamCoordinator.Signal.New(completedMsg)
+        } else {
+            signals += StreamCoordinator.Signal.Update(completedMsg)
+        }
+        signals += StreamCoordinator.Signal.Complete(completedMsg)
+        completed += completedMsg
+        thinkingEmitted = false
+        thinkingBuffer.clear()
+        thinkingIndex++
+        thinkingStartTs = 0L
+        return signals
+    }
 
     /**
      * 用指定索引与内容构建完成消息（括号段使用预占索引，避免 id 冲突）。

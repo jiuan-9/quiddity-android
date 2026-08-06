@@ -141,16 +141,26 @@ class HomeViewModel(
     }
 
     // ===== 全局消息搜索 =====
-    // 首次搜索时懒加载全量消息索引并缓存；会话/消息在本次会话内变化不主动刷新，
-    // 数据量小、索引一次性构建，冷启动后首次输入略慢属预期。
+    // 首次搜索时懒加载全量消息索引并缓存；会话列表任何变化（新增/删除/消息导致
+    // updatedAt 变化）都会把索引标记为过期，下次搜索自动重建，保证新消息可搜。
     private val _messageIndex = MutableStateFlow<Map<String, List<Message>>>(emptyMap())
     private var messageIndexLoaded = false
+    private var indexDirty = true
+
+    init {
+        viewModelScope.launch {
+            conversationRepository.conversations.collect {
+                indexDirty = true
+            }
+        }
+    }
 
     /** 确保消息索引已加载（首次搜索时触发，只加载一次）。 */
     suspend fun ensureMessageIndexLoaded() {
-        if (messageIndexLoaded) return
+        if (messageIndexLoaded && !indexDirty) return
         _messageIndex.value = conversationRepository.exportAllMessages()
         messageIndexLoaded = true
+        indexDirty = false
     }
 
     /**

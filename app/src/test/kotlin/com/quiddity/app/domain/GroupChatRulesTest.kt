@@ -7,6 +7,7 @@ import com.quiddity.app.data.model.UserPersona
 import com.quiddity.app.util.QuiddityConstants
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -139,5 +140,30 @@ class GroupChatRulesTest {
             listOf("a"),
             GroupChatRules.mentionedMemberIds("@林晚 在吗 @林晚", members)
         )
+    }
+
+    @Test
+    fun `mentioned member requires word boundary after name`() {
+        val members = listOf(
+            group("a").copy(persona = Persona(name = "林晚")),
+            group("b").copy(persona = Persona(name = "A"))
+        )
+        // 名字后是字母/数字 → 属于更长词的前缀，不视为点名
+        assertTrue(GroupChatRules.mentionedMemberIds("@林晚哥 在吗", members).isEmpty())
+        assertTrue(GroupChatRules.mentionedMemberIds("@AI 你好", members).isEmpty())
+        assertTrue(GroupChatRules.mentionedMemberIds("@A1 编号", members).isEmpty())
+        // 名字后是空白 / 标点 / 结尾 → 视为点名
+        assertEquals(listOf("a"), GroupChatRules.mentionedMemberIds("@林晚 在吗", members))
+        assertEquals(listOf("a"), GroupChatRules.mentionedMemberIds("@林晚，吃饭", members))
+        assertEquals(listOf("a"), GroupChatRules.mentionedMemberIds("@林晚", members))
+        assertEquals(listOf("b"), GroupChatRules.mentionedMemberIds("快来看 @A！", members))
+    }
+
+    @Test
+    fun `isMentionedAt handles repeated markers`() {
+        assertTrue(GroupChatRules.isMentionedAt("说说 @小明 和 @小明哥 的区别", "小明"))
+        assertFalse(GroupChatRules.isMentionedAt("看看 @小明哥", "小明"))
+        assertFalse(GroupChatRules.isMentionedAt("", "小明"))
+        assertFalse(GroupChatRules.isMentionedAt("无点名", ""))
     }
 }

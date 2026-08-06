@@ -272,7 +272,7 @@ private fun SearchBar(
     Surface(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow
+        color = com.quiddity.app.ui.components.glassCardColor()
     ) {
         Row(
             modifier = Modifier
@@ -356,7 +356,7 @@ private fun DocumentNavChips(
                 color = if (selected) {
                     MaterialTheme.colorScheme.primaryContainer
                 } else {
-                    MaterialTheme.colorScheme.surfaceContainerLow
+                    com.quiddity.app.ui.components.glassCardColor()
                 },
                 shape = RoundedCornerShape(20.dp)
             ) {
@@ -646,7 +646,7 @@ private fun GlossaryTermCard(term: GlossaryProvider.Term) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        color = com.quiddity.app.ui.components.glassCardColor(),
         tonalElevation = 0.dp
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
@@ -723,7 +723,7 @@ private fun ApiKeyProviderCard(
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        color = com.quiddity.app.ui.components.glassCardColor(),
         tonalElevation = 0.dp
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -793,7 +793,7 @@ private fun BackupDoc(docsProvider: DocsProvider) {
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerLow
+            color = com.quiddity.app.ui.components.glassCardColor()
         ) {
             Text(
                 text = docsProvider.backupDocBody,

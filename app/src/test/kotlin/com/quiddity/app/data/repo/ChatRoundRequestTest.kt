@@ -61,6 +61,7 @@ class ChatRoundRequestTest {
             maxTokens = 512,
             temperature = 1.0,
             responsesUrl = QuiddityConstants.DEEPSEEK_RESPONSES_URL,
+            reasoningEffort = null,
             tools = null,
             tool_choice = null
         )
@@ -83,6 +84,7 @@ class ChatRoundRequestTest {
             maxTokens = 512,
             temperature = 1.0,
             responsesUrl = null,
+            reasoningEffort = null,
             tools = null,
             tool_choice = null
         )

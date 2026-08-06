@@ -156,14 +156,6 @@ data class Conversation(
      * 每次输入防抖写入；空字符串表示从未填写。
      */
     val quickSetupDraft: String = "",
-    /**
-     * 对话风格（用户自主权设置）：
-     * - [QuiddityConstants.REPLY_STYLE_FOLLOW_PERSONA] = 完全跟随人设（默认）
-     * - [QuiddityConstants.REPLY_STYLE_CONCISE] = 简洁自然
-     * - [QuiddityConstants.REPLY_STYLE_DETAILED] = 细腻详细
-     * 写入 system 提示词的【对话方式】节；旧数据缺省时回退为跟随人设。
-     */
-    val replyStyle: String = QuiddityConstants.REPLY_STYLE_FOLLOW_PERSONA,
     val apiCatalogId: String? = null,
     val maxTokens: Int? = null,
     val singleMessageTokens: Int? = null,
@@ -179,6 +171,18 @@ data class Conversation(
      * - 能力依赖官方平台：providerId=deepseek 且模型为 [QuiddityConstants.DEEPSEEK_RESPONSES_MODEL]
      */
     val webSearchEnabled: Boolean = false,
+    /**
+     * 会话级"DeepSeek 思考"开关（仅 DeepSeek 官方 flash / pro 模型生效，默认关闭）。
+     * - true = 请求携带 reasoning 能力，模型的思考内容单独成一条消息展示；
+     * - 非 DeepSeek 官方模型时忽略（不发送不识别字段）。
+     */
+    val thinkingEnabled: Boolean = false,
+    /**
+     * 思考深度（仅 [thinkingEnabled] 时生效）：
+     * - [QuiddityConstants.THINKING_DEPTH_SHALLOW] = 浅（默认，reasoning_effort=low）
+     * - [QuiddityConstants.THINKING_DEPTH_DEEP] = 深（reasoning_effort=high）
+     */
+    val thinkingDepth: String = QuiddityConstants.THINKING_DEPTH_SHALLOW,
     val contextLimit: Int = QuiddityConstants.DEFAULT_CONTEXT_LIMIT,
     val compileEnabled: Boolean = false,
     /**
@@ -351,6 +355,12 @@ data class Message(
      */
     val isNotice: Boolean = false,
     /**
+     * 是否为 DeepSeek 思考内容消息（单独占一条消息展示）。
+     * - true = 渲染为思考气泡（带"思考"标签，内容为模型 reasoning_content）；
+     * - 不发送给 LLM、不参与压缩（避免污染上下文），但保留在本地供回看。
+     */
+    val isThinking: Boolean = false,
+    /**
      * 发言人会话 id（2.0.0 群聊消息使用）。
      * - 群聊消息带 senderId（指向成员私聊会话 id）
      * - 私聊消息为 null（默认值，兼容旧数据）
@@ -400,6 +410,13 @@ data class AppSettings(
      * 默认 true（开启，营造剧本式旁白视觉）。
      */
     val bracketGrayEnabled: Boolean = true,
+    /**
+     * Markdown 渲染开关。
+     * 开启后 AI / 用户消息中的标题、加粗、斜体、删除线、行内代码、链接、
+     * 引用、列表标记会以 Markdown 样式显示；关闭后一律按纯文本显示。
+     * 围栏代码块（```）不受此开关影响，始终按代码卡片渲染。
+     */
+    val markdownEnabled: Boolean = true,
     /**
      * 会话列表界面壁纸 URI（全局设置）。
      * - null = 不使用壁纸（应用默认背景）

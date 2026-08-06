@@ -78,6 +78,7 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -94,11 +95,15 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import android.graphics.drawable.BitmapDrawable
+import coil.imageLoader
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.quiddity.app.data.model.ConversationType
 import com.quiddity.app.data.model.Message
 import com.quiddity.app.data.model.Role
 import com.quiddity.app.data.model.UserPersona
+import com.quiddity.app.di.ServiceLocator
 import com.quiddity.app.domain.ChatRecordSearch
 import com.quiddity.app.ui.chat.components.ChatInputBar
 import com.quiddity.app.ui.chat.components.CompressionProgressDialog
@@ -113,8 +118,12 @@ import com.quiddity.app.ui.chat.gesture.detectNativeHorizontalSwipe
 import com.quiddity.app.ui.theme.Motion
 import com.quiddity.app.util.ChatImageExporter
 import com.quiddity.app.util.DateUtils
+import com.quiddity.app.util.QuiddityConstants
+import com.quiddity.app.util.WallpaperContrast
 import kotlin.math.roundToInt
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 /*
  * ============================================================================
  * 开发规范 (Development Specifications)
@@ -426,7 +435,11 @@ fun ChatScreen(
 
     // ===== 错误处理 =====
     LaunchedEffect(errorEvent) {
-        if (errorEvent != null) viewModel.consumeError()
+        // errorEvent 兼作信息提示通道（思考降级 / 未返回思考内容等）
+        errorEvent?.let { msg ->
+            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+            viewModel.consumeError()
+        }
     }
     LaunchedEffect(chatError) {
         chatError?.let { error ->
@@ -479,6 +492,42 @@ fun ChatScreen(
 
     val wallpaperUri = conversation?.wallpaperUri
     val wallpaperDarken = conversation?.wallpaperDarken ?: 0f
+    // ===== 壁纸自动对比度 =====
+    // 采样壁纸亮度（Coil 小尺寸解码，64px 足够判定明暗），
+    // 自动叠加保证文字可读的遮罩基线；只调背景遮罩，不触碰任何文字渲染。
+    val imageLoader = LocalContext.current.imageLoader
+    var wallpaperBrightness by remember(wallpaperUri) {
+        mutableFloatStateOf(WallpaperContrast.DEFAULT_BRIGHTNESS)
+    }
+    LaunchedEffect(wallpaperUri) {
+        if (wallpaperUri == null) {
+            wallpaperBrightness = WallpaperContrast.DEFAULT_BRIGHTNESS
+            return@LaunchedEffect
+        }
+        val brightness = withContext(Dispatchers.IO) {
+            runCatching {
+                val request = ImageRequest.Builder(context)
+                    .data(wallpaperUri)
+                    .size(64)
+                    .allowHardware(false)
+                    .build()
+                val drawable = imageLoader.execute(request).drawable
+                val bitmap = (drawable as? BitmapDrawable)?.bitmap
+                    ?: return@runCatching WallpaperContrast.DEFAULT_BRIGHTNESS
+                WallpaperContrast.sampleBrightness(bitmap)
+            }.getOrDefault(WallpaperContrast.DEFAULT_BRIGHTNESS)
+        }
+        wallpaperBrightness = brightness
+    }
+    val wallpaperScrim = remember(wallpaperBrightness, wallpaperDarken, settings.darkMode) {
+        val alpha = WallpaperContrast.effectiveScrimAlpha(
+            wallpaperBrightness,
+            wallpaperDarken,
+            settings.darkMode
+        )
+        if (settings.darkMode) Color.Black.copy(alpha = alpha)
+        else Color.White.copy(alpha = alpha)
+    }
     val colorScheme = MaterialTheme.colorScheme
     // 导出长图样式：跟随当前主题（浅色/深色），背景与气泡配色与聊天界面一致
     val exportStyle = remember(colorScheme) {
@@ -611,12 +660,22 @@ fun ChatScreen(
                 model = wallpaperUri,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
+                // API 31+ 对壁纸做轻模糊：透过半透明气泡/面板看到磨砂壁纸（毛玻璃质感）；
+                // 低版本无 RenderEffect，自动降级为纯半透明，不影响功能。
+                modifier = Modifier
+                    .fillMaxSize()
+                    .then(
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            Modifier.blur(3.dp)
+                        } else {
+                            Modifier
+                        }
+                    )
             )
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = wallpaperDarken))
+                    .background(wallpaperScrim)
             )
         }
 
@@ -812,6 +871,8 @@ fun ChatScreen(
                     }
                     else -> {
                         val lastMsg = messages.lastOrNull()
+                        // 当前会话是否启用思考（内部思考任意模型可用，思考期间动画气泡显示"思考中"）
+                        val thinkingActive = conversation?.thinkingEnabled == true
                         // 群聊用头像栏三点表示正在回复，不显示私聊的思考气泡
                         val showThinking = !isGroupChat && isGenerating &&
                             (lastMsg == null || !(lastMsg.role == Role.ASSISTANT && lastMsg.isStreaming))
@@ -841,7 +902,10 @@ fun ChatScreen(
                                                 tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate)
                                             )
                                         ) {
-                                            ThinkingBubble(aiAvatarUri = conversation?.persona?.aiAvatarUri)
+                                            ThinkingBubble(
+                                                aiAvatarUri = conversation?.persona?.aiAvatarUri,
+                                                thinkingLabel = if (thinkingActive) "思考中" else null
+                                            )
                                         }
                                     }
                                 }
@@ -890,6 +954,7 @@ fun ChatScreen(
                                         MessageBubbleItem(
                                             message = message,
                                             isLastAi = message.role == Role.ASSISTANT &&
+                                                !message.isThinking &&
                                                 messages.lastOrNull { !it.isNotice }?.id == message.id,
                                             isGroupChat = isGroupChat,
                                             inMultiSelect = multiSelectMode,
@@ -912,6 +977,7 @@ fun ChatScreen(
                                                 message.senderId?.let { senderAvatarMap[it] }
                                             } else null,
                                             bracketGrayEnabled = settings.bracketGrayEnabled,
+                                            markdownEnabled = settings.markdownEnabled,
                                             typingDelayEnabled = settings.typingDelayEnabled,
                                             typingDelayMsPerChar = settings.typingDelayMsPerChar,
                                             isSelected = selectedMessageIds.contains(message.id),
@@ -923,10 +989,12 @@ fun ChatScreen(
                                             onEnterMultiSelect = ::enterMultiSelect,
                                             onToggleSelection = ::toggleSelection,
                                             onToggleActions = {
-                                                expandedActionId = if (expandedActionId == message.id) {
-                                                    null
-                                                } else {
-                                                    message.id
+                                                if (!message.isThinking) {
+                                                    expandedActionId = if (expandedActionId == message.id) {
+                                                        null
+                                                    } else {
+                                                        message.id
+                                                    }
                                                 }
                                             },
                                             onStartRewrite = { rewritingMessageId = it; expandedActionId = null }
@@ -1143,7 +1211,10 @@ private fun EmptyChatState(
 }
 
 @Composable
-private fun ThinkingBubble(aiAvatarUri: String?) {
+private fun ThinkingBubble(
+    aiAvatarUri: String?,
+    thinkingLabel: String? = null
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1184,7 +1255,19 @@ private fun ThinkingBubble(aiAvatarUri: String?) {
                 .padding(horizontal = 18.dp, vertical = 14.dp),
             contentAlignment = Alignment.CenterStart
         ) {
-            TypingIndicator()
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (thinkingLabel != null) {
+                    Text(
+                        text = thinkingLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    )
+                }
+                TypingIndicator()
+            }
         }
     }
 }
@@ -1349,6 +1432,7 @@ private fun MessageBubbleItem(
     senderName: String?,
     senderAvatarUri: String?,
     bracketGrayEnabled: Boolean,
+    markdownEnabled: Boolean,
     typingDelayEnabled: Boolean,
     typingDelayMsPerChar: Int,
     isSelected: Boolean,
@@ -1420,6 +1504,7 @@ private fun MessageBubbleItem(
         senderName = senderName,
         senderAvatarUri = senderAvatarUri,
         bracketGrayEnabled = bracketGrayEnabled,
+        markdownEnabled = markdownEnabled,
         typingDelayEnabled = typingDelayEnabled,
         typingDelayMsPerChar = typingDelayMsPerChar,
         isLastAiMessage = isLastAi,

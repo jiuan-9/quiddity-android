@@ -81,6 +81,8 @@ open class ChatApi {
     sealed class StreamEvent {
         /** 内容片段（可能为空串，调用方自行忽略）。 */
         data class Content(val text: String) : StreamEvent()
+        /** DeepSeek 思考内容片段（reasoning_content，先于普通内容到达）。 */
+        data class Reasoning(val text: String) : StreamEvent()
         /** 流结束（[DONE] 或连接关闭）时聚合出的完整工具调用列表，无工具调用时为空列表。 */
         data class ToolCalls(val calls: List<ChatStreamParser.AggregatedToolCall>) : StreamEvent()
     }
@@ -120,10 +122,35 @@ open class ChatApi {
         // 幂等关闭 channel：AtomicBoolean 保证 safeClose 只执行一次；
         // Channel.close() 本身亦幂等，已关闭时调用为 no-op。
         val closed = java.util.concurrent.atomic.AtomicBoolean(false)
+        // 消费者主动取消标记：awaitClose 置位后再 cancel，onFailure 据此区分
+        // 「用户停止」与「真实网络错误」，避免停止生成被误报为错误。
+        val cancelledByConsumer = java.util.concurrent.atomic.AtomicBoolean(false)
 
         fun safeClose(cause: Throwable? = null) {
             if (!closed.compareAndSet(false, true)) return
             channel.close(cause)
+        }
+
+        /**
+         * 带背压的内容下发：消费者慢时阻塞 SSE 回调线程（自然形成 TCP 背压），
+         * 保证任何内容片段都不会被静默丢弃；channel 已关闭时静默忽略。
+         */
+        fun emitContent(text: String) {
+            runCatching {
+                kotlinx.coroutines.runBlocking { channel.send(StreamEvent.Content(text)) }
+            }
+        }
+
+        fun emitReasoning(text: String) {
+            runCatching {
+                kotlinx.coroutines.runBlocking { channel.send(StreamEvent.Reasoning(text)) }
+            }
+        }
+
+        fun emitToolCalls(calls: List<ChatStreamParser.AggregatedToolCall>) {
+            runCatching {
+                kotlinx.coroutines.runBlocking { channel.send(StreamEvent.ToolCalls(calls)) }
+            }
         }
 
         val eventSourceListener = object : EventSourceListener() {
@@ -132,25 +159,32 @@ open class ChatApi {
                 val parsed = parser.acceptChunk(data)
                 if (parsed == null) {
                     // [DONE] —— 结束流：先下发聚合完成的工具调用
-                    trySend(StreamEvent.ToolCalls(parser.takeToolCalls()))
+                    emitToolCalls(parser.takeToolCalls())
                     safeClose()
                     return
                 }
                 val content = parsed.content
                 if (!content.isNullOrEmpty()) {
-                    // trySend 在 channel 满时返回失败；SSE 是高吞吐流，
-                    // 消费者慢时丢弃部分片段是可接受的（不等同丢消息）。
-                    trySend(StreamEvent.Content(content))
+                    emitContent(content)
+                } else {
+                    parsed.reasoning?.let { reasoning ->
+                        if (reasoning.isNotEmpty()) emitReasoning(reasoning)
+                    }
                 }
             }
 
             override fun onClosed(eventSource: EventSource) {
                 // 服务端未发 [DONE] 直接关闭：仍把已聚合的工具调用下发，避免丢失
-                trySend(StreamEvent.ToolCalls(parser.takeToolCalls()))
+                emitToolCalls(parser.takeToolCalls())
                 safeClose()
             }
 
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
+                // 消费者主动取消（用户停止生成 / 页面销毁）：不是错误，静默结束
+                if (cancelledByConsumer.get()) {
+                    safeClose()
+                    return
+                }
                 val msg = t?.message ?: response?.let { "HTTP ${it.code}: ${it.message}" } ?: "未知错误"
                 // 尝试读取错误响应体（多数 API 返回 JSON 错误描述），包装进异常
                 val errorBody = runCatching { response?.peekBody(2 * 1024)?.string().orEmpty() }
@@ -169,6 +203,7 @@ open class ChatApi {
 
         awaitClose {
             closed.set(true)
+            cancelledByConsumer.set(true)
             es.cancel()
         }
     }.flowOn(Dispatchers.IO)
@@ -207,10 +242,29 @@ open class ChatApi {
         }
 
         val closed = java.util.concurrent.atomic.AtomicBoolean(false)
+        val cancelledByConsumer = java.util.concurrent.atomic.AtomicBoolean(false)
 
         fun safeClose(cause: Throwable? = null) {
             if (!closed.compareAndSet(false, true)) return
             channel.close(cause)
+        }
+
+        fun emitContent(text: String) {
+            runCatching {
+                kotlinx.coroutines.runBlocking { channel.send(StreamEvent.Content(text)) }
+            }
+        }
+
+        fun emitReasoning(text: String) {
+            runCatching {
+                kotlinx.coroutines.runBlocking { channel.send(StreamEvent.Reasoning(text)) }
+            }
+        }
+
+        fun emitToolCalls(calls: List<ChatStreamParser.AggregatedToolCall>) {
+            runCatching {
+                kotlinx.coroutines.runBlocking { channel.send(StreamEvent.ToolCalls(calls)) }
+            }
         }
 
         val eventSourceListener = object : EventSourceListener() {
@@ -219,7 +273,7 @@ open class ChatApi {
                 val parsed = parser.acceptEvent(type, data)
                 if (parsed == null) {
                     // 终态事件（completed/incomplete/failed）：下发聚合完成的函数调用后结束
-                    trySend(StreamEvent.ToolCalls(parser.takeToolCalls()))
+                    emitToolCalls(parser.takeToolCalls())
                     val error = parser.terminalError
                     if (error != null) {
                         safeClose(ChatException(error))
@@ -230,16 +284,24 @@ open class ChatApi {
                 }
                 val content = parsed.content
                 if (!content.isNullOrEmpty()) {
-                    trySend(StreamEvent.Content(content))
+                    emitContent(content)
+                } else {
+                    parsed.reasoning?.let { reasoning ->
+                        if (reasoning.isNotEmpty()) emitReasoning(reasoning)
+                    }
                 }
             }
 
             override fun onClosed(eventSource: EventSource) {
-                trySend(StreamEvent.ToolCalls(parser.takeToolCalls()))
+                emitToolCalls(parser.takeToolCalls())
                 safeClose()
             }
 
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
+                if (cancelledByConsumer.get()) {
+                    safeClose()
+                    return
+                }
                 val msg = t?.message ?: response?.let { "HTTP ${it.code}: ${it.message}" } ?: "未知错误"
                 val errorBody = runCatching { response?.peekBody(2 * 1024)?.string().orEmpty() }
                     .getOrDefault("")
@@ -257,6 +319,7 @@ open class ChatApi {
 
         awaitClose {
             closed.set(true)
+            cancelledByConsumer.set(true)
             es.cancel()
         }
     }.flowOn(Dispatchers.IO)

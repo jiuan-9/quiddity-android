@@ -89,7 +89,7 @@ fun DelaySettingsPanel(
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(14.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            color = com.quiddity.app.ui.components.glassCardColor(),
             tonalElevation = 0.dp
         ) {
             Column(modifier = Modifier.padding(16.dp)) {

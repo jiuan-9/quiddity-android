@@ -362,7 +362,7 @@ private fun CatalogCard(
             ),
         shape = RoundedCornerShape(16.dp),
         color = if (isActive) MaterialTheme.colorScheme.primaryContainer
-        else MaterialTheme.colorScheme.surfaceContainerLow,
+        else com.quiddity.app.ui.components.glassCardColor(),
         tonalElevation = 0.dp
     ) {
         Row(

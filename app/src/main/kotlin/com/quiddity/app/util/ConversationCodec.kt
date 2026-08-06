@@ -435,8 +435,10 @@ object ConversationCodec {
         // 解析人设卡
         val persona = parsePersonaSection(content, isMarkdown = true)
 
-        // 移除头部和人设卡，保留消息部分
-        val bodyStart = content.indexOf("\n---\n", content.indexOf("---\n"))
+        // 移除头部（第一个分隔线）后保留剩余部分（人设卡与消息块）：
+        // 人设卡作为无消息头的分块被 split 后自然跳过，不再依赖"第二个分隔线"定位，
+        // 修复无"人设卡"导出导入时第一条消息被误切的问题。
+        val bodyStart = content.indexOf("\n---\n")
             .let { if (it >= 0) it + 5 else 0 }
         val body = if (bodyStart > 0) content.substring(bodyStart) else content
 
@@ -444,6 +446,9 @@ object ConversationCodec {
         val blocks = body.split(Regex("\n\n---\n\n"))
         val messages = mutableListOf<Message>()
         val now = System.currentTimeMillis()
+        // 单调递增保护：仅当同一秒内出现多条消息时顺延 1ms，保证导入后顺序稳定，
+        // 不做任何人为的时间回拨
+        var prevTimestamp = Long.MIN_VALUE
 
         for ((index, block) in blocks.withIndex()) {
             val trimmedBlock = block.trim()
@@ -472,7 +477,13 @@ object ConversationCodec {
             }
 
             // 时间戳：基于今日 + 解析的 HH:mm:ss
-            val timestamp = parseTimestampToday(timeStr, now)
+            val parsedTimestamp = parseTimestampToday(timeStr, now)
+            val timestamp = if (parsedTimestamp > prevTimestamp) {
+                parsedTimestamp
+            } else {
+                prevTimestamp + 1
+            }
+            prevTimestamp = timestamp
 
             messages.add(
                 Message(
@@ -480,7 +491,7 @@ object ConversationCodec {
                     conversationId = targetConversationId,
                     role = role,
                     content = msgContent,
-                    timestamp = timestamp - (messages.size - index) // 保证顺序
+                    timestamp = timestamp
                 )
             )
         }
@@ -525,6 +536,7 @@ object ConversationCodec {
         val blocks = body.split(Regex("\n\n----------------------------------------\n\n"))
         val messages = mutableListOf<Message>()
         val now = System.currentTimeMillis()
+        var prevTimestamp = Long.MIN_VALUE
 
         for ((index, block) in blocks.withIndex()) {
             val trimmedBlock = block.trim()
@@ -568,7 +580,13 @@ object ConversationCodec {
                 else -> Role.USER
             }
 
-            val timestamp = parseTimestampToday(timeStr, now)
+            val parsedTimestamp = parseTimestampToday(timeStr, now)
+            val timestamp = if (parsedTimestamp > prevTimestamp) {
+                parsedTimestamp
+            } else {
+                prevTimestamp + 1
+            }
+            prevTimestamp = timestamp
 
             messages.add(
                 Message(
@@ -576,7 +594,7 @@ object ConversationCodec {
                     conversationId = targetConversationId,
                     role = role,
                     content = msgContent,
-                    timestamp = timestamp - (messages.size - index)
+                    timestamp = timestamp
                 )
             )
         }

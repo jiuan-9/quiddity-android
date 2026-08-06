@@ -16,6 +16,7 @@ import android.text.TextPaint
 import androidx.core.content.FileProvider
 import com.quiddity.app.data.model.Message
 import com.quiddity.app.data.model.Role
+import com.quiddity.app.util.WallpaperContrast
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -220,7 +221,21 @@ object ChatImageExporter {
     ): File = withContext(Dispatchers.Default) {
         val segments = buildSegments(messages, senderNames)
         val wallpaper = wallpaperUri?.let { decodeWallpaper(context, it) }
-        val bitmap = renderBitmap(segments, aiName, conversationTitle, style, wallpaper, wallpaperDarken)
+        // 导出图与聊天页同一套自动对比度遮罩：按壁纸亮度 + 主题方向计算
+        val (scrimColor, scrimAlpha) = if (wallpaper != null) {
+            val darkMode = WallpaperContrast.pixelBrightness(style.background) < 0.5f
+            val alpha = WallpaperContrast.effectiveScrimAlpha(
+                WallpaperContrast.sampleBrightness(wallpaper),
+                wallpaperDarken,
+                darkMode
+            )
+            WallpaperContrast.scrimColor(darkMode) to alpha
+        } else {
+            0 to 0f
+        }
+        val bitmap = renderBitmap(
+            segments, aiName, conversationTitle, style, wallpaper, scrimColor, scrimAlpha
+        )
         val file = File(
             context.cacheDir,
             "quiddity_share_${System.currentTimeMillis()}.png"
@@ -264,7 +279,8 @@ object ChatImageExporter {
         conversationTitle: String,
         style: ExportStyle,
         wallpaper: Bitmap?,
-        wallpaperDarken: Float
+        scrimColor: Int,
+        scrimAlpha: Float
     ): Bitmap {
         val fit = fitSegments(segments, MAX_HEIGHT, FOOTER_HEIGHT, ::segmentHeight)
         val list = fit.segments
@@ -277,7 +293,7 @@ object ChatImageExporter {
         val canvas = Canvas(bitmap)
         canvas.drawColor(style.background)
         if (wallpaper != null) {
-            drawWallpaper(canvas, wallpaper, IMAGE_WIDTH, totalHeight, wallpaperDarken)
+            drawWallpaper(canvas, wallpaper, IMAGE_WIDTH, totalHeight, scrimColor, scrimAlpha)
         }
 
         drawHeader(canvas, aiName, conversationTitle, style)
@@ -306,14 +322,16 @@ object ChatImageExporter {
     /**
      * Draws the wallpaper tiled vertically at fill-width scale (the export is
      * much taller than the original image, so stretching would distort it),
-     * then overlays the same black darken scrim used by the chat screen.
+     * then overlays the same auto-contrast scrim used by the chat screen
+     * （深色主题=黑遮罩压暗亮壁纸，浅色主题=白遮罩提亮暗壁纸）。
      */
     private fun drawWallpaper(
         canvas: Canvas,
         wallpaper: Bitmap,
         targetW: Int,
         targetH: Int,
-        darken: Float
+        scrimColor: Int,
+        scrimAlpha: Float
     ) {
         if (wallpaper.width <= 0 || wallpaper.height <= 0) return
         val scale = targetW.toFloat() / wallpaper.width
@@ -324,8 +342,10 @@ object ChatImageExporter {
             canvas.drawBitmap(wallpaper, src, Rect(0, top, targetW, top + tileH), null)
             top += tileH
         }
-        if (darken > 0f) {
-            canvas.drawColor(Color.argb((darken * 255f).toInt().coerceIn(0, 255), 0, 0, 0))
+        if (scrimAlpha > 0f) {
+            val alphaByte = (scrimAlpha * 255f).toInt().coerceIn(0, 255)
+            val color = (scrimColor and 0x00FFFFFF) or (alphaByte shl 24)
+            canvas.drawColor(color)
         }
     }
 

@@ -231,7 +231,7 @@ private fun QrCodeCard(
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        color = com.quiddity.app.ui.components.glassCardColor(),
         tonalElevation = 0.dp
     ) {
         Column(

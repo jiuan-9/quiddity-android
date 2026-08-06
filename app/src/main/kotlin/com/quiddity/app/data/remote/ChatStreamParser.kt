@@ -55,7 +55,9 @@ class ChatStreamParser {
      */
     data class ParsedChunk(
         val content: String?,
-        val toolCalls: List<ToolCallFragment>
+        val toolCalls: List<ToolCallFragment>,
+        /** DeepSeek 思考内容增量（reasoning_content / reasoning 事件）。 */
+        val reasoning: String? = null
     )
 
     /**
@@ -105,6 +107,7 @@ class ChatStreamParser {
             val delta = choice?.delta
             ParsedChunk(
                 content = delta?.content,
+                reasoning = delta?.reasoning_content,
                 toolCalls = delta?.tool_calls.orEmpty().map { tc ->
                     ToolCallFragment(
                         index = tc.index,
@@ -193,6 +196,13 @@ class ResponsesStreamParser {
                     json.parseToJsonElement(dataLine).jsonObject["delta"]?.jsonPrimitive?.contentOrNull
                 }.getOrNull()
                 return ChatStreamParser.ParsedChunk(delta, emptyList())
+            }
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_text.delta" -> {
+                val delta = runCatching {
+                    json.parseToJsonElement(dataLine).jsonObject["delta"]?.jsonPrimitive?.contentOrNull
+                }.getOrNull()
+                return ChatStreamParser.ParsedChunk("", emptyList(), delta)
             }
             "response.function_call_arguments.delta" -> {
                 val obj = runCatching { json.parseToJsonElement(dataLine).jsonObject }.getOrNull() ?: return ChatStreamParser.ParsedChunk("", emptyList())

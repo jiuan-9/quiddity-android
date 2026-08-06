@@ -96,6 +96,7 @@ class SettingsStore(private val context: Context) {
         val ACTIVE_CATALOG_ID = stringPreferencesKey("active_catalog_id")
         val CATALOG_JSON = stringPreferencesKey("catalog_json")
         val BRACKET_GRAY_ENABLED = booleanPreferencesKey("bracket_gray_enabled")
+        val MARKDOWN_ENABLED = booleanPreferencesKey("markdown_enabled")
         val LIST_WALLPAPER_URI = stringPreferencesKey("list_wallpaper_uri")
         val LIST_WALLPAPER_DARKEN = floatPreferencesKey("list_wallpaper_darken")
         val TYPING_DELAY_ENABLED = booleanPreferencesKey("typing_delay_enabled")
@@ -127,6 +128,7 @@ class SettingsStore(private val context: Context) {
                 activeCatalogId = this[Keys.ACTIVE_CATALOG_ID] ?: d.activeCatalogId,
                 catalog = parseCatalog(this[Keys.CATALOG_JSON]),
                 bracketGrayEnabled = this[Keys.BRACKET_GRAY_ENABLED] ?: d.bracketGrayEnabled,
+                markdownEnabled = this[Keys.MARKDOWN_ENABLED] ?: d.markdownEnabled,
                 listWallpaperUri = this[Keys.LIST_WALLPAPER_URI] ?: d.listWallpaperUri,
                 listWallpaperDarken = this[Keys.LIST_WALLPAPER_DARKEN] ?: d.listWallpaperDarken,
                 typingDelayEnabled = this[Keys.TYPING_DELAY_ENABLED] ?: d.typingDelayEnabled,
@@ -157,43 +159,45 @@ class SettingsStore(private val context: Context) {
     suspend fun update(block: (AppSettings) -> AppSettings): Boolean {
         return try {
             context.appSettingsDataStore.edit { prefs ->
-            val current = prefs.toAppSettings()
-            val next = block(current)
-            prefs[Keys.DARK_MODE] = next.darkMode
-            // 同步镜像 darkMode 到 SharedPreferences，确保下次启动 splash 主题与用户设置一致
-            splashPrefs.edit().putBoolean(SPLASH_KEY_DARK_MODE, next.darkMode).apply()
-            next.userAvatarUri?.let { prefs[Keys.USER_AVATAR] = it } ?: prefs.remove(Keys.USER_AVATAR)
-            prefs[Keys.GLOBAL_MAX_TOKENS] = next.globalMaxTokens
-            prefs[Keys.GLOBAL_SINGLE_MSG_TOKENS] = next.globalSingleMessageTokens
-            prefs[Keys.GLOBAL_CONTEXT_LIMIT] = next.globalContextLimit
-            prefs[Keys.MULTILINE_SPLIT] = next.multilineAutoSplit
-            prefs[Keys.ENTER_TO_SEND] = next.enterToSend
-            next.activeCatalogId?.let { prefs[Keys.ACTIVE_CATALOG_ID] = it } ?: prefs.remove(Keys.ACTIVE_CATALOG_ID)
-            prefs[Keys.BRACKET_GRAY_ENABLED] = next.bracketGrayEnabled
-            next.listWallpaperUri?.let { prefs[Keys.LIST_WALLPAPER_URI] = it } ?: prefs.remove(Keys.LIST_WALLPAPER_URI)
-            prefs[Keys.LIST_WALLPAPER_DARKEN] = next.listWallpaperDarken
-            prefs[Keys.TYPING_DELAY_ENABLED] = next.typingDelayEnabled
-            prefs[Keys.TYPING_DELAY_MS_PER_CHAR] = next.typingDelayMsPerChar
-            prefs[Keys.SEND_DELAY_ENABLED] = next.sendDelayEnabled
-            prefs[Keys.SEND_DELAY_SECONDS] = next.sendDelaySeconds
-            prefs[Keys.FOLLOW_SYSTEM_FONT] = next.followSystemFont
-            prefs[Keys.FONT_SCALE] = next.fontScale
-            prefs[Keys.PROACTIVE_MESSAGE_ENABLED] = next.proactiveMessageEnabled
-            prefs[Keys.PROACTIVE_MESSAGE_LAST_RESET_DATE] = next.proactiveMessageLastResetDate
-            prefs[Keys.GROUP_TUTORIAL_SEEN] = next.groupTutorialSeen
-            prefs[Keys.SOLO_CHAT_COUNTER] = next.soloChatCounter
-            prefs[Keys.GROUP_CHAT_COUNTER] = next.groupChatCounter
-            // JSON 序列化失败不应让整个 edit 事务失败；失败时记录到 logcat。
-            runCatching {
-                json.encodeToString(
-                    kotlinx.serialization.builtins.ListSerializer(ApiCatalogEntry.serializer()),
-                    next.catalog
-                )
-            }.onSuccess { encoded ->
-                prefs[Keys.CATALOG_JSON] = encoded
-            }.onFailure {
-                android.util.Log.e("SettingsStore", "序列化 API 名册失败，保留旧值", it)
-            }
+                val current = prefs.toAppSettings()
+                val next = block(current)
+                // 名册 JSON 序列化失败时整个事务中止（不写任何键），
+                // 避免"界面提示保存成功、实际名册未落盘"的静默不一致
+                val catalogJson = try {
+                    json.encodeToString(
+                        kotlinx.serialization.builtins.ListSerializer(ApiCatalogEntry.serializer()),
+                        next.catalog
+                    )
+                } catch (t: Throwable) {
+                    android.util.Log.e("SettingsStore", "序列化 API 名册失败，事务中止", t)
+                    throw t
+                }
+                prefs[Keys.DARK_MODE] = next.darkMode
+                // 同步镜像 darkMode 到 SharedPreferences，确保下次启动 splash 主题与用户设置一致
+                splashPrefs.edit().putBoolean(SPLASH_KEY_DARK_MODE, next.darkMode).apply()
+                next.userAvatarUri?.let { prefs[Keys.USER_AVATAR] = it } ?: prefs.remove(Keys.USER_AVATAR)
+                prefs[Keys.GLOBAL_MAX_TOKENS] = next.globalMaxTokens
+                prefs[Keys.GLOBAL_SINGLE_MSG_TOKENS] = next.globalSingleMessageTokens
+                prefs[Keys.GLOBAL_CONTEXT_LIMIT] = next.globalContextLimit
+                prefs[Keys.MULTILINE_SPLIT] = next.multilineAutoSplit
+                prefs[Keys.ENTER_TO_SEND] = next.enterToSend
+                next.activeCatalogId?.let { prefs[Keys.ACTIVE_CATALOG_ID] = it } ?: prefs.remove(Keys.ACTIVE_CATALOG_ID)
+                prefs[Keys.BRACKET_GRAY_ENABLED] = next.bracketGrayEnabled
+                prefs[Keys.MARKDOWN_ENABLED] = next.markdownEnabled
+                next.listWallpaperUri?.let { prefs[Keys.LIST_WALLPAPER_URI] = it } ?: prefs.remove(Keys.LIST_WALLPAPER_URI)
+                prefs[Keys.LIST_WALLPAPER_DARKEN] = next.listWallpaperDarken
+                prefs[Keys.TYPING_DELAY_ENABLED] = next.typingDelayEnabled
+                prefs[Keys.TYPING_DELAY_MS_PER_CHAR] = next.typingDelayMsPerChar
+                prefs[Keys.SEND_DELAY_ENABLED] = next.sendDelayEnabled
+                prefs[Keys.SEND_DELAY_SECONDS] = next.sendDelaySeconds
+                prefs[Keys.FOLLOW_SYSTEM_FONT] = next.followSystemFont
+                prefs[Keys.FONT_SCALE] = next.fontScale
+                prefs[Keys.PROACTIVE_MESSAGE_ENABLED] = next.proactiveMessageEnabled
+                prefs[Keys.PROACTIVE_MESSAGE_LAST_RESET_DATE] = next.proactiveMessageLastResetDate
+                prefs[Keys.GROUP_TUTORIAL_SEEN] = next.groupTutorialSeen
+                prefs[Keys.SOLO_CHAT_COUNTER] = next.soloChatCounter
+                prefs[Keys.GROUP_CHAT_COUNTER] = next.groupChatCounter
+                prefs[Keys.CATALOG_JSON] = catalogJson
             }
             true
         } catch (t: Throwable) {

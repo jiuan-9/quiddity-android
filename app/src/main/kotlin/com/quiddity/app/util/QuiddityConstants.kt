@@ -60,6 +60,10 @@ object QuiddityConstants {
     const val DEEPSEEK_RESPONSES_MODEL = "deepseek-v4-flash"
     /** DeepSeek 官方 Responses API 端点（服务端执行 web_search）。 */
     const val DEEPSEEK_RESPONSES_URL = "https://api.deepseek.com/responses"
+    /** 思考深度：浅（默认，reasoning_effort=low）。 */
+    const val THINKING_DEPTH_SHALLOW = "SHALLOW"
+    /** 思考深度：深（reasoning_effort=high）。 */
+    const val THINKING_DEPTH_DEEP = "DEEP"
 
     /** 单条消息 Token 上下界。 */
     const val MIN_SINGLE_MESSAGE_TOKENS = 32
@@ -109,9 +113,6 @@ object QuiddityConstants {
     const val GROUP_MEMORY_MAX_TOKENS = 1_000
     /** 群聊快速判断 max_tokens 上限（5.2：只输出「0 / 要说的内容」）。 */
     const val GROUP_DECIDE_MAX_TOKENS = 16
-    /** v1 群聊人数上限建议（5.2）。 */
-    const val GROUP_MEMBER_LIMIT = 4
-
     // ===== 群聊 =====
     /** 群聊上下文条数默认值（方案六.2：最近 N 条，默认 50）。 */
     const val GROUP_DEFAULT_CONTEXT_LIMIT = 50
@@ -138,14 +139,6 @@ object QuiddityConstants {
     const val SOLO_DEFAULT_TITLE_PREFIX = "新会话"
     /** 群聊默认名前缀（新群聊 1、2、3…，方案二.4）。 */
     const val GROUP_DEFAULT_TITLE_PREFIX = "新群聊"
-
-    // ===== 对话风格（用户自主权：表达方式由用户选择，默认完全跟随人设） =====
-    /** 跟随人设：不做额外限制（默认）。 */
-    const val REPLY_STYLE_FOLLOW_PERSONA = "FOLLOW_PERSONA"
-    /** 简洁自然：回复简短，像日常聊天。 */
-    const val REPLY_STYLE_CONCISE = "CONCISE"
-    /** 细腻详细：回复充分展开，篇幅不限。 */
-    const val REPLY_STYLE_DETAILED = "DETAILED"
 
     // ===== 快速设定 =====
     /** 快速设定的 max_tokens 上限（全面档 5000 汉字，按 ~1.6 token/字 预留余量）。 */

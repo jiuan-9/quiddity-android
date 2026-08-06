@@ -1,5 +1,8 @@
 package com.quiddity.app.ui.chat.components
 
+import android.annotation.SuppressLint
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
@@ -38,6 +41,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
@@ -47,9 +51,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.UriHandler
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -112,6 +127,7 @@ fun MessageBubble(
     senderName: String? = null,
     senderAvatarUri: String? = null,
     bracketGrayEnabled: Boolean = false,
+    markdownEnabled: Boolean = false,
     isLastAiMessage: Boolean = false,
     onRegenerate: (() -> Unit)? = null,
     onContinue: (() -> Unit)? = null,
@@ -142,18 +158,24 @@ fun MessageBubble(
     val isStreaming = message.isStreaming
     val isError = message.isError
     val isAiNotStreaming = !isUser && !isStreaming
+    val isThinking = message.isThinking
 
     val colorScheme = MaterialTheme.colorScheme
-    val bubbleColor = remember(isUser, isError, isHighlighted, colorScheme) {
+    val bubbleColor = remember(isUser, isError, isHighlighted, isThinking, colorScheme) {
+        // 毛玻璃半透明：透出壁纸背景，文字保持不透明可读
         when {
+            isThinking -> colorScheme.surfaceContainerHigh
             isError -> colorScheme.errorContainer
             isHighlighted -> colorScheme.primaryContainer
             isUser -> colorScheme.secondary
             else -> colorScheme.surfaceVariant
-        }
+        }.copy(alpha = 0.60f)
     }
-    val textColor = remember(isUser, isError, isHighlighted, colorScheme) {
+    // 玻璃边缘：1dp 半透明描边，模拟磨砂玻璃高光边界
+    val bubbleBorderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
+    val textColor = remember(isUser, isError, isHighlighted, isThinking, colorScheme) {
         when {
+            isThinking -> colorScheme.onSurfaceVariant
             isError -> colorScheme.onErrorContainer
             isHighlighted -> colorScheme.onPrimaryContainer
             isUser -> colorScheme.onSecondary
@@ -229,17 +251,27 @@ fun MessageBubble(
     // 关键性能优化：流式中用纯文本渲染（避免每 token 都重跑 MarkdownParser.parse），
     // 流结束后用 message.id 作 key 解析一次，之后保持稳定。
     // 性能：Markdown 解析移到后台线程（完成消息时不再占主线程掉帧）
-    val blocks by produceState(
-        initialValue = emptyList<MarkdownParser.Block>(),
+    // Lint 规则 ProduceStateDoesNotAssignValue 无法识别 if/else 双分支赋值（误报）；
+    // 实际两条路径均赋值 value，解析结果随 message.id / isStreaming 正确更新。
+    @SuppressLint("ProduceStateDoesNotAssignValue")
+    val parsedContent by produceState(
+        initialValue = ParsedMessageContent(emptyList(), MarkdownParser.ParsedMarkdown("", emptyList())),
         key1 = message.id,
         key2 = isStreaming
     ) {
-        value = if (isStreaming || fullContent.isEmpty()) {
-            emptyList()
+        if (isStreaming || fullContent.isEmpty()) {
+            value = ParsedMessageContent(emptyList(), MarkdownParser.ParsedMarkdown(fullContent, emptyList()))
         } else {
-            withContext(Dispatchers.Default) { MarkdownParser.parse(fullContent) }
+            value = withContext(Dispatchers.Default) {
+                ParsedMessageContent(
+                    MarkdownParser.parse(fullContent),
+                    MarkdownParser.parseMarkdown(fullContent)
+                )
+            }
         }
     }
+    val blocks = parsedContent.blocks
+    val parsedMarkdown = parsedContent.markdown
     val renderMode = remember(blocks, isStreaming, fullContent) {
         when {
             isStreaming || fullContent.isEmpty() -> RenderMode.PURE_TEXT
@@ -255,13 +287,22 @@ fun MessageBubble(
         if (isStreaming) grayifyBrackets(content, bracketGrayEnabled, grayColor)
         else null
     }
-    val stableAnnotated = remember(message.id, bracketGrayEnabled, fullContent) {
-        if (!isStreaming) grayifyBrackets(fullContent, bracketGrayEnabled, grayColor) else null
+    val stableAnnotated = remember(message.id, bracketGrayEnabled, parsedMarkdown) {
+        if (!isStreaming) grayifyBrackets(parsedMarkdown.text, bracketGrayEnabled, grayColor) else null
     }
-    val effectiveAnnotated = annotatedContent ?: stableAnnotated ?: grayifyBrackets(fullContent, bracketGrayEnabled, grayColor)
+    val effectiveAnnotated = annotatedContent
+        ?: stableAnnotated
+        ?: grayifyBrackets(parsedMarkdown.text, bracketGrayEnabled, grayColor)
     // 群聊：@提及蓝色高亮（叠加在括号灰化之上）
-    val displayAnnotated = remember(fullContent, effectiveAnnotated, isGroupChat) {
-        if (isGroupChat) highlightMentions(fullContent, effectiveAnnotated, MentionHighlightColor) else effectiveAnnotated
+    val displayAnnotated = remember(parsedMarkdown.text, effectiveAnnotated, isGroupChat) {
+        if (isGroupChat) highlightMentions(parsedMarkdown.text, effectiveAnnotated, MentionHighlightColor)
+        else effectiveAnnotated
+    }
+    // Markdown 渲染：流式中保持纯文本（避免每 token 重跑解析与样式闪烁），
+    // 流结束后叠加标题/加粗/斜体/链接等样式；关闭开关时退化为纯文本。
+    val displayWithMarkdown = remember(parsedMarkdown, displayAnnotated, markdownEnabled, colorScheme) {
+        if (isStreaming || !markdownEnabled) displayAnnotated
+        else applyMarkdownStyles(parsedMarkdown, displayAnnotated, colorScheme.primary, grayColor)
     }
 
     // ===== 气泡主体 =====
@@ -419,6 +460,7 @@ fun MessageBubble(
                                 }
                             }
                             .clip(BubbleShape(isUser))
+                            .border(1.dp, bubbleBorderColor, BubbleShape(isUser))
                             .background(bubbleColor)
                     ) {
                         // ===== 三条开发规范（位于文件中间位置） =====
@@ -433,14 +475,39 @@ fun MessageBubble(
                             modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
+                            if (isThinking) {
+                                Text(
+                                    text = if (isStreaming) "思考中" else "思考",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                )
+                            }
                             if (isStreaming && content.isEmpty()) {
                                 TypingIndicator()
                             } else {
                                 blocks.forEach { block ->
                                     when (block) {
                                         is MarkdownParser.Block.Text -> {
-                                            val textAnnotated = remember(block.content, bracketGrayEnabled) {
-                                                grayifyBrackets(block.content, bracketGrayEnabled, grayColor)
+                                            val parsedBlock = remember(block.content) {
+                                                MarkdownParser.parseMarkdown(block.content)
+                                            }
+                                            val textAnnotated = remember(
+                                                parsedBlock,
+                                                block.content,
+                                                bracketGrayEnabled,
+                                                markdownEnabled,
+                                                colorScheme
+                                            ) {
+                                                val base =
+                                                    grayifyBrackets(parsedBlock.text, bracketGrayEnabled, grayColor)
+                                                if (!markdownEnabled) base
+                                                else applyMarkdownStyles(
+                                                    parsedBlock,
+                                                    base,
+                                                    colorScheme.primary,
+                                                    grayColor
+                                                )
                                             }
                                             SelectableMessageText(
                                                 text = textAnnotated,
@@ -504,6 +571,7 @@ fun MessageBubble(
                                 }
                             }
                             .clip(BubbleShape(isUser))
+                            .border(1.dp, bubbleBorderColor, BubbleShape(isUser))
                             .background(bubbleColor)
                     ) {
                         Row(
@@ -514,7 +582,7 @@ fun MessageBubble(
                                 TypingIndicator()
                             } else {
                                 SelectableMessageText(
-                                    text = displayAnnotated,
+                                    text = displayWithMarkdown,
                                     textColor = textColor,
                                     onBubbleClick = if (multiSelectMode) onSelectToggle else (if (isUser) onBubbleClick else null),
                                     onLongClick = if (multiSelectMode || !isUser) null else onLongClick,
@@ -681,6 +749,15 @@ fun MessageBubble(
 }
 
 /**
+ * 消息内容的一次性解析结果：围栏代码块拆分 + 行内 Markdown 样式。
+ * 两者都只在消息流结束后按 message.id 解析一次，随后保持稳定。
+ */
+private data class ParsedMessageContent(
+    val blocks: List<MarkdownParser.Block>,
+    val markdown: MarkdownParser.ParsedMarkdown
+)
+
+/**
  * 消息渲染模式。
  */
 private enum class RenderMode {
@@ -794,6 +871,100 @@ private fun SelectionCircle(isSelected: Boolean) {
     }
 }
 
+// Markdown 行内代码配色：与围栏代码块卡片（CodeBlockView 的 0xFF1E1E2E / 0xFFCDD6F4）保持一致
+private val InlineCodeBackground = Color(0xFF1E1E2E)
+private val InlineCodeForeground = Color(0xFFCDD6F4)
+
+/**
+ * 将 [MarkdownParser.ParsedMarkdown] 的样式区间叠加到已含括号灰化 / @提及高亮的
+ * [base] 之上。区间坐标与 base.text 完全一致，因此可以直接合并 span。
+ */
+private fun applyMarkdownStyles(
+    parsed: MarkdownParser.ParsedMarkdown,
+    base: AnnotatedString,
+    linkColor: Color,
+    dimColor: Color
+): AnnotatedString {
+    if (parsed.spans.isEmpty()) return base
+    val spanStyles = mutableListOf<AnnotatedString.Range<SpanStyle>>()
+    val linkStyles = mutableListOf<AnnotatedString.Range<LinkAnnotation.Url>>()
+    val length = base.text.length
+    for (span in parsed.spans) {
+        val start = span.start.coerceIn(0, length)
+        val end = span.end.coerceIn(start, length)
+        if (start >= end) continue
+        when (span) {
+            is MarkdownParser.MarkdownSpan.Link -> {
+                linkStyles += AnnotatedString.Range(
+                    LinkAnnotation.Url(
+                        url = span.url,
+                        styles = TextLinkStyles(
+                            style = SpanStyle(
+                                color = linkColor,
+                                textDecoration = TextDecoration.Underline
+                            )
+                        )
+                    ),
+                    start,
+                    end
+                )
+            }
+            is MarkdownParser.MarkdownSpan.Bold ->
+                spanStyles += AnnotatedString.Range(SpanStyle(fontWeight = FontWeight.Bold), start, end)
+            is MarkdownParser.MarkdownSpan.Italic ->
+                spanStyles += AnnotatedString.Range(SpanStyle(fontStyle = FontStyle.Italic), start, end)
+            is MarkdownParser.MarkdownSpan.Strikethrough ->
+                spanStyles += AnnotatedString.Range(
+                    SpanStyle(textDecoration = TextDecoration.LineThrough),
+                    start,
+                    end
+                )
+            is MarkdownParser.MarkdownSpan.Code ->
+                spanStyles += AnnotatedString.Range(
+                    SpanStyle(
+                        fontFamily = FontFamily.Monospace,
+                        background = InlineCodeBackground,
+                        color = InlineCodeForeground
+                    ),
+                    start,
+                    end
+                )
+            is MarkdownParser.MarkdownSpan.Heading ->
+                spanStyles += AnnotatedString.Range(
+                    SpanStyle(
+                        fontWeight = FontWeight.Bold,
+                        fontSize = when (span.level) {
+                            1 -> 23.sp
+                            2 -> 21.sp
+                            3 -> 19.sp
+                            else -> 18.sp
+                        }
+                    ),
+                    start,
+                    end
+                )
+            is MarkdownParser.MarkdownSpan.Quote ->
+                spanStyles += AnnotatedString.Range(
+                    SpanStyle(fontStyle = FontStyle.Italic, color = dimColor),
+                    start,
+                    end
+                )
+            is MarkdownParser.MarkdownSpan.Bullet ->
+                spanStyles += AnnotatedString.Range(
+                    SpanStyle(color = dimColor, fontWeight = FontWeight.SemiBold),
+                    start,
+                    end
+                )
+        }
+    }
+    // 用 Builder 合并样式：保留 base 的全部 span / 段落样式，再叠加行内 Markdown 样式与链接注解
+    val builder = AnnotatedString.Builder(base.text)
+    base.spanStyles.forEach { builder.addStyle(it.item, it.start, it.end) }
+    spanStyles.forEach { builder.addStyle(it.item, it.start, it.end) }
+    linkStyles.forEach { builder.addLink(it.item, it.start, it.end) }
+    return builder.toAnnotatedString()
+}
+
 /**
  * 消息文本（已移除 SelectionContainer 文字提取器）。
  *
@@ -829,15 +1000,29 @@ private fun SelectableMessageText(
     } else {
         Modifier
     }
-    Text(
-        text = text,
-        color = textColor,
-        style = MaterialTheme.typography.bodyLarge.copy(
-            fontSize = 18.sp,
-            lineHeight = 27.sp
-        ),
-        modifier = modifier.then(clickModifier)
-    )
+    val context = LocalContext.current
+    val uriHandler = remember(context) {
+        object : UriHandler {
+            override fun openUri(uri: String) {
+                runCatching {
+                    val target = if (uri.contains("://")) uri else "https://$uri"
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(target)))
+                }
+            }
+        }
+    }
+    // Markdown 链接（LinkAnnotation.Url）依赖 LocalUriHandler 打开浏览器
+    CompositionLocalProvider(LocalUriHandler provides uriHandler) {
+        Text(
+            text = text,
+            color = textColor,
+            style = MaterialTheme.typography.bodyLarge.copy(
+                fontSize = 18.sp,
+                lineHeight = 27.sp
+            ),
+            modifier = modifier.then(clickModifier)
+        )
+    }
 }
 
 /**

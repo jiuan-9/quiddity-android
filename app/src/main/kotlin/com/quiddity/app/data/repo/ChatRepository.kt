@@ -86,6 +86,7 @@ internal fun buildChatRound(
     maxTokens: Int,
     temperature: Double,
     responsesUrl: String?,
+    reasoningEffort: String?,
     tools: List<ToolDefinition>?,
     tool_choice: String?
 ): ChatRoundRequest {
@@ -97,6 +98,7 @@ internal fun buildChatRound(
                 max_tokens = maxTokens,
                 temperature = temperature,
                 stream = true,
+                reasoning_effort = reasoningEffort,
                 tools = tools,
                 tool_choice = tool_choice
             ),
@@ -115,6 +117,7 @@ internal fun buildChatRound(
             max_output_tokens = maxTokens,
             temperature = temperature,
             stream = true,
+            reasoning_effort = reasoningEffort,
             tools = responsesTools,
             tool_choice = tool_choice?.let { JsonPrimitive(it) }
         ),
@@ -142,9 +145,13 @@ class ChatRepository(
      * 每轮新 run 都注入新 runId（基于 UUID），保证消息 id 全局唯一。
      * [senderId] 为群聊发言人会话 id（2.0.0 使用），私聊传 null。
      */
-    private val coordinatorFactory: (conversationId: String, runId: String, splitEnabled: Boolean, singleMessageTokens: Int, senderId: String?) -> StreamCoordinator =
-        { conversationId, runId, splitEnabled, singleMessageTokens, senderId ->
-            MessageStreamCoordinator(conversationId, runId, singleMessageTokens, splitEnabled, senderId = senderId)
+    private val coordinatorFactory: (conversationId: String, runId: String, splitEnabled: Boolean, singleMessageTokens: Int, senderId: String?, internalThinking: Boolean) -> StreamCoordinator =
+        { conversationId, runId, splitEnabled, singleMessageTokens, senderId, internalThinking ->
+            MessageStreamCoordinator(
+                conversationId, runId, singleMessageTokens, splitEnabled,
+                senderId = senderId,
+                internalThinking = internalThinking
+            )
         }
 ) {
 
@@ -158,6 +165,8 @@ class ChatRepository(
         data class CompleteMessage(val message: Message) : Event()
         /** 整个流结束。 */
         data object Done : Event()
+        /** 信息性提示（非错误）：如思考功能降级 / 未返回思考内容。 */
+        data class Notice(val text: String) : Event()
         /** 错误。 */
         data class Error(val throwable: Throwable, val partialContent: String) : Event()
     }
@@ -191,14 +200,17 @@ class ChatRepository(
         val effectiveStrategy = memoryStrategy
             ?: conv.memoryStrategy
             ?: QuiddityConstants.MEMORY_STRATEGY_CARRY
+        val reasoningEffort = resolveThinkingEffort(settings, conv)
+        val thinkingActive = reasoningEffort != null
         val systemPrompt = PromptBuilder.buildSystemPrompt(
             conv = conv,
             memoryStrategy = effectiveStrategy,
-            regeneratePreviousReply = regeneratePreviousReply
+            regeneratePreviousReply = regeneratePreviousReply,
+            thinkingDepth = if (thinkingActive) conv.thinkingDepth else null
         )
         val contextLimit = if (conv.contextLimit > 0) conv.contextLimit else settings.globalContextLimit
-        // 过滤 isNotice 提示气泡：不发给 LLM（UI 专用，非对话内容）
-        val filteredHistory = history.filterNot { it.isNotice }
+        // 过滤 isNotice 提示气泡与 isThinking 思考消息：不发给 LLM
+        val filteredHistory = history.filterNot { it.isNotice || it.isThinking }
         val trimmedHistory = takeLastRounds(filteredHistory, contextLimit, buffer = 4)
         val apiMessages = PromptBuilder.toApiMessages(systemPrompt, trimmedHistory)
 
@@ -207,35 +219,44 @@ class ChatRepository(
         val temperature = conv.temperature ?: settings.globalTemperature
         val toolStrategyActive = effectiveStrategy == QuiddityConstants.MEMORY_STRATEGY_TOOL &&
             conv.compressedMemory.isNotBlank()
-        val request = buildChatRound(
-            access = access,
-            systemPrompt = systemPrompt,
-            apiMessages = apiMessages,
-            maxTokens = maxTokens,
-            temperature = temperature,
-            responsesUrl = resolveWebSearch(settings, conv),
-            tools = if (toolStrategyActive) {
-                listOf(
-                    PromptBuilder.buildReadMemoryTool(),
-                    PromptBuilder.buildSearchChatTool()
-                )
-            } else {
-                null
-            },
-            tool_choice = if (toolStrategyActive) "auto" else null
+        val buildRequest: (String?) -> ChatRoundRequest = {
+            buildChatRound(
+                access = access,
+                systemPrompt = systemPrompt,
+                apiMessages = apiMessages,
+                maxTokens = maxTokens,
+                temperature = temperature,
+                responsesUrl = resolveWebSearch(settings, conv),
+                // 内部思考：不发送 reasoning_effort（该服务端不认，会空响应）；
+                // 思考内容由提示词引导模型输出【思考】/【回答】，客户端按标记拆分显示。
+                reasoningEffort = null,
+                tools = if (toolStrategyActive) {
+                    listOf(
+                        PromptBuilder.buildReadMemoryTool(),
+                        PromptBuilder.buildSearchChatTool()
+                    )
+                } else {
+                    null
+                },
+                tool_choice = if (toolStrategyActive) "auto" else null
+            )
+        }
+        runWithToolRound(
+            api = api,
+            apiKey = access.apiKey,
+            request = buildRequest(null),
+            coordinator = coordinatorFactory(
+                conv.id,
+                IdGenerator.newUuid(),
+                settings.multilineAutoSplit,
+                singleMsgTokens,
+                null,
+                thinkingActive
+            ),
+            conv = conv,
+            onEvent = onEvent,
+            thinkingActive = thinkingActive
         )
-
-        val coordinator = coordinatorFactory(
-            conv.id,
-            // runId 是协调器内部标签，使用不带前缀的 UUID 即可；
-            // 最终消息 ID 由 MessageStreamCoordinator 拼装为 `{convId}_{runId}_ai_{index}`。
-            IdGenerator.newUuid(),
-            settings.multilineAutoSplit,
-            singleMsgTokens,
-            null
-        )
-
-        runWithToolRound(api, access.apiKey, request, coordinator, conv, onEvent)
     }
 
     /**
@@ -260,10 +281,13 @@ class ChatRepository(
         val effectiveStrategy = memoryStrategy
             ?: conv.memoryStrategy
             ?: QuiddityConstants.MEMORY_STRATEGY_CARRY
+        val reasoningEffort = resolveThinkingEffort(settings, conv)
+        val thinkingActive = reasoningEffort != null
         val systemPrompt = PromptBuilder.buildSystemPrompt(
             conv = conv,
             memoryStrategy = effectiveStrategy,
-            regeneratePreviousReply = regeneratePreviousReply
+            regeneratePreviousReply = regeneratePreviousReply,
+            thinkingDepth = if (thinkingActive) conv.thinkingDepth else null
         )
         // 引导：让 AI 主动发起对话
         val guidedMessages = listOf(
@@ -276,33 +300,42 @@ class ChatRepository(
         val temperature = conv.temperature ?: settings.globalTemperature
         val toolStrategyActive = effectiveStrategy == QuiddityConstants.MEMORY_STRATEGY_TOOL &&
             conv.compressedMemory.isNotBlank()
-        val request = buildChatRound(
-            access = access,
-            systemPrompt = systemPrompt,
-            apiMessages = guidedMessages,
-            maxTokens = maxTokens,
-            temperature = temperature,
-            responsesUrl = resolveWebSearch(settings, conv),
-            tools = if (toolStrategyActive) {
-                listOf(
-                    PromptBuilder.buildReadMemoryTool(),
-                    PromptBuilder.buildSearchChatTool()
-                )
-            } else {
-                null
-            },
-            tool_choice = if (toolStrategyActive) "auto" else null
+        val buildRequest: (String?) -> ChatRoundRequest = {
+            buildChatRound(
+                access = access,
+                systemPrompt = systemPrompt,
+                apiMessages = guidedMessages,
+                maxTokens = maxTokens,
+                temperature = temperature,
+                responsesUrl = resolveWebSearch(settings, conv),
+                reasoningEffort = null,
+                tools = if (toolStrategyActive) {
+                    listOf(
+                        PromptBuilder.buildReadMemoryTool(),
+                        PromptBuilder.buildSearchChatTool()
+                    )
+                } else {
+                    null
+                },
+                tool_choice = if (toolStrategyActive) "auto" else null
+            )
+        }
+        runWithToolRound(
+            api = api,
+            apiKey = access.apiKey,
+            request = buildRequest(null),
+            coordinator = coordinatorFactory(
+                conv.id,
+                IdGenerator.newUuid(),
+                settings.multilineAutoSplit,
+                singleMsgTokens,
+                null,
+                thinkingActive
+            ),
+            conv = conv,
+            onEvent = onEvent,
+            thinkingActive = thinkingActive
         )
-
-        val coordinator = coordinatorFactory(
-            conv.id,
-            IdGenerator.newUuid(),
-            settings.multilineAutoSplit,
-            singleMsgTokens,
-            null
-        )
-
-        runWithToolRound(api, access.apiKey, request, coordinator, conv, onEvent)
     }
 
     /**
@@ -320,12 +353,31 @@ class ChatRepository(
     }
 
     /**
+     * 判断会话思考功能是否应生效（思考开关 + DeepSeek 官方模型）。
+     * 返回值 low / high 标识深度，但当前仅用于判定 thinkingActive（思考内容显不显示）：
+     * reasoning_effort 参数实测会导致该服务端返回空响应，因此不发送，
+     * 思考内容完全依赖服务端返回的 reasoning_content 字段。
+     */
+    private fun resolveThinkingEffort(settings: AppSettings, conv: Conversation): String? {
+        if (!conv.thinkingEnabled) return null
+        val manager = apiCatalogManager ?: return null
+        val entry = manager.resolveEntry(settings, conv) ?: return null
+        if (entry.providerId != QuiddityConstants.DEEPSEEK_PROVIDER_ID) return null
+        return if (conv.thinkingDepth == QuiddityConstants.THINKING_DEPTH_DEEP) "high" else "low"
+    }
+
+    /**
      * 通用流式驱动（含 read_memory 工具轮）：
      * 第一轮如聚合到工具调用，回填检索结果后发起第二轮（最多一轮，防死循环），
      * 最后由 [StreamCoordinator] 负责正确的 NewMessage/UpdateMessage/CompleteMessage 派发。
      *
      * 请求目标 URL 由 [ChatRoundRequest] 自身携带（Completions / Responses 端点不同），
      * 私聊与群聊统一在此按类型取值，不再由调用点各自传 URL。
+     */
+    /**
+     * 通用流式驱动（含 read_memory 工具轮）。
+     *
+     * @return true = 本轮正常完成（含工具回填轮）；false = 任一轮出错（错误已通过 [Event.Error] 派发）
      */
     private suspend fun runWithToolRound(
         api: ChatApi,
@@ -334,27 +386,38 @@ class ChatRepository(
         coordinator: StreamCoordinator,
         conv: Conversation,
         onEvent: suspend (Event) -> Unit,
+        thinkingActive: Boolean = true,
         /**
          * 内容进入协调器前的流式转换（群聊用于剥离「名字：」前缀，
          * 避免前缀在切分阶段被拆成独立消息、剥离后变成空白消息）。
          */
         contentTransform: (String) -> String = { it }
-    ) {
+    ): Boolean {
         val apiUrl = request.apiUrl
         val firstRoundCalls = runSingleStream(
-            api, apiUrl, apiKey, request, coordinator, onEvent, contentTransform
-        ) ?: return
+            api, apiUrl, apiKey, request, coordinator, onEvent, contentTransform, thinkingActive
+        ) ?: return false
         if (firstRoundCalls.isNotEmpty()) {
-            try {
-                val secondRequest = buildSecondRoundRequest(request, conv, firstRoundCalls)
-                // 第二轮不再聚合工具调用（模型若再次请求工具则忽略），直接流式输出最终答复
-                runSingleStream(api, apiUrl, apiKey, secondRequest, coordinator, onEvent, contentTransform)
+            val secondRequest = try {
+                buildSecondRoundRequest(request, conv, firstRoundCalls)
+            } catch (c: kotlinx.coroutines.CancellationException) {
+                throw c
             } catch (t: Throwable) {
+                // 第二轮不再聚合工具调用（模型若再次请求工具则忽略），直接流式输出最终答复
                 // 工具回填失败不影响主流程：派发错误并结束本轮，避免异常上抛导致崩溃
                 emitError(onEvent, t, coordinator.snapshot().joinToString("\n") { it.content })
+                return false
+            }
+            // 第二轮失败时错误事件已派发，与第一轮失败语义一致：不派发 Done
+            val secondRoundOk = runSingleStream(
+                api, apiUrl, apiKey, secondRequest, coordinator, onEvent, contentTransform, thinkingActive
+            )
+            if (secondRoundOk == null) {
+                return false
             }
         }
         onEvent(Event.Done)
+        return true
     }
 
     /**
@@ -369,7 +432,8 @@ class ChatRepository(
         request: ChatRoundRequest,
         coordinator: StreamCoordinator,
         onEvent: suspend (Event) -> Unit,
-        contentTransform: (String) -> String = { it }
+        contentTransform: (String) -> String = { it },
+        thinkingActive: Boolean = true
     ): List<ChatStreamParser.AggregatedToolCall>? {
         var toolCalls: List<ChatStreamParser.AggregatedToolCall> = emptyList()
         try {
@@ -387,6 +451,13 @@ class ChatRepository(
                         val evictions = coordinator.accept(contentTransform(event.text))
                         evictions.forEach { dispatch(onEvent, it) }
                     }
+                    is ChatApi.StreamEvent.Reasoning -> {
+                        // 思考开关关闭时不显示思考内容（仍正常显示正式回复）
+                        if (thinkingActive) {
+                            val evictions = coordinator.acceptReasoning(event.text)
+                            evictions.forEach { dispatch(onEvent, it) }
+                        }
+                    }
                     is ChatApi.StreamEvent.ToolCalls -> {
                         if (event.calls.isNotEmpty()) toolCalls = event.calls
                     }
@@ -394,6 +465,9 @@ class ChatRepository(
             }
             // 流结束，强制收尾
             coordinator.finalize().forEach { dispatch(onEvent, it) }
+        } catch (c: kotlinx.coroutines.CancellationException) {
+            // 用户停止 / 页面销毁：不当作错误，向上传播取消，由上层收尾半截消息
+            throw c
         } catch (t: Throwable) {
             emitError(onEvent, t, coordinator.snapshot().joinToString("\n") { it.content })
             return null
@@ -538,6 +612,7 @@ class ChatRepository(
     }
 
     private suspend fun emitError(onEvent: suspend (Event) -> Unit, t: Throwable, partial: String) {
+        android.util.Log.w("ChatRepository", "流式请求错误：${t.message}", t)
         onEvent(Event.Error(t, partial))
     }
 
@@ -636,7 +711,7 @@ class ChatRepository(
             ?: throw IllegalStateException("API 未配置，无法压缩记忆")
 
         // 过滤 isNotice 提示气泡：不参与压缩（UI 专用，非对话内容）
-        val filteredMessages = messages.filterNot { it.isNotice }
+        val filteredMessages = messages.filterNot { it.isNotice || it.isThinking }
 
         // 仅压缩上次压缩后的新消息：
         // 取"从第 lastCompressedAtRound 轮开始"的全部消息——以 USER 消息为锚点，
@@ -698,11 +773,14 @@ class ChatRepository(
         onEvent: suspend (Event) -> Unit
     ) {
         val settings = settingsRepo.currentSnapshot()
+        val memberThinkingActive = resolveThinkingEffort(settings, member) != null
+        // 思考消息不进入群聊转述（避免把成员思考内容发给其他成员）
+        val cleanTranscript = transcript.filterNot { it.isThinking }
         // 方案六.2：群聊记录只取最近 N 条（默认 50，范围 1～200），在点击定格快照上截断。
-        val trimmed = if (group.groupContextLimit > 0 && transcript.size > group.groupContextLimit) {
-            transcript.takeLast(group.groupContextLimit)
+        val trimmed = if (group.groupContextLimit > 0 && cleanTranscript.size > group.groupContextLimit) {
+            cleanTranscript.takeLast(group.groupContextLimit)
         } else {
-            transcript
+            cleanTranscript
         }
         val senderNames = resolveSenderNames(trimmed)
         val plan = GroupReplyPlanner.buildPlan(
@@ -715,6 +793,7 @@ class ChatRepository(
             senderNames = senderNames,
             userName = member.userPersona.name.takeIf { it.isNotBlank() },
             webSearchResponsesUrl = resolveWebSearch(settings, member),
+            thinkingDepth = if (memberThinkingActive) member.thinkingDepth else null,
             regeneratePreviousReply = regeneratePreviousReply
         )
         // 模型有时会误输出「名字：」前缀（如回复开头带其他成员名），
@@ -737,6 +816,7 @@ class ChatRepository(
                     onEvent(Event.CompleteMessage(event.message.copy(content = sanitizer.clean(event.message.content))))
                 is Event.Done -> onEvent(event)
                 is Event.Error -> onEvent(event)
+                is Event.Notice -> onEvent(event)
             }
         }
         plan.fold(
@@ -746,13 +826,15 @@ class ChatRepository(
                     IdGenerator.newUuid(),
                     settings.multilineAutoSplit,
                     p.singleMessageTokens,
-                    p.senderId
+                    p.senderId,
+                    memberThinkingActive
                 )
                 val roundRequest = p.responsesRequest
                     ?.let { ChatRoundRequest.Responses(it, p.responsesApiUrl ?: p.apiUrl) }
                     ?: ChatRoundRequest.Completions(p.request, p.apiUrl)
                 runWithToolRound(
-                    api, p.apiKey, roundRequest, coordinator, group, cleanEvent
+                    api, p.apiKey, roundRequest, coordinator, group, cleanEvent,
+                    thinkingActive = memberThinkingActive
                 ) { prefixStripper.accept(it) }
             },
             onFailure = { emitError(onEvent, it, "") }
@@ -819,7 +901,7 @@ class ChatRepository(
             as? ApiAccess.Resolved
             ?: throw IllegalStateException("API 未配置，无法压缩群聊记忆")
         val transcriptText = PromptBuilder.buildGroupTranscript(
-            transcript.filterNot { it.isNotice },
+            transcript.filterNot { it.isNotice || it.isThinking },
             lastN = 0,
             senderNames = resolveSenderNames(transcript),
             userName = "用户"
@@ -961,6 +1043,8 @@ class ChatRepository(
     private fun classifyChatException(msg: String, t: Throwable): ChatError {
         val lower = msg.lowercase()
         return when {
+            // 中文密钥类错误（未配置 / 格式损坏 / 无法解密）统一归为鉴权类，提示检查密钥
+            "密钥" in msg -> ChatError.Auth(userMessage = msg, cause = t)
             "unauthorized" in lower || "401" in lower || "api key" in lower || "forbidden" in lower ->
                 ChatError.Auth(userMessage = msg, cause = t)
             "timeout" in lower || "connect" in lower || "socket" in lower ->

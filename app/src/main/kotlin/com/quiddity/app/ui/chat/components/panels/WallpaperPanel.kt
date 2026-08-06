@@ -1,10 +1,10 @@
 package com.quiddity.app.ui.chat.components.panels
 
+import android.graphics.drawable.BitmapDrawable
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import com.quiddity.app.util.IdGenerator
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -32,6 +32,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -42,6 +43,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -50,9 +52,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
+import coil.imageLoader
+import coil.request.ImageRequest
 import com.quiddity.app.ui.components.ImageCropper
 import com.quiddity.app.util.CrashLogger
+import com.quiddity.app.util.IdGenerator
 import com.quiddity.app.util.ImageUtils
+import com.quiddity.app.util.WallpaperContrast
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -108,12 +114,42 @@ fun WallpaperPanel(
 ) {
     // 临时暗化值：滑块在拖动时实时显示，松开后回调上层
     var localDarken by remember(currentDarken) { mutableFloatStateOf(currentDarken) }
+    // ===== 壁纸自动对比度：采样亮度，预览遮罩与最终渲染一致 =====
+    val context = LocalContext.current
+    val imageLoader = context.imageLoader
+    var wallpaperBrightness by remember(currentWallpaperUri) {
+        mutableFloatStateOf(WallpaperContrast.DEFAULT_BRIGHTNESS)
+    }
+    LaunchedEffect(currentWallpaperUri) {
+        if (currentWallpaperUri == null) {
+            wallpaperBrightness = WallpaperContrast.DEFAULT_BRIGHTNESS
+            return@LaunchedEffect
+        }
+        val brightness = withContext(Dispatchers.IO) {
+            runCatching {
+                val request = ImageRequest.Builder(context)
+                    .data(currentWallpaperUri)
+                    .size(64)
+                    .allowHardware(false)
+                    .build()
+                val drawable = imageLoader.execute(request).drawable
+                val bitmap = (drawable as? BitmapDrawable)?.bitmap
+                    ?: return@runCatching WallpaperContrast.DEFAULT_BRIGHTNESS
+                WallpaperContrast.sampleBrightness(bitmap)
+            }.getOrDefault(WallpaperContrast.DEFAULT_BRIGHTNESS)
+        }
+        wallpaperBrightness = brightness
+    }
+    val darkMode = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val previewScrim = remember(wallpaperBrightness, localDarken, darkMode) {
+        val alpha = WallpaperContrast.effectiveScrimAlpha(wallpaperBrightness, localDarken, darkMode)
+        Color(WallpaperContrast.scrimColor(darkMode)).copy(alpha = alpha)
+    }
     var showClearConfirm by remember { mutableStateOf(false) }
     var isCopying by remember { mutableStateOf(false) }
     var copyError by remember { mutableStateOf<String?>(null) }
     // 裁剪界面绑定的 URI（已复制到内部存储的 file:// URI）
     var croppingUri by remember { mutableStateOf<Uri?>(null) }
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val configuration = LocalConfiguration.current
     // 屏幕宽高比（宽/高），用于壁纸裁剪框比例
@@ -210,7 +246,7 @@ fun WallpaperPanel(
                         .fillMaxWidth()
                         .height(200.dp)
                         .clip(RoundedCornerShape(16.dp)),
-                    color = MaterialTheme.colorScheme.surfaceContainerLow
+                    color = com.quiddity.app.ui.components.glassCardColor()
                 ) {
                     when {
                         isCopying -> {
@@ -247,9 +283,7 @@ fun WallpaperPanel(
                                 Box(
                                     modifier = Modifier
                                         .fillMaxSize()
-                                        .background(
-                                            Color.Black.copy(alpha = localDarken)
-                                        )
+                                        .background(previewScrim)
                                 )
                             }
                         }
@@ -271,7 +305,7 @@ fun WallpaperPanel(
                     }
                 }
 
-                // 暗化程度滑块（仅在有壁纸时可调）
+                // 背景对比度滑块（仅在有壁纸时可调）：自动基线保证文字可读，滑块用于微调增强
                 if (currentWallpaperUri != null) {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Row(
@@ -279,7 +313,7 @@ fun WallpaperPanel(
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(
-                                text = "暗化程度",
+                                text = "背景对比度",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
@@ -375,8 +409,8 @@ private fun ActionTileButton(
                 enabled = enabled,
                 onClick = onClick
             ),
-        color = if (enabled) MaterialTheme.colorScheme.surfaceContainerLow
-        else MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.5f),
+        color = if (enabled) com.quiddity.app.ui.components.glassCardColor()
+        else com.quiddity.app.ui.components.glassCardColor().copy(alpha = 0.5f),
         tonalElevation = 0.dp
     ) {
         Row(

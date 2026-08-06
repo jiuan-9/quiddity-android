@@ -248,8 +248,7 @@ object PromptBuilder {
      * 5. 【记忆】——随身带 / 小抄两种组装
      * 6. 【对话方式】——用户可配置的表达风格 + 应用机制（括号动作、不加前缀、继续说语义）
      *
-     * 设计原则：提示词只承载"身份 + 用户内容 + 少量应用机制"，不强制任何表达风格；
-     * 表达风格由 [Conversation.replyStyle] 决定（默认完全跟随人设，用户可自主选择）。
+     * 设计原则：提示词只承载"身份 + 用户内容 + 少量应用机制"，不强制任何表达风格。
      *
      * @param memoryStrategy 记忆策略覆盖值（null = 跟随 [Conversation.memoryStrategy]，
      *   仍为 null 时回退为随身带现状）。完整级默认策略由 2.0.0 运行时按模型分级解析后传入。
@@ -257,7 +256,8 @@ object PromptBuilder {
     fun buildSystemPrompt(
         conv: Conversation,
         memoryStrategy: String? = null,
-        regeneratePreviousReply: String? = null
+        regeneratePreviousReply: String? = null,
+        thinkingDepth: String? = null
     ): String {
         val sb = StringBuilder()
         val persona = conv.persona
@@ -354,7 +354,6 @@ object PromptBuilder {
 
         // ===== 6. 对话方式（用户可配置的表达风格 + 应用机制） =====
         sb.append("【对话方式】\n")
-        sb.append(buildConversationStyleLine(conv.replyStyle)).append("\n")
         sb.append("- 动作/神态用括号括起，如（轻笑）。\n")
         sb.append("- 直接发言，不加「名字：」前缀或解释。\n")
         sb.append("- 「继续说」时接着自己上一句继续，不回答自己的问题。\n")
@@ -362,6 +361,20 @@ object PromptBuilder {
         if (!regeneratePreviousReply.isNullOrBlank()) {
             sb.append("- 本次是「重说」请求：重新构思这句话该怎么回，换一种表达方式、结构和角度重写，不要沿用上一版的原句或句式。\n")
             sb.append("上一版回复（仅作对照，禁止复述）：").append(regeneratePreviousReply.take(600)).append("\n\n")
+        }
+
+        // ===== 6.5 内部思考（提示词方式，任意模型可用） =====
+        // 让模型把思考内容写进回复并用标记包裹，客户端按标记拆成"思考消息 + 正式回复"；
+        // 深度（浅/深）通过提示词控制思考详略。
+        if (thinkingDepth != null) {
+            sb.append("【思考要求】\n")
+            if (thinkingDepth == com.quiddity.app.util.QuiddityConstants.THINKING_DEPTH_DEEP) {
+                sb.append("回答前请先深入思考。思考内容单独用【思考】标记包裹输出，正式回答另起一段用【回答】标记包裹，先输出【思考】再输出【回答】。")
+                    .append("思考要详细充分：拆解问题、考虑关键点和可能遗漏，再给出回答。\n\n")
+            } else {
+                sb.append("回答前请先简要思考。思考内容单独用【思考】标记包裹输出，正式回答另起一段用【回答】标记包裹，先输出【思考】再输出【回答】。")
+                    .append("思考简明扼要即可，不要把答案本身写进思考。\n\n")
+            }
         }
 
         // ===== 7. 时间库说明（主动消息开启且有查看密码时） =====
@@ -378,20 +391,6 @@ object PromptBuilder {
         }
 
         return sb.toString().trim()
-    }
-
-    /**
-     * 生成【对话方式】的表达风格指引（用户可配置，默认完全跟随人设）。
-     *
-     * @param style [QuiddityConstants.REPLY_STYLE_*] 之一；未知值回退为跟随人设。
-     */
-    fun buildConversationStyleLine(style: String): String = when (style) {
-        QuiddityConstants.REPLY_STYLE_CONCISE ->
-            "回复尽量简短自然，像日常聊天，避免长篇大论。"
-        QuiddityConstants.REPLY_STYLE_DETAILED ->
-            "回复可以充分展开，描写细腻、篇幅不限，不必刻意压缩。"
-        else ->
-            "表达方式完全遵循人设，不做额外限制。"
     }
 
     /**
@@ -417,7 +416,7 @@ object PromptBuilder {
             result.add(ChatMessage(role = "system", content = systemPrompt))
         }
         val memberNames = senderLabels.values.filter { it.isNotBlank() }.toSet()
-        history.forEach { msg ->
+        history.filterNot { it.isThinking }.forEach { msg ->
             val role = when (msg.role) {
                 Role.USER -> "user"
                 Role.ASSISTANT -> "assistant"
@@ -452,8 +451,8 @@ object PromptBuilder {
         memberNames: Set<String>
     ): String? {
         val mentioned = buildList {
-            memberNames.filter { name -> "@$name" in content }.forEach(::add)
-            if (userName?.isNotBlank() == true && "@$userName" in content) add(userName)
+            memberNames.filter { name -> GroupChatRules.isMentionedAt(content, name) }.forEach(::add)
+            if (userName?.isNotBlank() == true && GroupChatRules.isMentionedAt(content, userName)) add(userName)
         }.distinct()
         if (mentioned.isNotEmpty()) {
             return "（点名${mentioned.joinToString("、") { "@$it" }}）"
@@ -638,7 +637,8 @@ $persona
         groupRules: String,
         regeneratePreviousReply: String? = null,
         groupBackground: String? = null,
-        groupBackgroundMode: String? = null
+        groupBackgroundMode: String? = null,
+        thinkingDepth: String? = null
     ): String {
         val sb = StringBuilder()
         // 说话人认知：成员名字 = 该成员 AI 角色，用户名字 = 该成员私聊里的用户人设名字
@@ -667,7 +667,6 @@ $persona
         // 与私聊同一套【对话方式】保证：括号动作、直接发言、不提及 AI。
         // 群聊特有约束（@点名优先回应、不替他人发言）也一并收进本段，避免规则被埋在列表末尾失效。
         sb.append("【对话方式】\n")
-        sb.append(buildConversationStyleLine(member.replyStyle)).append("\n")
         sb.append("- 动作/神态用括号括起，如（轻笑）。\n")
         sb.append("- 直接发言，不加「名字：」前缀或解释。\n")
         sb.append("- 被用户「@」点名时优先回应；其他成员发言后按需接话。\n")
@@ -676,6 +675,15 @@ $persona
         if (!regeneratePreviousReply.isNullOrBlank()) {
             sb.append("- 本次是「重说」请求：重新构思这句话该怎么回，换一种表达方式、结构和角度重写，不要沿用上一版的原句或句式。\n")
             sb.append("上一版回复（仅作对照，禁止复述）：").append(regeneratePreviousReply.take(600)).append("\n")
+        }
+        if (thinkingDepth != null) {
+            sb.append("- 回答前先思考：思考内容用【思考】标记包裹，正式回答用【回答】标记包裹，先【思考】后【回答】。")
+            if (thinkingDepth == com.quiddity.app.util.QuiddityConstants.THINKING_DEPTH_DEEP) {
+                sb.append("思考要详细充分。")
+            } else {
+                sb.append("思考简明扼要即可。")
+            }
+            sb.append("\n")
         }
         return sb.toString().trim()
     }

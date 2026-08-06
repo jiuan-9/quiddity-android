@@ -45,6 +45,49 @@ class ChatModelsTest {
     }
 
     @Test
+    fun `chat completion serializes reasoning effort only when set`() {
+        val json = Json {
+            explicitNulls = false
+            encodeDefaults = true
+        }
+        val withThinking = ChatCompletionRequest(
+            model = "deepseek-v4-flash",
+            messages = emptyList(),
+            reasoning_effort = "low"
+        )
+        val thinkingText = json.encodeToString(ChatCompletionRequest.serializer(), withThinking)
+        assertTrue(thinkingText.contains("\"reasoning_effort\":\"low\""), "思考开启时必须携带 reasoning_effort")
+
+        val withoutThinking = ChatCompletionRequest(
+            model = "deepseek-v4-flash",
+            messages = emptyList()
+        )
+        val plainText = json.encodeToString(ChatCompletionRequest.serializer(), withoutThinking)
+        assertFalse(plainText.contains("reasoning_effort"), "思考关闭时不得携带 reasoning_effort 字段")
+    }
+
+    @Test
+    fun `responses request serializes reasoning effort only when set`() {
+        val json = Json {
+            explicitNulls = false
+            encodeDefaults = true
+        }
+        val withThinking = DeepSeekResponsesRequest(
+            model = "deepseek-v4-flash",
+            input = emptyList(),
+            reasoning_effort = "high"
+        )
+        val text = json.encodeToString(DeepSeekResponsesRequest.serializer(), withThinking)
+        assertTrue(text.contains("\"reasoning_effort\":\"high\""))
+        assertFalse(
+            json.encodeToString(
+                DeepSeekResponsesRequest.serializer(),
+                DeepSeekResponsesRequest(model = "deepseek-v4-flash", input = emptyList())
+            ).contains("reasoning_effort")
+        )
+    }
+
+    @Test
     fun `responses request serializes web search tool and omits null fields`() {
         val json = Json {
             explicitNulls = false

@@ -195,11 +195,12 @@ class ConversationRepository(
         return catalogManager.defaultContextLimitForTier(tier)
     }
 
-    suspend fun updateConversation(conv: Conversation) {
+    /** @return 是否写盘成功（失败仅记录日志，调用方按需提示） */
+    suspend fun updateConversation(conv: Conversation): Boolean =
         store.updateConversation(conv.copy(updatedAt = System.currentTimeMillis()))
-    }
 
-    suspend fun deleteConversation(convId: String) = store.deleteConversation(convId)
+    /** @return 是否写盘成功 */
+    suspend fun deleteConversation(convId: String): Boolean = store.deleteConversation(convId)
 
     /**
      * 批量删除多个会话（多选用）。
@@ -209,9 +210,10 @@ class ConversationRepository(
      *
      * @param convIds 要删除的会话 ID 列表
      */
-    suspend fun deleteConversations(convIds: List<String>) {
-        if (convIds.isEmpty()) return
-        store.deleteConversations(convIds)
+    /** @return 是否写盘成功 */
+    suspend fun deleteConversations(convIds: List<String>): Boolean {
+        if (convIds.isEmpty()) return true
+        return store.deleteConversations(convIds)
     }
 
     suspend fun appendMessage(message: Message): Boolean = store.appendMessage(message)
@@ -241,16 +243,18 @@ class ConversationRepository(
 
     suspend fun exportAllMessages(): Map<String, List<Message>> = store.exportAll()
 
+    /** @return 是否全部写盘成功 */
     suspend fun importAll(
         conversations: List<Conversation>,
         messages: Map<String, List<Message>>
-    ) = store.importAll(conversations, messages)
+    ): Boolean = store.importAll(conversations, messages)
 
     /**
      * 替换式导入：删除全部现有会话与消息，写入导入数据。
      *
      * 与 [importAll]（合并模式）互补：用户选择"替换现有数据"时调用。
      */
+    /** 替换式导入；写盘失败时回滚并抛异常，调用方负责提示。 */
     suspend fun replaceAll(
         conversations: List<Conversation>,
         messages: Map<String, List<Message>>
@@ -267,6 +271,7 @@ class ConversationRepository(
      * @param messages 会话消息
      * @param mode 导入模式（替换 / 合并 / 仅导入角色库）
      */
+    /** 按模式导入 v2 快照；失败（写盘失败 / 回滚）时抛异常。 */
     suspend fun importV2Snapshot(
         characters: List<Character>,
         conversations: List<Conversation>,
@@ -280,7 +285,9 @@ class ConversationRepository(
             }
             ImportMode.MERGE -> {
                 characterRepository?.mergeCharacters(characters)
-                store.importAll(conversations, messages)
+                if (!store.importAll(conversations, messages)) {
+                    throw IllegalStateException("合并导入写盘失败")
+                }
             }
             ImportMode.CHARACTERS_ONLY -> {
                 // 只登记 characters，其余不动（3.1）

@@ -208,7 +208,7 @@ class ChatViewModel(
         if (groupStreamJob?.isActive == true && groupQueueEngine.isFull) return
         if (groupQueueEngine.contains(memberId)) return
         // 上下文定格（方案四.8）：只冻结已完成的群聊消息，流式中的半截消息不入上下文
-        val frozen = _messages.value.filterNot { it.isNotice || it.isStreaming }
+        val frozen = _messages.value.filterNot { it.isNotice || it.isThinking || it.isStreaming }
         enqueueGroupMemberWithFrozen(memberId, frozen)
     }
 
@@ -243,6 +243,7 @@ class ChatViewModel(
      */
     private fun startGroupQueueProcessor() {
         groupStreamJob = viewModelScope.launch {
+            val selfJob = kotlin.coroutines.coroutineContext[kotlinx.coroutines.Job]
             _isGenerating.value = true
             try {
                 while (groupQueueEngine.isNotEmpty) {
@@ -265,7 +266,12 @@ class ChatViewModel(
                 syncGroupQueue()
                 _errorEvent.value = "群聊回复出错：${t.message ?: "未知错误"}，队列已取消"
             } finally {
-                _isGenerating.value = false
+                // 仅当本 job 仍是当前处理器时才复位生成标志，
+                // 避免被 stop/重说取消的旧处理器在新建 job 启动后把它误置 false
+                if (groupStreamJob === selfJob) {
+                    _isGenerating.value = false
+                }
+                settleInterruptedStreams()
                 notifyIdleIfNoWork()
             }
             awaitGroupMemoryCompressionIfNeeded()
@@ -283,6 +289,13 @@ class ChatViewModel(
         while (attempt < QuiddityConstants.GROUP_RETRY_COUNT) {
             attempt++
             var failed = false
+            // 重试起点快照：本次尝试追加的该成员回复 id，失败时回滚，
+            // 避免半截流式内容在重试间累积、以及 5 次失败后残留"打字中"气泡
+            // 直接从 store 的 StateFlow 读取（同步更新），不依赖 UI 收集协程的调度
+            val beforeMemberMsgIds = conversationRepository.observeMessages(conversationId).value
+                .filter { it.role == Role.ASSISTANT && it.senderId == item.memberId }
+                .map { it.id }
+                .toSet()
             replyRunStart = System.currentTimeMillis()
             replyRunChars = 0
             try {
@@ -306,14 +319,33 @@ class ChatViewModel(
                         else -> handleStreamEvent(event)
                     }
                 }
+            } catch (c: kotlinx.coroutines.CancellationException) {
+                throw c
             } catch (t: Throwable) {
                 if (t is kotlinx.coroutines.CancellationException) throw t
                 failed = true
                 _errorEvent.value = "成员回复出错：${t.message ?: "未知错误"}"
             }
-            if (!failed) return true
+            if (failed) {
+                rollbackFailedGroupAttempt(item.memberId, beforeMemberMsgIds)
+            } else {
+                return true
+            }
         }
         return false
+    }
+
+    /**
+     * 群聊成员回复失败时回滚本次尝试追加的该成员消息（保留用户消息与既有内容）。
+     */
+    private suspend fun rollbackFailedGroupAttempt(memberId: String, beforeIds: Set<String>) {
+        val current = conversationRepository.observeMessages(conversationId).value
+        val kept = current.filterNot { msg ->
+            msg.role == Role.ASSISTANT && msg.senderId == memberId && msg.id !in beforeIds
+        }
+        if (kept.size != current.size) {
+            conversationRepository.replaceMessages(conversationId, kept)
+        }
     }
 
     /**
@@ -323,7 +355,7 @@ class ChatViewModel(
     private suspend fun awaitGroupMemoryCompressionIfNeeded() {
         val group = conversation.value ?: return
         if (!isGroup()) return
-        val messages = _messages.value.filterNot { it.isNotice }
+        val messages = _messages.value.filterNot { it.isNotice || it.isThinking }
         if (messages.size < QuiddityConstants.GROUP_MEMORY_THRESHOLD) return
         val summary = runCatching {
             chatRepository.compressGroupMemory(group, messages)
@@ -423,7 +455,7 @@ class ChatViewModel(
                 conversationRepository.appendMessage(userMsg)
                 // @ 点名：冻结快照必须包含本条刚发送的消息（_messages 异步更新，不能依赖）
                 val frozen = (_messages.value.filterNot { it.id == userMsg.id } + userMsg)
-                    .filterNot { it.isNotice || it.isStreaming }
+                    .filterNot { it.isNotice || it.isThinking || it.isStreaming }
                 val members = conversation.value?.memberConversationIds.orEmpty()
                     .mapNotNull { conversationRepository.getConversation(it) }
                 com.quiddity.app.domain.GroupChatRules.mentionedMemberIds(text, members)
@@ -454,6 +486,7 @@ class ChatViewModel(
         streamJob = viewModelScope.launch {
             // ===== 流式阶段 =====
             var streamError: Throwable? = null
+            val selfJob = kotlin.coroutines.coroutineContext[kotlinx.coroutines.Job]
             cleanupStaleStreamingMessages()
             _isGenerating.value = true
             try {
@@ -476,12 +509,18 @@ class ChatViewModel(
                         }
                     }
                 }
+            } catch (c: kotlinx.coroutines.CancellationException) {
+                // 用户停止 / 页面销毁：不当作错误，收尾交给 finally
+                throw c
             } catch (t: Throwable) {
                 streamError = t
                 _errorEvent.value = t.message ?: "未知错误"
                 _chatError.value = chatRepository.classify(t)
             } finally {
-                _isGenerating.value = false
+                if (streamJob === selfJob) {
+                    _isGenerating.value = false
+                }
+                settleInterruptedStreams()
                 notifyIdleIfNoWork()
             }
             // ===== 压缩阶段：仅当流式正常结束时触发 =====
@@ -617,7 +656,7 @@ class ChatViewModel(
             current.subList(lastUserIndex + 1, current.size)
         } else {
             current
-        }).filterNot { it.isNotice }
+        }).filterNot { it.isNotice || it.isThinking }
             .mapNotNull { it.content.takeIf { c -> c.isNotBlank() } }
             .joinToString("\n")
             .takeIf { it.isNotBlank() }
@@ -720,12 +759,13 @@ class ChatViewModel(
         val newHistory = current.subList(0, targetIndex).toList()
         // 上一版回复原文（含目标消息及之后的消息）：供重说提示词对照，要求换一种表达。
         val previousReplies = current.subList(targetIndex, current.size)
-            .filterNot { it.isNotice }
+            .filterNot { it.isNotice || it.isThinking }
             .mapNotNull { it.content.takeIf { c -> c.isNotBlank() } }
             .joinToString("\n")
             .takeIf { it.isNotBlank() }
         groupStreamJob?.cancel()
         groupStreamJob = viewModelScope.launch {
+            val selfJob = kotlin.coroutines.coroutineContext[kotlinx.coroutines.Job]
             _isGenerating.value = true
             try {
                 conversationRepository.replaceMessages(conversationId, newHistory)
@@ -738,11 +778,16 @@ class ChatViewModel(
                 ) { event ->
                     handleStreamEvent(event)
                 }
+            } catch (c: kotlinx.coroutines.CancellationException) {
+                throw c
             } catch (t: Throwable) {
                 if (t is kotlinx.coroutines.CancellationException) throw t
                 _errorEvent.value = "重说失败：${t.message ?: "未知错误"}"
             } finally {
-                _isGenerating.value = false
+                if (groupStreamJob === selfJob) {
+                    _isGenerating.value = false
+                }
+                settleInterruptedStreams()
                 notifyIdleIfNoWork()
             }
             notifyIdleIfNoWork()
@@ -761,17 +806,24 @@ class ChatViewModel(
         replyRunStart = System.currentTimeMillis()
         replyRunChars = 0
         streamJob = viewModelScope.launch {
+            val selfJob = kotlin.coroutines.coroutineContext[kotlinx.coroutines.Job]
             // 防御性：清理可能残留的 streaming 状态
             // 用户停止生成 / 异常退出后，最后一条消息可能仍是 streaming=true，
             // 这种状态会卡住 UI（光标不消失），且与新 run 的消息产生视觉混乱
             cleanupStaleStreamingMessages()
             try {
                 block()
+            } catch (c: kotlinx.coroutines.CancellationException) {
+                // 用户停止 / 页面销毁：不当作错误，收尾交给 finally
+                throw c
             } catch (t: Throwable) {
                 _errorEvent.value = t.message ?: "未知错误"
                 _chatError.value = chatRepository.classify(t)
             } finally {
-                _isGenerating.value = false
+                if (streamJob === selfJob) {
+                    _isGenerating.value = false
+                }
+                settleInterruptedStreams()
                 notifyIdleIfNoWork()
             }
         }
@@ -795,6 +847,27 @@ class ChatViewModel(
     }
 
     /**
+     * 收尾残留的流式消息：把 isStreaming=true 的消息落盘为完成态（保留内容），
+     * 避免停止生成 / 异常退出后气泡光标永远不消失。
+     * 在 NonCancellable 上下文中执行，确保取消过程中也能完成落盘。
+     */
+    private fun settleInterruptedStreams() {
+        viewModelScope.launch {
+            withContext(NonCancellable) {
+                // 直接读 store 的 StateFlow（同步更新），不依赖 UI 收集协程的调度
+                val current = conversationRepository.observeMessages(conversationId).value
+                if (current.none { it.isStreaming }) return@withContext
+                conversationRepository.replaceMessages(
+                    conversationId,
+                    current.map { msg ->
+                        if (msg.isStreaming) msg.copy(isStreaming = false) else msg
+                    }
+                )
+            }
+        }
+    }
+
+    /**
      * 串行处理流式事件：每个事件依次 await 持久化完成后再处理下一个，
      * 避免 updateMessage 抢在 appendMessage 之前执行。
      */
@@ -810,7 +883,10 @@ class ChatViewModel(
                 // 1.5.0 延迟输出：加载动画时长 = 累计回复字数 × 每字毫秒数。
                 // 流式文字自然显示（MessageBubble 不再逐字停顿），消息保持
                 // streaming 状态直到该时长结束（气泡光标 / 群聊头像三点不提前停止）。
-                replyRunChars += event.message.content.length
+                // 思考消息不计入打字延迟（思考单独一条消息，不应拖慢回复动画）
+                if (!event.message.isThinking) {
+                    replyRunChars += event.message.content.length
+                }
                 val settings = settingsRepository.currentSnapshot()
                 if (settings.typingDelayEnabled && settings.typingDelayMsPerChar > 0 &&
                     replyRunStart > 0 && event.message.content.isNotEmpty()
@@ -833,6 +909,10 @@ class ChatViewModel(
                 accumulateTokenUsage(event.message.tokenCount)
             }
             is ChatRepository.Event.Done -> Unit
+            is ChatRepository.Event.Notice -> {
+                // 信息性提示（非错误）：如思考降级 / 未返回思考内容
+                _errorEvent.value = event.text
+            }
             is ChatRepository.Event.Error -> {
                 _errorEvent.value = event.throwable.message ?: "未知错误"
                 _chatError.value = chatRepository.classify(event.throwable)
@@ -881,6 +961,7 @@ class ChatViewModel(
             }
             syncGroupQueue()
             _isGenerating.value = false
+            settleInterruptedStreams()
             notifyIdleIfNoWork()
             return
         }
@@ -888,6 +969,7 @@ class ChatViewModel(
         streamJob = null
         cancelPendingSend() // 同时取消 pending 的发送延迟
         _isGenerating.value = false
+        settleInterruptedStreams()
         notifyIdleIfNoWork()
     }
 
@@ -920,8 +1002,9 @@ class ChatViewModel(
      * @param compileEnabled 是否启用精调（来自 PersonaPanel 开关）
      */
     fun updatePersona(persona: Persona, compileEnabled: Boolean) {
-        val conv = conversation.value ?: return
         viewModelScope.launch {
+            // 协程内重读会话，避免与并发的其他设置操作互相覆盖（丢失更新竞态）
+            val conv = conversation.value ?: return@launch
             // 头部名字框同步规则：标题跟随人设名，除非用户已手动重命名过。
             // - 标题仍是默认"新会话" → 同步为新名
             // - 标题当前等于旧人设名（之前自动同步过）→ 跟随更新为新名
@@ -1041,15 +1124,15 @@ class ChatViewModel(
     }
 
     fun updateUserPersona(userPersona: UserPersona) {
-        val conv = conversation.value ?: return
         viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
             conversationRepository.updateConversation(conv.copy(userPersona = userPersona))
         }
     }
 
     fun updateScene(scene: String) {
-        val conv = conversation.value ?: return
         viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
             // 场景修改后重置 sceneInjected=false，下次对话将新场景注入系统提示词
             conversationRepository.updateConversation(
                 conv.copy(scene = scene, sceneInjected = false)
@@ -1058,26 +1141,9 @@ class ChatViewModel(
     }
 
     fun updateMemory(memory: String) {
-        val conv = conversation.value ?: return
         viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
             conversationRepository.updateConversation(conv.copy(memory = memory))
-        }
-    }
-
-    /**
-     * 设置会话的对话风格（【对话方式】注入用，用户自主权设置）。
-     * 合法值见 [QuiddityConstants.REPLY_STYLE_*]；未知值回退为跟随人设。
-     */
-    fun updateReplyStyle(style: String) {
-        val conv = conversation.value ?: return
-        val safe = when (style) {
-            QuiddityConstants.REPLY_STYLE_CONCISE,
-            QuiddityConstants.REPLY_STYLE_DETAILED -> style
-            else -> QuiddityConstants.REPLY_STYLE_FOLLOW_PERSONA
-        }
-        if (conv.replyStyle == safe) return
-        viewModelScope.launch {
-            conversationRepository.updateConversation(conv.copy(replyStyle = safe))
         }
     }
 
@@ -1108,9 +1174,9 @@ class ChatViewModel(
      * @return 编译后的系统提示词文本
      */
     suspend fun compilePersona(persona: Persona, maxOutputTokens: Int): String {
-        val conv = conversation.value ?: throw IllegalStateException("会话不存在")
         _isCompiling.value = true
         try {
+            val conv = conversation.value ?: throw IllegalStateException("会话不存在")
             // 先把最新 persona 写入会话，确保 repository 读到的是最新字段
             val newTitle = syncTitleWithPersonaName(
                 currentTitle = conv.title,
@@ -1156,23 +1222,23 @@ class ChatViewModel(
      * - 性别字段为空时回退为「暂不设置」；
      * - 直接覆盖现有 persona / userPersona / scene / memory（由 UI 在调用前确认）；
      * - 场景被覆盖后重置 sceneInjected=false，下次对话把新场景注入系统提示词；
-     * - 写入后在会话内插入一条居中灰色提示气泡（isNotice=true），展示当前场景与世界类型，
-     *   让用户直观了解快速设定生效后的场景状态。提示气泡不发给 LLM、不参与压缩、不导出。
+     * - 场景 / 世界类型提示由 ChatScreen 根据会话数据实时派生渲染（不落库为消息，
+     *   不发给 LLM、不参与压缩、不导出），用户直观看到快速设定生效后的场景状态。
      */
     fun applyQuickSetupResult(
         rawText: String,
         tier: com.quiddity.app.domain.QuickSetupTier
     ) {
-        val conv = conversation.value ?: return
-        val result = com.quiddity.app.domain.QuickSetupPrompt
-            .parseQuickSetupResult(rawText, tier)
-        val newTitle = syncTitleWithPersonaName(
-            currentTitle = conv.title,
-            oldPersonaName = conv.persona.name,
-            newPersonaName = result.persona.name
-        )
         viewModelScope.launch {
             withContext(NonCancellable) {
+                val conv = conversation.value ?: return@withContext
+                val result = com.quiddity.app.domain.QuickSetupPrompt
+                    .parseQuickSetupResult(rawText, tier)
+                val newTitle = syncTitleWithPersonaName(
+                    currentTitle = conv.title,
+                    oldPersonaName = conv.persona.name,
+                    newPersonaName = result.persona.name
+                )
                 conversationRepository.updateConversation(
                     conv.copy(
                         persona = result.persona,
@@ -1194,21 +1260,18 @@ class ChatViewModel(
      * 更新快速设定描述草稿：500ms 防抖落盘，供面板关闭后回看/重新生成。
      */
     fun updateQuickSetupDraft(draft: String) {
-        val conv = conversation.value ?: return
-        if (conv.quickSetupDraft == draft) return
         quickSetupDraftJob?.cancel()
         quickSetupDraftJob = viewModelScope.launch {
             kotlinx.coroutines.delay(500)
-            persistQuickSetupDraft(conversation.value ?: conv, draft)
+            persistQuickSetupDraft(draft)
         }
     }
 
-    private fun persistQuickSetupDraft(
-        conv: com.quiddity.app.data.model.Conversation,
-        draft: String
-    ) {
+    private fun persistQuickSetupDraft(draft: String) {
         viewModelScope.launch {
             withContext(NonCancellable) {
+                val conv = conversation.value ?: return@withContext
+                if (conv.quickSetupDraft == draft) return@withContext
                 conversationRepository.updateConversation(conv.copy(quickSetupDraft = draft))
             }
         }
@@ -1276,8 +1339,8 @@ class ChatViewModel(
 
     /** 清空当前会话的人设、用户、场景、记忆设置（保留会话与消息记录）。 */
     fun clearConversationSettings() {
-        val conv = conversation.value ?: return
         viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
             conversationRepository.updateConversation(
                 conv.copy(
                     persona = Persona.Empty,
@@ -1303,9 +1366,9 @@ class ChatViewModel(
      */
     fun clearConversationMessages() {
         if (_isGenerating.value) return
-        val conv = conversation.value ?: return
-        val isGroupConv = conv.type == ConversationType.GROUP
         viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
+            val isGroupConv = conv.type == ConversationType.GROUP
             conversationRepository.replaceMessages(conversationId, emptyList())
             conversationRepository.updateConversation(
                 if (isGroupConv) {
@@ -1353,8 +1416,8 @@ class ChatViewModel(
 
     /** 导入人设卡到当前会话。 */
     fun importPersonaCard(card: PersonaCard) {
-        val conv = conversation.value ?: return
         viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
             // 场景可能随人设卡变更，重置 sceneInjected 让下次对话重新注入
             conversationRepository.updateConversation(
                 conv.copy(
@@ -1370,8 +1433,8 @@ class ChatViewModel(
 
     /** 设置 AI 头像（会话级）。 */
     fun setAiAvatarUri(uri: String?) {
-        val conv = conversation.value ?: return
         viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
             conversationRepository.updateConversation(
                 conv.copy(persona = conv.persona.copy(aiAvatarUri = uri))
             )
@@ -1389,8 +1452,8 @@ class ChatViewModel(
      * Coil 能直接重新加载。
      */
     fun setWallpaperUri(uri: String?) {
-        val conv = conversation.value ?: return
         viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
             conversationRepository.updateConversation(conv.copy(wallpaperUri = uri))
         }
     }
@@ -1400,12 +1463,12 @@ class ChatViewModel(
      * 数值越大壁纸越暗，文字可读性越好但壁纸本身被遮挡。
      */
     fun setWallpaperDarken(value: Float) {
-        val conv = conversation.value ?: return
-        val clamped = value.coerceIn(
-            QuiddityConstants.MIN_WALLPAPER_DARKEN,
-            QuiddityConstants.MAX_WALLPAPER_DARKEN
-        )
         viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
+            val clamped = value.coerceIn(
+                QuiddityConstants.MIN_WALLPAPER_DARKEN,
+                QuiddityConstants.MAX_WALLPAPER_DARKEN
+            )
             conversationRepository.updateConversation(conv.copy(wallpaperDarken = clamped))
         }
     }
@@ -1427,17 +1490,16 @@ class ChatViewModel(
      * @return Result.success(Unit) 或 Result.failure(Throwable)
      */
     fun importConversationFromText(text: String): Result<Unit> {
-        val conv = conversation.value ?: return Result.failure(
-            IllegalStateException("会话未加载")
-        )
         return runCatching {
             val result = com.quiddity.app.util.ConversationCodec.importConversation(
                 content = text,
-                targetConversationId = conv.id
+                targetConversationId = conversationId
             )
             viewModelScope.launch {
+                // 协程内重读会话，避免覆盖并发修改（丢失更新竞态）
+                val conv = conversation.value ?: return@launch
                 // 1. 替换消息列表（覆盖式导入）
-                conversationRepository.replaceMessages(conv.id, result.messages)
+                conversationRepository.replaceMessages(conversationId, result.messages)
 
                 // 2. 更新人设卡信息（仅在解析到非空内容时更新对应字段）
                 val updatedPersona = if (
@@ -1563,12 +1625,12 @@ class ChatViewModel(
      * 仍会再次同步。
      */
     fun updateContextLimit(limit: Int) {
-        val conv = conversation.value ?: return
-        val clamped = limit.coerceIn(
-            QuiddityConstants.MIN_CONTEXT_LIMIT,
-            QuiddityConstants.MAX_CONTEXT_LIMIT
-        )
         viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
+            val clamped = limit.coerceIn(
+                QuiddityConstants.MIN_CONTEXT_LIMIT,
+                QuiddityConstants.MAX_CONTEXT_LIMIT
+            )
             val newConv = if (conv.memoryBankEnabled) {
                 // 同步压缩轮数：跟随上下文记忆轮数，但限制在合法范围内
                 val syncRounds = clamped.coerceIn(
@@ -1590,12 +1652,12 @@ class ChatViewModel(
      * 官方文档：DeepSeek 思考模式下 temperature 不生效。
      */
     fun updateTemperature(value: Double?) {
-        val conv = conversation.value ?: return
-        val clamped = value?.coerceIn(
-            QuiddityConstants.MIN_TEMPERATURE,
-            QuiddityConstants.MAX_TEMPERATURE
-        )
         viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
+            val clamped = value?.coerceIn(
+                QuiddityConstants.MIN_TEMPERATURE,
+                QuiddityConstants.MAX_TEMPERATURE
+            )
             conversationRepository.updateConversation(conv.copy(temperature = clamped))
         }
     }
@@ -1605,9 +1667,30 @@ class ChatViewModel(
      * 开启仅代表用户意愿；实际路由由 ChatRepository 按当前 API 配置能力判定。
      */
     fun updateWebSearchEnabled(enabled: Boolean) {
-        val conv = conversation.value ?: return
         viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
             conversationRepository.updateConversation(conv.copy(webSearchEnabled = enabled))
+        }
+    }
+
+    /** 设置当前会话的 DeepSeek 思考开关。 */
+    fun updateThinkingEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
+            conversationRepository.updateConversation(conv.copy(thinkingEnabled = enabled))
+        }
+    }
+
+    /** 设置当前会话的思考深度（浅 / 深）。 */
+    fun updateThinkingDepth(depth: String) {
+        val safe = when (depth) {
+            QuiddityConstants.THINKING_DEPTH_DEEP -> depth
+            else -> QuiddityConstants.THINKING_DEPTH_SHALLOW
+        }
+        viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
+            if (conv.thinkingDepth == safe) return@launch
+            conversationRepository.updateConversation(conv.copy(thinkingDepth = safe))
         }
     }
 
@@ -1615,22 +1698,22 @@ class ChatViewModel(
 
     /** 设置群聊上下文条数 N（范围 1～200）。 */
     fun updateGroupContextLimit(limit: Int) {
-        val group = conversation.value ?: return
-        if (!isGroup()) return
-        val clamped = limit.coerceIn(
-            QuiddityConstants.GROUP_MIN_CONTEXT_LIMIT,
-            QuiddityConstants.GROUP_MAX_CONTEXT_LIMIT
-        )
         viewModelScope.launch {
+            val group = conversation.value ?: return@launch
+            if (group.type != ConversationType.GROUP) return@launch
+            val clamped = limit.coerceIn(
+                QuiddityConstants.GROUP_MIN_CONTEXT_LIMIT,
+                QuiddityConstants.GROUP_MAX_CONTEXT_LIMIT
+            )
             conversationRepository.updateConversation(group.copy(groupContextLimit = clamped))
         }
     }
 
     /** 切换群聊停止模式（A=只停当前 / B=清空队列）。 */
     fun updateGroupStopMode(mode: String) {
-        val group = conversation.value ?: return
-        if (!isGroup()) return
         viewModelScope.launch {
+            val group = conversation.value ?: return@launch
+            if (group.type != ConversationType.GROUP) return@launch
             conversationRepository.updateConversation(group.copy(stopMode = mode))
         }
     }
@@ -1642,9 +1725,9 @@ class ChatViewModel(
      *   决定文本注入为【群聊背景】还是【群聊场景】节。
      */
     fun updateGroupBackground(text: String, mode: String) {
-        val group = conversation.value ?: return
-        if (!isGroup()) return
         viewModelScope.launch {
+            val group = conversation.value ?: return@launch
+            if (group.type != ConversationType.GROUP) return@launch
             conversationRepository.updateConversation(
                 group.copy(groupBackground = text.trim(), groupBackgroundMode = mode)
             )
@@ -1657,9 +1740,9 @@ class ChatViewModel(
      * 供弹窗按成员重试或配置 API；最多 3 个。
      */
     fun addGroupMembers(ids: List<String>, onDone: (Result<Unit>, List<Pair<String, String>>) -> Unit) {
-        val group = conversation.value ?: return
-        if (!isGroup()) return
         viewModelScope.launch {
+            val group = conversation.value ?: return@launch
+            if (group.type != ConversationType.GROUP) return@launch
             val current = group.memberConversationIds
             val newIds = ids.filter { it !in current }
             val failures = mutableListOf<Pair<String, String>>()
@@ -1700,21 +1783,21 @@ class ChatViewModel(
      * 为群聊成员（私聊会话）设置模型配置条目（null = 使用全局激活配置）。
      */
     fun setMemberApi(memberId: String, catalogId: String?) {
-        val member = conversationRepository.getConversation(memberId) ?: return
         viewModelScope.launch {
+            val member = conversationRepository.getConversation(memberId) ?: return@launch
             conversationRepository.updateConversation(member.copy(apiCatalogId = catalogId))
         }
     }
 
     /** 移除群聊成员（踢出，方案十.4：最少 1 个；历史消息气泡保留）。 */
     fun removeGroupMember(memberId: String) {
-        val group = conversation.value ?: return
-        if (!isGroup()) return
-        if (group.memberConversationIds.size <= 1) {
-            _errorEvent.value = "群聊至少保留 1 个成员"
-            return
-        }
         viewModelScope.launch {
+            val group = conversation.value ?: return@launch
+            if (group.type != ConversationType.GROUP) return@launch
+            if (group.memberConversationIds.size <= 1) {
+                _errorEvent.value = "群聊至少保留 1 个成员"
+                return@launch
+            }
             conversationRepository.updateConversation(
                 group.copy(memberConversationIds = group.memberConversationIds - memberId)
             )
@@ -1727,10 +1810,10 @@ class ChatViewModel(
      * 当 memoryBankEnabled 时，压缩轮数同步跟随重置后的上下文记忆轮数。
      */
     fun resetContextLimitToTierDefault() {
-        val conv = conversation.value ?: return
-        val tier = resolveCurrentTier()
-        val defaultLimit = apiCatalogManager.defaultContextLimitForTier(tier)
         viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
+            val tier = resolveCurrentTier()
+            val defaultLimit = apiCatalogManager.defaultContextLimitForTier(tier)
             val newConv = if (conv.memoryBankEnabled) {
                 val syncRounds = defaultLimit.coerceIn(
                     QuiddityConstants.MIN_MEMORY_BANK_ROUNDS,
@@ -1753,8 +1836,8 @@ class ChatViewModel(
      * 关闭时保留原值，便于下次开启时恢复用户偏好。
      */
     fun updateMemoryBankEnabled(enabled: Boolean) {
-        val conv = conversation.value ?: return
         viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
             val newConv = if (enabled) {
                 val syncRounds = conv.contextLimit.coerceIn(
                     QuiddityConstants.MIN_MEMORY_BANK_ROUNDS,
@@ -1772,12 +1855,12 @@ class ChatViewModel(
      * 设置记忆库压缩触发轮数（会话级设置）。
      */
     fun updateMemoryBankRounds(rounds: Int) {
-        val conv = conversation.value ?: return
-        val clamped = rounds.coerceIn(
-            QuiddityConstants.MIN_MEMORY_BANK_ROUNDS,
-            QuiddityConstants.MAX_MEMORY_BANK_ROUNDS
-        )
         viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
+            val clamped = rounds.coerceIn(
+                QuiddityConstants.MIN_MEMORY_BANK_ROUNDS,
+                QuiddityConstants.MAX_MEMORY_BANK_ROUNDS
+            )
             conversationRepository.updateConversation(conv.copy(memoryBankRounds = clamped))
         }
     }
@@ -1841,10 +1924,10 @@ class ChatViewModel(
      * 切换 API 时自动重置上下文记忆轮数为新模型分级的默认值。
      */
     fun setConversationApi(catalogId: String) {
-        val conv = conversation.value ?: return
-        val settings = settingsRepository.currentSnapshot()
-        val entry = settings.catalog.firstOrNull { it.id == catalogId } ?: return
         viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
+            val settings = settingsRepository.currentSnapshot()
+            val entry = settings.catalog.firstOrNull { it.id == catalogId } ?: return@launch
             applyEntrySelection(conv, entry, explicit = true)
         }
     }
@@ -1907,11 +1990,11 @@ class ChatViewModel(
      * - 关闭：注销该会话所有定时闹钟
      */
     fun setActiveMessageEnabled(enabled: Boolean) {
-        val conv = conversation.value ?: return
         if (enabled) {
             _timeLibraryHint.value = "正在生成今日时间库…"
         }
         viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
             val outcome = ServiceLocator.timeLibraryRepository.setConversationEnabled(conv, enabled)
             if (enabled) {
                 val times = conversation.value?.timeLibrary.orEmpty()
@@ -1934,8 +2017,8 @@ class ChatViewModel(
 
     /** 用户成功输入时间库查看密码后调用：记住已解锁，之后输密码弹窗直接显示密码。 */
     fun markTimeLibraryUnlocked() {
-        val conv = conversation.value ?: return
         viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
             if (!conv.timeLibraryPasswordUnlocked) {
                 conversationRepository.updateConversation(conv.copy(timeLibraryPasswordUnlocked = true))
             }
@@ -1955,12 +2038,12 @@ class ChatViewModel(
      * 再委托协调器生成时间库并注册闹钟。当天已生成 / 开关未开启时静默返回。
      */
     fun ensureTimeLibraryGenerated() {
-        val conv = conversation.value ?: return
-        if (!conv.activeMessageEnabled) return
-        val today = java.time.LocalDate.now().toString()
-        if (!TimeLibraryEngine.shouldGenerate(true, conv.timeLibraryGeneratedDate, today)) return
-        _timeLibraryHint.value = "正在整理前一天的记忆！"
         viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
+            if (!conv.activeMessageEnabled) return@launch
+            val today = java.time.LocalDate.now().toString()
+            if (!TimeLibraryEngine.shouldGenerate(true, conv.timeLibraryGeneratedDate, today)) return@launch
+            _timeLibraryHint.value = "正在整理前一天的记忆！"
             val outcome = ServiceLocator.timeLibraryRepository.ensureLibraryGeneratedToday(conv.id)
             val times = conversation.value?.timeLibrary.orEmpty()
             _timeLibraryHint.value = when (outcome) {

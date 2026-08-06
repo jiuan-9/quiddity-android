@@ -107,6 +107,10 @@ class SettingsViewModel(
         settingsRepository.setBracketGrayEnabled(enabled)
     }
 
+    fun setMarkdownEnabled(enabled: Boolean) = viewModelScope.launch {
+        settingsRepository.setMarkdownEnabled(enabled)
+    }
+
     /**
      * 暴露给 [SettingsBottomSheet] 的"显示"section → 会话列表壁纸 子面板使用。
      */
@@ -319,37 +323,53 @@ class SettingsViewModel(
      * @param payload 解析后的导出数据
      * @param mode 导入模式（3.1）：REPLACE=替换 / MERGE=合并 / CHARACTERS_ONLY=仅导入角色库
      */
+    /**
+     * 导入完整备份数据。
+     *
+     * @return true=导入成功；false=任一步骤写盘失败（错误已记录日志），UI 据此提示
+     */
     suspend fun importAllPayload(
         payload: com.quiddity.app.data.model.ExportPayload,
         mode: ImportMode = ImportMode.MERGE
-    ) {
-        val hasWallpaperAsset = payload.listWallpaper != null || payload.assets?.listWallpaper != null
-        val sanitizedSettings = if (!hasWallpaperAsset) {
-            payload.settings.copy(listWallpaperUri = null)
-        } else {
-            payload.settings
-        }
-        when (mode) {
-            ImportMode.REPLACE -> {
-                settingsRepository.update { _ -> sanitizedSettings }
+    ): Boolean {
+        return try {
+            val hasWallpaperAsset = payload.listWallpaper != null || payload.assets?.listWallpaper != null
+            val sanitizedSettings = if (!hasWallpaperAsset) {
+                payload.settings.copy(listWallpaperUri = null)
+            } else {
+                payload.settings
             }
-            ImportMode.MERGE -> {
-                // 合并模式：保留本机 UI 偏好（暗色/字体/延迟等），只合并模型配置与缺失的媒体资源，
-                // 避免"合并导入"把用户本机设置整个覆盖掉
-                settingsRepository.update { local ->
-                    mergeSettings(local, sanitizedSettings, hasWallpaperAsset)
+            when (mode) {
+                ImportMode.REPLACE -> {
+                    if (!settingsRepository.update { _ -> sanitizedSettings }) {
+                        throw IllegalStateException("写入设置失败")
+                    }
                 }
+                ImportMode.MERGE -> {
+                    // 合并模式：保留本机 UI 偏好（暗色/字体/延迟等），只合并模型配置与缺失的媒体资源，
+                    // 避免"合并导入"把用户本机设置整个覆盖掉
+                    if (!settingsRepository.update { local ->
+                            mergeSettings(local, sanitizedSettings, hasWallpaperAsset)
+                        }
+                    ) {
+                        throw IllegalStateException("写入设置失败")
+                    }
+                }
+                ImportMode.CHARACTERS_ONLY -> Unit
             }
-            ImportMode.CHARACTERS_ONLY -> Unit
+            // 1.5.0：群聊随私聊一并导入（方案十七.2），群聊消息按会话 id 落盘
+            val allBundles = payload.privateChats + payload.groupChats
+            conversationRepository.importV2Snapshot(
+                characters = payload.characters,
+                conversations = allBundles.map { it.conversation },
+                messages = allBundles.associate { it.conversation.id to it.messages },
+                mode = mode
+            )
+            true
+        } catch (t: Throwable) {
+            android.util.Log.e("SettingsViewModel", "导入数据失败", t)
+            false
         }
-        // 1.5.0：群聊随私聊一并导入（方案十七.2），群聊消息按会话 id 落盘
-        val allBundles = payload.privateChats + payload.groupChats
-        conversationRepository.importV2Snapshot(
-            characters = payload.characters,
-            conversations = allBundles.map { it.conversation },
-            messages = allBundles.associate { it.conversation.id to it.messages },
-            mode = mode
-        )
     }
 
     /**

@@ -442,7 +442,8 @@ fun HamburgerMenu(
                         alpha = menuAlphaState.floatValue
                     },
                 color = if (hasWallpaper) {
-                    MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
+                    // 毛玻璃半透明面板：透出壁纸，保留文字可读
+                    MaterialTheme.colorScheme.surface.copy(alpha = 0.82f)
                 } else {
                     MaterialTheme.colorScheme.surface
                 },
@@ -553,15 +554,16 @@ fun HamburgerMenu(
                                             if (conversation?.timeLibraryPasswordUnlocked == true) 2 else 1
                                     },
                                     onOpenSearchChat = { currentPanel = HamburgerPanel.SearchChat },
-                                    replyStyle = conversation?.replyStyle
-                                        ?: QuiddityConstants.REPLY_STYLE_FOLLOW_PERSONA,
-                                    onReplyStyleChange = { style ->
-                                        viewModel.updateReplyStyle(style)
-                                    },
                                     webSearchSupported = webSearchSupported,
                                     currentModelId = currentModelId,
                                     onTemperatureChange = { value ->
                                         viewModel.updateTemperature(value)
+                                    },
+                                    onThinkingEnabledChange = { enabled ->
+                                        viewModel.updateThinkingEnabled(enabled)
+                                    },
+                                    onThinkingDepthChange = { depth ->
+                                        viewModel.updateThinkingDepth(depth)
                                     },
                                     onWebSearchChange = { enabled ->
                                         viewModel.updateWebSearchEnabled(enabled)
@@ -964,7 +966,7 @@ fun HamburgerMenu(
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.surfaceContainerLow
+                        color = com.quiddity.app.ui.components.glassCardColor()
                     ) {
                         Text(
                             text = "提示：你也可以在此菜单中单独导入人设卡或对话记录",
@@ -1070,7 +1072,7 @@ private fun ExportFormatPickerDialog(
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null
                             ) { onSelect(format) },
-                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                        color = com.quiddity.app.ui.components.glassCardColor(),
                         tonalElevation = 0.dp
                     ) {
                         Row(
@@ -1304,7 +1306,7 @@ private fun ChatSearchResultRow(
                 indication = null,
                 onClick = onClick
             ),
-        color = MaterialTheme.colorScheme.surfaceContainerLow
+        color = com.quiddity.app.ui.components.glassCardColor()
     ) {
         Row(
             modifier = Modifier.padding(12.dp),
@@ -1517,14 +1519,13 @@ private fun MainMenuContent(
     onActiveMessageChange: (Boolean) -> Unit,
     onViewTimeLibrary: () -> Unit,
     onOpenSearchChat: () -> Unit,
-    replyStyle: String,
-    onReplyStyleChange: (String) -> Unit,
     webSearchSupported: Boolean,
     currentModelId: String,
     onTemperatureChange: (Double?) -> Unit,
+    onThinkingEnabledChange: (Boolean) -> Unit,
+    onThinkingDepthChange: (String) -> Unit,
     onWebSearchChange: (Boolean) -> Unit
 ) {
-    var showReplyStyleDialog by remember { mutableStateOf(false) }
     var showTemperatureEditor by remember { mutableStateOf(false) }
 
     Column(
@@ -1623,16 +1624,6 @@ private fun MainMenuContent(
                 onClick = { onPanelSelected(HamburgerPanel.Scene) },
                 expandableSubtitle = true
             )
-            MenuRow(
-                title = "对话风格",
-                subtitle = when (replyStyle) {
-                    QuiddityConstants.REPLY_STYLE_CONCISE -> "简洁自然"
-                    QuiddityConstants.REPLY_STYLE_DETAILED -> "细腻详细"
-                    else -> "跟随人设（默认）"
-                },
-                onClick = { showReplyStyleDialog = true }
-            )
-
             // 模型配置
             }
             MenuSectionCard(title = "模型配置") {
@@ -1650,6 +1641,18 @@ private fun MainMenuContent(
                 onClick = { onPanelSelected(HamburgerPanel.ApiEditor) },
             )
             Spacer(modifier = Modifier.size(4.dp))
+            // 内部思考：提示词引导模型输出【思考】/【回答】，任意模型可用
+            ThinkingMenuRow(
+                enabled = conversation?.thinkingEnabled == true,
+                supported = true,
+                depth = conversation?.thinkingDepth ?: QuiddityConstants.THINKING_DEPTH_SHALLOW,
+                onThinkingChange = onThinkingEnabledChange,
+                onDepthChange = onThinkingDepthChange
+            )
+            }
+
+            // DeepSeek 专属：温度 / 官方联网搜索（其他模型暂未支持）
+            MenuSectionCard(title = "DeepSeek 专属") {
             val temperatureSubtitle = if (conversation?.temperature != null) {
                 "本会话 " + String.format(java.util.Locale.US, "%.1f", conversation.temperature) +
                     " · 默认 " + String.format(java.util.Locale.US, "%.1f", settings.globalTemperature)
@@ -1657,7 +1660,7 @@ private fun MainMenuContent(
                 "跟随默认（" + String.format(java.util.Locale.US, "%.1f", settings.globalTemperature) + "）"
             }
             MenuRow(
-                title = "采样温度",
+                title = "温度",
                 subtitle = temperatureSubtitle,
                 onClick = { showTemperatureEditor = !showTemperatureEditor }
             )
@@ -1675,8 +1678,14 @@ private fun MainMenuContent(
                 currentModelId = currentModelId,
                 onWebSearchChange = onWebSearchChange
             )
-
+            Text(
+                text = "DeepSeek 模型可用功能（其他模型暂未支持）",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+            )
             }
+
             MenuSectionCard(title = "统计") {
             TokenStatsPanel(
                 conversation = conversation,
@@ -1770,89 +1779,6 @@ private fun MainMenuContent(
         }
     }
 
-    // ===== 对话风格选择弹窗（用户自主权：表达方式由用户决定，默认完全跟随人设） =====
-    if (showReplyStyleDialog) {
-        val options = listOf(
-            Triple(
-                QuiddityConstants.REPLY_STYLE_FOLLOW_PERSONA,
-                "跟随人设",
-                "完全按 AI 人设中的性格与期望表达，不做额外限制（默认）"
-            ),
-            Triple(
-                QuiddityConstants.REPLY_STYLE_CONCISE,
-                "简洁自然",
-                "回复尽量简短自然，像日常聊天"
-            ),
-            Triple(
-                QuiddityConstants.REPLY_STYLE_DETAILED,
-                "细腻详细",
-                "回复充分展开，描写细腻、篇幅不限"
-            )
-        )
-        AlertDialog(
-            onDismissRequest = { showReplyStyleDialog = false },
-            title = { Text("对话风格") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    options.forEach { (style, label, desc) ->
-                        val selected = replyStyle == style
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(
-                                    if (selected) {
-                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
-                                    } else {
-                                        Color.Transparent
-                                    }
-                                )
-                                .clickable(
-                                    interactionSource = remember { MutableInteractionSource() },
-                                    indication = null
-                                ) {
-                                    onReplyStyleChange(style)
-                                    showReplyStyleDialog = false
-                                }
-                                .padding(horizontal = 14.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = label,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                                    color = if (selected) {
-                                        MaterialTheme.colorScheme.primary
-                                    } else {
-                                        MaterialTheme.colorScheme.onSurface
-                                    }
-                                )
-                                Text(
-                                    text = desc,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                                )
-                            }
-                            if (selected) {
-                                Icon(
-                                    imageVector = Icons.Filled.Check,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showReplyStyleDialog = false }) {
-                    Text("完成")
-                }
-            }
-        )
-    }
 }
 
 @Composable
@@ -1866,10 +1792,11 @@ private fun MenuSectionCard(
             .fillMaxWidth()
             .padding(horizontal = 10.dp, vertical = 6.dp)
             .clip(RoundedCornerShape(18.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            // 毛玻璃半透明卡片：透出壁纸背景
+            .background(com.quiddity.app.ui.components.glassCardColor())
             .border(
                 width = 1.dp,
-                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f),
+                color = com.quiddity.app.ui.components.glassCardBorderColor(),
                 shape = RoundedCornerShape(18.dp)
             )
             .padding(horizontal = 2.dp, vertical = 6.dp)
@@ -1917,7 +1844,7 @@ private fun MenuRow(
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(
-                MaterialTheme.colorScheme.surfaceContainerLow
+                com.quiddity.app.ui.components.glassCardColor()
             )
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
@@ -2994,7 +2921,7 @@ private fun ToggleMenuRow(
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(
-                MaterialTheme.colorScheme.surfaceContainerLow
+                com.quiddity.app.ui.components.glassCardColor()
             )
             .then(
                 if (enabled) {
@@ -3061,7 +2988,7 @@ private fun TemperatureEditorPanel(
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 3.dp),
         shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow
+        color = com.quiddity.app.ui.components.glassCardColor()
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -3073,7 +3000,7 @@ private fun TemperatureEditorPanel(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "采样温度",
+                    text = "温度",
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.primary
@@ -3199,6 +3126,98 @@ private fun WebSearchMenuRow(
 }
 
 /**
+ * DeepSeek 思考开关行 + 思考深度选择（浅 / 深）。
+ * 仅 DeepSeek 官方模型可用（由 [supported] 判定）；不支持时整行禁用。
+ */
+@Composable
+private fun ThinkingMenuRow(
+    enabled: Boolean,
+    supported: Boolean,
+    depth: String,
+    onThinkingChange: (Boolean) -> Unit,
+    onDepthChange: (String) -> Unit
+) {
+    ToggleMenuRow(
+        title = "思考",
+        subtitle = if (supported) {
+            if (enabled) {
+                "回复前先思考，内容单独显示"
+            } else {
+                "回复前先思考（默认关闭）"
+            }
+        } else {
+            "仅 DeepSeek 官方模型支持"
+        },
+        checked = enabled,
+        enabled = supported,
+        onCheckedChange = onThinkingChange
+    )
+    if (enabled && supported) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "思考深度",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                modifier = Modifier.weight(1f)
+            )
+            ThinkingDepthChip(
+                label = "浅（默认）",
+                selected = depth != QuiddityConstants.THINKING_DEPTH_DEEP,
+                onClick = { onDepthChange(QuiddityConstants.THINKING_DEPTH_SHALLOW) }
+            )
+            Spacer(modifier = Modifier.size(6.dp))
+            ThinkingDepthChip(
+                label = "深",
+                selected = depth == QuiddityConstants.THINKING_DEPTH_DEEP,
+                onClick = { onDepthChange(QuiddityConstants.THINKING_DEPTH_DEEP) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun ThinkingDepthChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = if (selected) {
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+        } else {
+            com.quiddity.app.ui.components.glassCardColor().copy(alpha = 0.4f)
+        },
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (selected) {
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+            } else {
+                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
+            }
+        ),
+        onClick = onClick
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (selected) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+        )
+    }
+}
+
+/**
  * 导出/导入卡片：标题、说明文字、以及「导出」「导入」两个按钮。
  *
  */
@@ -3215,7 +3234,7 @@ private fun ExportImportCard(
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(
-                MaterialTheme.colorScheme.surfaceContainerLow
+                com.quiddity.app.ui.components.glassCardColor()
             )
     ) {
         Column(modifier = Modifier.padding(16.dp)) {

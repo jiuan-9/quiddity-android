@@ -98,7 +98,7 @@ fun ApiSelectorPanel(
                         ) { onSelect(entry.id) },
                     color = if (entry.id == currentSelection)
                         MaterialTheme.colorScheme.primaryContainer
-                    else MaterialTheme.colorScheme.surfaceContainerLow
+                    else com.quiddity.app.ui.components.glassCardColor()
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text(
@@ -220,7 +220,7 @@ fun ApiEditorPanel(
                                 apiKey = ""
                             )
                         },
-                    color = MaterialTheme.colorScheme.surfaceContainerLow
+                    color = com.quiddity.app.ui.components.glassCardColor()
                 ) {
                     Row(
                             modifier = Modifier

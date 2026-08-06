@@ -44,6 +44,11 @@ data class ChatCompletionRequest(
     val temperature: Double = QuiddityConstants.DEFAULT_TEMPERATURE,
     val stream: Boolean = true,
     /**
+     * DeepSeek 思考深度（OpenAI 兼容 reasoning 能力字段：low / high）。
+     * 仅 DeepSeek 官方模型开启思考时携带；服务端不识别时忽略该字段。
+     */
+    val reasoning_effort: String? = null,
+    /**
      * 工具定义列表（6.6.2 记忆调用式 read_memory；默认不携带，向后兼容）。
      */
     val tools: List<ToolDefinition>? = null,
@@ -69,6 +74,10 @@ data class DeepSeekResponsesRequest(
     val max_output_tokens: Int? = null,
     val temperature: Double = QuiddityConstants.DEFAULT_TEMPERATURE,
     val stream: Boolean = true,
+    /**
+     * DeepSeek 思考深度（low / high）；仅思考开启时携带。
+     */
+    val reasoning_effort: String? = null,
     val tools: List<ResponsesTool>? = null,
     val tool_choice: JsonElement? = null
 )
@@ -164,6 +173,11 @@ data class Choice(
 @Serializable
 data class Delta(
     val content: String? = null,
+    /**
+     * DeepSeek 思考内容增量（deepseek 系列思考模型流式返回；
+     * 普通内容在 [content]，思考内容在 reasoning_content）。
+     */
+    val reasoning_content: String? = null,
     val role: String? = null,
     /**
      * 流式工具调用增量分片（6.6.3：按 index 聚合 name 与 arguments）。

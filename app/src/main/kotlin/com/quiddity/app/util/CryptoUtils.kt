@@ -48,6 +48,8 @@ import javax.crypto.spec.SecretKeySpec
  * - 真机（Android 6+）：加密密钥由系统级 Android Keystore 生成并保管。
  *   支持硬件级保护的设备上密钥不可导出，反向工程拿不到主密钥；即使拿到
  *   导出的数据文件，换一台设备也解不出明文，导入时需重新填写 Key；
+ *   真机上 Keystore 不可用时保存/解密会显式失败并提示用户，
+ *   绝不静默降级到硬编码密钥（降级会让密文可被逆向者解开，击穿设备绑定承诺）。
  * - JVM 单元测试：Keystore 不可用，回退到 [SecretKeyDerivation] 派生的
  *   固定密钥，保证纯 JVM 测试可运行（仅测试环境，不影响真机安全）。
  *
@@ -88,13 +90,9 @@ object CryptoUtils {
 
     private fun resolveCurrentKey(): SecretKey {
         if (!isAndroidKeystoreAvailable()) return legacyKey
-        return try {
-            getOrCreateKeystoreKey()
-        } catch (t: Throwable) {
-            // 极少数 ROM 的 Keystore 实现异常：回退派生密钥，保证功能可用（安全降级并记录日志）
-            Log.e(TAG, "Android Keystore 不可用，回退派生密钥", t)
-            legacyKey
-        }
+        // 真机必须使用 Keystore 密钥；实现异常直接抛出，由调用方提示用户，
+        // 避免密文落在可被逆向的固定密钥下
+        return getOrCreateKeystoreKey()
     }
 
     /**
@@ -137,14 +135,8 @@ object CryptoUtils {
     /** 加密明文，返回 Base64 字符串（包含 IV + 密文）。 */
     fun encrypt(plain: String): String {
         if (plain.isEmpty()) return ""
-        return try {
-            encryptWith(currentKey, plain)
-        } catch (t: Throwable) {
-            // 设备 Keystore 异常（如恢复/迁移后密钥失效）时回退派生密钥，
-            // 保证"保存密钥"永不因加密失败而报错
-            Log.e(TAG, "当前密钥加密失败，回退派生密钥", t)
-            runCatching { encryptWith(legacyKey, plain) }.getOrDefault("")
-        }
+        // Keystore 异常直接上抛（SettingsViewModel 会提示保存失败），不做降级
+        return encryptWith(currentKey, plain)
     }
 
     /**
@@ -153,8 +145,9 @@ object CryptoUtils {
      * GCM 是带认证的加密，认证失败通常意味着数据被篡改 / 磁盘损坏 / 密钥不匹配。
      * 抛出细分类型的 [DecryptFailure]，调用方按需降级。
      *
-     * 兼容回退：加密时若 Keystore 异常会回退派生密钥（[encrypt]），
-     * 因此解密遇到当前密钥认证失败时也尝试派生密钥，保证"保存 → 重新编辑"能解开。
+     * 兼容回退：旧版固定密钥加密的存量数据（升级迁移尚未完成 / 迁移失败时）
+     * 仍可用旧密钥解开。该回退只作用于"旧版密文"（其安全性本就不依赖 Keystore），
+     * 新写入的密文一律使用 Keystore 密钥（[encrypt] 不降级），不影响设备绑定承诺。
      */
     fun decrypt(encrypted: String): String {
         if (encrypted.isEmpty()) throw DecryptFailure.Empty()

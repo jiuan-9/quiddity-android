@@ -1,5 +1,7 @@
 package com.quiddity.app.ui.home
 
+import android.os.Build
+import android.graphics.drawable.BitmapDrawable
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
@@ -63,6 +65,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -71,6 +74,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
@@ -84,6 +88,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import coil.imageLoader
+import coil.request.ImageRequest
 import com.quiddity.app.data.model.Conversation
 import com.quiddity.app.data.model.ConversationType
 import com.quiddity.app.domain.GlobalChatSearch
@@ -93,9 +99,12 @@ import com.quiddity.app.ui.settings.SettingsBottomSheet
 import com.quiddity.app.ui.settings.SettingsViewModel
 import com.quiddity.app.ui.theme.Motion
 import com.quiddity.app.util.DateUtils
+import com.quiddity.app.util.WallpaperContrast
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 /*
  * ============================================================================
  * 开发规范 (Development Specifications)
@@ -162,6 +171,42 @@ fun HomeScreen(
     val listWallpaperUri = settings.listWallpaperUri
     val listWallpaperDarken = settings.listWallpaperDarken
     val hasListWallpaper = listWallpaperUri != null
+    // ===== 列表壁纸自动对比度：采样亮度，自动叠加保证文字可读的遮罩基线 =====
+    val imageLoader = LocalContext.current.imageLoader
+    var listWallpaperBrightness by remember(listWallpaperUri) {
+        mutableFloatStateOf(WallpaperContrast.DEFAULT_BRIGHTNESS)
+    }
+    LaunchedEffect(listWallpaperUri) {
+        if (listWallpaperUri == null) {
+            listWallpaperBrightness = WallpaperContrast.DEFAULT_BRIGHTNESS
+            return@LaunchedEffect
+        }
+        val brightness = withContext(Dispatchers.IO) {
+            runCatching {
+                val request = ImageRequest.Builder(context)
+                    .data(listWallpaperUri)
+                    .size(64)
+                    .allowHardware(false)
+                    .build()
+                val drawable = imageLoader.execute(request).drawable
+                val bitmap = (drawable as? BitmapDrawable)?.bitmap
+                    ?: return@runCatching WallpaperContrast.DEFAULT_BRIGHTNESS
+                WallpaperContrast.sampleBrightness(bitmap)
+            }.getOrDefault(WallpaperContrast.DEFAULT_BRIGHTNESS)
+        }
+        listWallpaperBrightness = brightness
+    }
+    val listWallpaperScrim = remember(
+        listWallpaperBrightness, listWallpaperDarken, settings.darkMode
+    ) {
+        val alpha = WallpaperContrast.effectiveScrimAlpha(
+            listWallpaperBrightness,
+            listWallpaperDarken,
+            settings.darkMode
+        )
+        if (settings.darkMode) Color.Black.copy(alpha = alpha)
+        else Color.White.copy(alpha = alpha)
+    }
 
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var messageHits by remember { mutableStateOf<List<GlobalChatSearch.Hit>>(emptyList()) }
@@ -312,13 +357,22 @@ fun HomeScreen(
                 model = listWallpaperUri,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
+                // API 31+ 对列表壁纸做轻模糊，配合半透明卡片形成毛玻璃质感
+                modifier = Modifier
+                    .fillMaxSize()
+                    .then(
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            Modifier.blur(3.dp)
+                        } else {
+                            Modifier
+                        }
+                    )
             )
             // 暗化遮罩：确保上层文字可读
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = listWallpaperDarken))
+                    .background(listWallpaperScrim)
             )
         }
 

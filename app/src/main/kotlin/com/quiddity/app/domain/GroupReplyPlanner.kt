@@ -87,6 +87,7 @@ object GroupReplyPlanner {
         senderNames: Map<String, String> = emptyMap(),
         userName: String? = null,
         webSearchResponsesUrl: String? = null,
+        thinkingDepth: String? = null,
         regeneratePreviousReply: String? = null
     ): Result<Plan> {
         val access = ApiAccess.resolve(settings, member)
@@ -100,7 +101,8 @@ object GroupReplyPlanner {
             PromptBuilder.GROUP_RULES,
             regeneratePreviousReply,
             group.groupBackground.takeIf { it.isNotBlank() },
-            group.groupBackgroundMode
+            group.groupBackgroundMode,
+            thinkingDepth
         )
         val apiMessages = PromptBuilder.toApiMessages(systemPrompt, transcript, senderNames, userName)
         val maxTokens = member.maxTokens ?: settings.globalMaxTokens
@@ -114,6 +116,7 @@ object GroupReplyPlanner {
             max_tokens = maxTokens,
             temperature = temperature,
             stream = true,
+            reasoning_effort = null,
             tools = if (useSearchTool) listOf(PromptBuilder.buildSearchChatTool()) else null,
             tool_choice = if (useSearchTool) "auto" else null
         )
@@ -132,6 +135,7 @@ object GroupReplyPlanner {
                 max_output_tokens = maxTokens,
                 temperature = temperature,
                 stream = true,
+                reasoning_effort = null,
                 tools = responsesTools
             )
         }

@@ -234,7 +234,8 @@ class TimeLibraryRepository(
         }
 
         // 5.2 读取未压缩聊天记录；为空 → 跳过本次决策，直接视为"不发送"
-        val messages = conversationRepository.observeMessages(convId).value.filterNot { it.isNotice }
+        val messages = conversationRepository.observeMessages(convId).value
+            .filterNot { it.isNotice || it.isThinking }
         val nextLibrary = if (messages.isEmpty()) {
             TimeLibraryEngine.markDone(conv.timeLibrary, timePoint)
         } else {
@@ -423,9 +424,13 @@ class TimeLibraryRepository(
                 .setAutoCancel(true)
                 .setPriority(NotificationCompat.PRIORITY_DEFAULT)
                 .build()
-            manager.notify(1002, notification)
+            // 通知 ID 按会话派生：多个会话的主动消息互不覆盖
+            manager.notify(notificationIdFor(conv.id), notification)
         } catch (t: Throwable) {
             Log.w("TimeLibraryRepository", "主动消息通知发送失败", t)
         }
     }
+
+    private fun notificationIdFor(convId: String): Int =
+        1_000 + (convId.hashCode() and 0xFFFFFF)
 }

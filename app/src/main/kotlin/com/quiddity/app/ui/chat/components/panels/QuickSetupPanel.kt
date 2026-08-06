@@ -385,7 +385,7 @@ private fun TierIndicator(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .background(com.quiddity.app.ui.components.glassCardColor())
             .padding(4.dp)
             .drawBehind {
                 if (tiers.isNotEmpty()) {
@@ -709,7 +709,7 @@ private fun GenderSelector(
                         if (selected) {
                             MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
                         } else {
-                            MaterialTheme.colorScheme.surfaceContainerLow
+                            com.quiddity.app.ui.components.glassCardColor()
                         }
                     )
                     .clickable(

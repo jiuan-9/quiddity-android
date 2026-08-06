@@ -152,7 +152,7 @@ fun AvatarPicker(
         modifier = Modifier
             .size(96.dp)
             .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .background(com.quiddity.app.ui.components.glassCardColor())
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null

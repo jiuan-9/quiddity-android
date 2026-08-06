@@ -107,7 +107,7 @@ fun TokenStatsPanel(
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(14.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerLow
+            color = com.quiddity.app.ui.components.glassCardColor()
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(
@@ -169,7 +169,7 @@ fun TokenStatsPanel(
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(14.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerLow
+            color = com.quiddity.app.ui.components.glassCardColor()
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(

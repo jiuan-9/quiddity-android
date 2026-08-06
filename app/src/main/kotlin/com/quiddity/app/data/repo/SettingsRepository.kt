@@ -107,7 +107,11 @@ class SettingsRepository(private val store: SettingsStore) {
         val reEncrypted = pending.mapNotNull { entry ->
             runCatching { CryptoUtils.decryptLegacy(entry.apiKeyEnc) }
                 .getOrNull()
-                ?.let { plain -> entry.copy(apiKeyEnc = CryptoUtils.encrypt(plain)) }
+                ?.let { plain ->
+                    runCatching { CryptoUtils.encrypt(plain) }
+                        .getOrNull()
+                        ?.let { reEncryptedKey -> entry.copy(apiKeyEnc = reEncryptedKey) }
+                }
         }
         if (reEncrypted.isEmpty()) return
         val byId = reEncrypted.associateBy { it.id }
@@ -146,6 +150,8 @@ class SettingsRepository(private val store: SettingsStore) {
      * 与其他 setter 保持一致：仅走 update {} 流程（DataStore.edit 原子事务）。
      */
     suspend fun setBracketGrayEnabled(enabled: Boolean) = update { it.copy(bracketGrayEnabled = enabled) }
+
+    suspend fun setMarkdownEnabled(enabled: Boolean) = update { it.copy(markdownEnabled = enabled) }
 
     /**
      *
