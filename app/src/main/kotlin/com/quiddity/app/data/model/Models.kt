@@ -314,14 +314,14 @@ data class Conversation(
      */
     val stopMode: String = QuiddityConstants.GROUP_DEFAULT_STOP_MODE,
     /**
-     * 群聊背景 / 群规（仅 type=GROUP 使用）：用户自定义文本，
+     * 群聊背景（仅 type=GROUP 使用）：用户自定义文本，
      * 注入每个成员回复时的 system 提示词【群聊背景】节，塑造群聊整体氛围；
      * 空字符串 = 不注入（不影响默认群聊规则）。
      */
     val groupBackground: String = "",
     /**
      * 群聊背景/场景的模式（仅 type=GROUP 使用，与 [groupBackground] 合并为一个设置项）：
-     * - [com.quiddity.app.util.QuiddityConstants.GROUP_BACKGROUND_MODE_BACKGROUND] = 背景（氛围 / 群规），
+     * - [com.quiddity.app.util.QuiddityConstants.GROUP_BACKGROUND_MODE_BACKGROUND] = 背景（氛围描述），
      *   注入为【群聊背景】节
      * - [com.quiddity.app.util.QuiddityConstants.GROUP_BACKGROUND_MODE_SCENE] = 场景（多人情境），
      *   注入为【群聊场景】节

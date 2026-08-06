@@ -128,7 +128,7 @@ object QuiddityConstants {
     /** 停止模式 B：停止时同时清空整个队列（默认，方案四.7）。 */
     const val GROUP_STOP_MODE_B = "B"
     const val GROUP_DEFAULT_STOP_MODE = GROUP_STOP_MODE_B
-    /** 群聊背景/场景合并设置的模式：背景（氛围 / 群规）。 */
+    /** 群聊背景/场景合并设置的模式：背景（氛围描述）。 */
     const val GROUP_BACKGROUND_MODE_BACKGROUND = "BACKGROUND"
     /** 群聊背景/场景合并设置的模式：场景（多人情境）。 */
     const val GROUP_BACKGROUND_MODE_SCENE = "SCENE"

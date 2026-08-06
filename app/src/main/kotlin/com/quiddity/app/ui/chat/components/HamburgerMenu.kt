@@ -2254,7 +2254,7 @@ private fun GroupContextLimitPanel(
 }
 
 /**
- * 群聊背景 / 场景编辑面板：背景（氛围 / 群规）与场景（多人情境）合并为一个设置项，
+ * 群聊背景 / 场景编辑面板：背景（氛围描述）与场景（多人情境）合并为一个设置项，
  * 单选其一开启；文本注入所有成员的回复提示词。清空输入并保存 = 移除。
  */
 @Composable
@@ -2318,7 +2318,7 @@ private fun GroupBackgroundPanel(
                     onClick = { mode = QuiddityConstants.GROUP_BACKGROUND_MODE_BACKGROUND }
                 )
                 Text(
-                    text = "背景 / 群规",
+                    text = "背景",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurface
                 )
@@ -2349,13 +2349,13 @@ private fun GroupBackgroundPanel(
         OutlinedTextField(
             value = text,
             onValueChange = { text = it },
-            label = { Text(if (isScene) "场景描述" else "背景 / 群规") },
+            label = { Text(if (isScene) "场景描述" else "背景描述") },
             placeholder = {
                 Text(
                     if (isScene) {
                         "例如：你们几个朋友正在一场篝火晚会上，夜空晴朗，周围是树林"
                     } else {
-                        "例如：这是大学同学群，关系很熟，说话随意，偶尔互怼"
+                        "例如：大学同学群，关系很熟，说话随意，偶尔互怼"
                     }
                 )
             },
