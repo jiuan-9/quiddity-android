@@ -312,7 +312,13 @@ data class Conversation(
     /**
      * 群聊停止模式（仅 type=GROUP 使用）：A=只停止当前、B=清空整个队列（默认）。
      */
-    val stopMode: String = QuiddityConstants.GROUP_DEFAULT_STOP_MODE
+    val stopMode: String = QuiddityConstants.GROUP_DEFAULT_STOP_MODE,
+    /**
+     * 群聊背景 / 群规（仅 type=GROUP 使用）：用户自定义文本，
+     * 注入每个成员回复时的 system 提示词【群聊背景】节，塑造群聊整体氛围；
+     * 空字符串 = 不注入（不影响默认群聊规则）。
+     */
+    val groupBackground: String = ""
 )
 
 /**

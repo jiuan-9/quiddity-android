@@ -483,6 +483,12 @@ fun HamburgerMenu(
                                     onStopModeChange = { mode ->
                                         viewModel.updateGroupStopMode(mode)
                                     },
+                                    onGroupBackground = {
+                                        currentPanel = HamburgerPanel.GroupBackground
+                                    },
+                                    onWallpaper = {
+                                        currentPanel = HamburgerPanel.Wallpaper
+                                    },
                                     onManageMembers = {
                                         currentPanel = HamburgerPanel.GroupMembers
                                     },
@@ -778,6 +784,18 @@ fun HamburgerMenu(
                                     viewModel = viewModel,
                                     settings = settings,
                                     onBack = { currentPanel = null }
+                                )
+                            }
+                        }
+                        HamburgerPanel.GroupBackground -> {
+                            conversation?.let { conv ->
+                                GroupBackgroundPanel(
+                                    currentText = conv.groupBackground,
+                                    onBack = { currentPanel = null },
+                                    onSave = { text ->
+                                        viewModel.updateGroupBackground(text)
+                                        currentPanel = null
+                                    }
                                 )
                             }
                         }
@@ -1467,7 +1485,7 @@ private fun TimeLibraryDetailDialog(
 internal enum class HamburgerPanel {
     QuickSetup, Persona, UserPersona, Scene, ApiSelector, ApiEditor,
     Wallpaper, Compression, SearchChat,
-    GroupName, GroupContextLimit, GroupMembers
+    GroupName, GroupContextLimit, GroupMembers, GroupBackground
 }
 
 // ==================== 主菜单 ====================
@@ -1958,6 +1976,8 @@ private fun GroupMenuContent(
     onRename: () -> Unit,
     onContextLimit: () -> Unit,
     onStopModeChange: (String) -> Unit,
+    onGroupBackground: () -> Unit,
+    onWallpaper: () -> Unit,
     onManageMembers: () -> Unit,
     onSearchChat: () -> Unit,
     onClearMessages: () -> Unit,
@@ -2012,6 +2032,13 @@ private fun GroupMenuContent(
                     trailingIcon = Icons.Filled.ChevronRight
                 )
                 MenuRow(
+                    title = "群聊背景 / 群规",
+                    subtitle = if (conversation?.groupBackground?.isNotBlank() == true)
+                        conversation.groupBackground.trim() else "未设置（可选）",
+                    onClick = onGroupBackground,
+                    expandableSubtitle = true
+                )
+                MenuRow(
                     title = "群名称",
                     subtitle = conversation?.title?.ifBlank { "新群聊" } ?: "新群聊",
                     onClick = onRename
@@ -2033,6 +2060,13 @@ private fun GroupMenuContent(
                             else QuiddityConstants.GROUP_STOP_MODE_A
                         )
                     }
+                )
+            }
+            MenuSectionCard(title = "外观") {
+                MenuRow(
+                    title = "群聊壁纸",
+                    subtitle = if (conversation?.wallpaperUri != null) "已设置" else "未设置",
+                    onClick = onWallpaper
                 )
             }
             MenuSectionCard(title = "成员管理") {
@@ -2198,6 +2232,73 @@ private fun GroupContextLimitPanel(
         }
         Spacer(modifier = Modifier.size(16.dp))
         TextButton(onClick = { onSave(limit) }) { Text("保存") }
+    }
+}
+
+/**
+ * 群聊背景 / 群规编辑面板：用户自定义文本，注入所有成员的回复提示词；
+ * 清空输入并保存 = 移除群聊背景。
+ */
+@Composable
+private fun GroupBackgroundPanel(
+    currentText: String,
+    onBack: () -> Unit,
+    onSave: (String) -> Unit
+) {
+    var text by rememberSaveable { mutableStateOf(currentText) }
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "群聊背景 / 群规",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { onBack() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack, "返回",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+        Spacer(modifier = Modifier.size(16.dp))
+        OutlinedTextField(
+            value = text,
+            onValueChange = { text = it },
+            label = { Text("群聊背景 / 群规") },
+            placeholder = { Text("例如：这是大学同学群，关系很熟，说话随意，偶尔互怼") },
+            minLines = 4,
+            maxLines = 8,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(modifier = Modifier.size(8.dp))
+        Text(
+            text = "这段文字会注入到每个成员回复时的提示词里，塑造群聊整体氛围；清空后保存即移除。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.size(16.dp))
+        TextButton(onClick = { onSave(text) }) {
+            Text("保存")
+        }
     }
 }
 

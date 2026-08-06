@@ -628,11 +628,14 @@ $persona
      *
      * @param regeneratePreviousReply 重说场景下该成员上一版回复的原文（null = 正常回复）。
      *   非空时【对话方式】会标记本次为「重说」并要求换一种表达，避免输出与上一版雷同。
+     * @param groupBackground 群聊背景 / 群规（null/空白 = 不注入）。
+     *   作为【群聊背景】节注入，所有成员回复时都可见，塑造群聊整体氛围。
      */
     fun buildGroupSystemPrompt(
         member: Conversation,
         groupRules: String,
-        regeneratePreviousReply: String? = null
+        regeneratePreviousReply: String? = null,
+        groupBackground: String? = null
     ): String {
         val sb = StringBuilder()
         // 说话人认知：成员名字 = 该成员 AI 角色，用户名字 = 该成员私聊里的用户人设名字
@@ -646,6 +649,9 @@ $persona
         sb.append("【AI 人设】\n").append(buildPersonaSnippet(member)).append("\n\n")
         buildUserPersonaSnippet(member.userPersona)?.let { userSection ->
             sb.append(userSection).append("\n\n")
+        }
+        if (!groupBackground.isNullOrBlank()) {
+            sb.append("【群聊背景】\n").append(groupBackground.trim()).append("\n\n")
         }
         if (groupRules.isNotBlank()) {
             sb.append("【群聊规则】\n").append(groupRules).append("\n")

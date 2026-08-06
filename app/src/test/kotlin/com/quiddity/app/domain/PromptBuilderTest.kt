@@ -463,6 +463,25 @@ class PromptBuilderTest {
     }
 
     @Test
+    fun `group system prompt injects group background`() {
+        val member = conv().copy(persona = com.quiddity.app.data.model.Persona(name = "小A"))
+        val prompt = PromptBuilder.buildGroupSystemPrompt(
+            member,
+            PromptBuilder.GROUP_RULES,
+            groupBackground = "这是大学同学群，关系很熟，说话随意。"
+        )
+        assertTrue(prompt.contains("【群聊背景】"), "群聊背景应作为独立节注入")
+        assertTrue(prompt.contains("这是大学同学群，关系很熟，说话随意。"), "群聊背景内容应原样注入")
+    }
+
+    @Test
+    fun `group system prompt without background omits section`() {
+        val member = conv().copy(persona = com.quiddity.app.data.model.Persona(name = "小A"))
+        val prompt = PromptBuilder.buildGroupSystemPrompt(member, PromptBuilder.GROUP_RULES)
+        assertFalse(prompt.contains("【群聊背景】"), "未设置背景时不应注入该节")
+    }
+
+    @Test
     fun `conversation style lines give users autonomy`() {
         assertEquals(
             "表达方式完全遵循人设，不做额外限制。",
