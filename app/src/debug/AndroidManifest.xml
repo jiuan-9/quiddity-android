@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!--
+      Debug-only：允许连接本机/模拟器宿主机的明文 HTTP 服务（如 Ollama、LM Studio、
+      本地 mock 服务器），便于开发调试。Release 构建不含此配置，网络策略保持默认（禁明文）。
+    -->
+    <application android:networkSecurityConfig="@xml/network_security_config" />
+</manifest>

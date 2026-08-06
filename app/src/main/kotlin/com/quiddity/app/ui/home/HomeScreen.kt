@@ -13,6 +13,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -66,6 +67,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -227,6 +229,10 @@ fun HomeScreen(
             }
         }
     }
+    // 空状态（无会话/搜索无结果）下没有可滚动子组件，nestedScroll 收不到手势，
+    // 这里用根层指针手势兜底：仅在没有列表内容时启用，不与 LazyColumn 抢手势。
+    val noScrollContent = isLoading || conversations.isEmpty() || filteredConversations.isEmpty()
+    val usePointerPull = atTop && noScrollContent
     LaunchedEffect(pullTriggered) {
         if (pullTriggered) {
             pullDp = 0f
@@ -279,6 +285,21 @@ fun HomeScreen(
         modifier = Modifier
             .fillMaxSize()
             .nestedScroll(pullConnection)
+            .pointerInput(usePointerPull, pullTriggered, onOpenMiniApps, density) {
+                if (!usePointerPull) return@pointerInput
+                detectVerticalDragGestures(
+                    onVerticalDrag = { change, dragAmount ->
+                        change.consume()
+                        if (pullTriggered) return@detectVerticalDragGestures
+                        val dyDp = dragAmount / density.density
+                        pullDp = (pullDp + dyDp).coerceIn(0f, maxPullDp)
+                        if (pullDp >= thresholdDp) {
+                            pullTriggered = true
+                            onOpenMiniApps()
+                        }
+                    }
+                )
+            }
     ) {
         // 壁纸层（铺满全屏，在所有内容之下）
         // 注：hasListWallpaper 已包含 listWallpaperUri != null 判断

@@ -61,7 +61,18 @@ class MiniAppInviteManager(
 
     private fun resolveAccess(conv: Conversation): ApiAccess.Resolved? {
         val settings = settingsRepository.currentSnapshot()
-        return ApiAccess.resolve(settings, conv) as? ApiAccess.Resolved
+        val resolved = ApiAccess.resolve(settings, conv)
+        if (resolved is ApiAccess.Resolved) return resolved
+        // 兼容无密钥的本地/免鉴权服务（Ollama、LM Studio、本地 mock 等）：
+        // ApiAccess.resolve 对空密钥返回 KEY_NOT_CONFIGURED，但 ApiCatalogManager.decryptKey
+        // 允许空密钥（返回空串）。这里与之一致放行，避免"连接测试通过但开局被兜底"。
+        val entry = settings.catalog.firstOrNull { it.id == conv.apiCatalogId }
+            ?: settings.catalog.firstOrNull { it.id == settings.activeCatalogId }
+            ?: settings.catalog.firstOrNull()
+        if (entry != null && entry.apiUrl.isNotBlank() && entry.apiKeyEnc.isEmpty()) {
+            return ApiAccess.Resolved(apiUrl = entry.apiUrl, apiKey = "", model = entry.apiModel)
+        }
+        return null
     }
 
     private fun buildPersonaText(character: Character): String {
