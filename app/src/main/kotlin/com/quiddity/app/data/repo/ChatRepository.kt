@@ -315,14 +315,21 @@ class ChatRepository(
         request: ChatRoundRequest,
         coordinator: StreamCoordinator,
         conv: Conversation,
-        onEvent: suspend (Event) -> Unit
+        onEvent: suspend (Event) -> Unit,
+        /**
+         * 内容进入协调器前的流式转换（群聊用于剥离「名字：」前缀，
+         * 避免前缀在切分阶段被拆成独立消息、剥离后变成空白消息）。
+         */
+        contentTransform: (String) -> String = { it }
     ) {
-        val firstRoundCalls = runSingleStream(api, apiUrl, apiKey, request, coordinator, onEvent) ?: return
+        val firstRoundCalls = runSingleStream(
+            api, apiUrl, apiKey, request, coordinator, onEvent, contentTransform
+        ) ?: return
         if (firstRoundCalls.isNotEmpty()) {
             try {
                 val secondRequest = buildSecondRoundRequest(request, conv, firstRoundCalls)
                 // 第二轮不再聚合工具调用（模型若再次请求工具则忽略），直接流式输出最终答复
-                runSingleStream(api, apiUrl, apiKey, secondRequest, coordinator, onEvent)
+                runSingleStream(api, apiUrl, apiKey, secondRequest, coordinator, onEvent, contentTransform)
             } catch (t: Throwable) {
                 // 工具回填失败不影响主流程：派发错误并结束本轮，避免异常上抛导致崩溃
                 emitError(onEvent, t, coordinator.snapshot().joinToString("\n") { it.content })
@@ -342,7 +349,8 @@ class ChatRepository(
         apiKey: String,
         request: ChatRoundRequest,
         coordinator: StreamCoordinator,
-        onEvent: suspend (Event) -> Unit
+        onEvent: suspend (Event) -> Unit,
+        contentTransform: (String) -> String = { it }
     ): List<ChatStreamParser.AggregatedToolCall>? {
         var toolCalls: List<ChatStreamParser.AggregatedToolCall> = emptyList()
         try {
@@ -357,7 +365,7 @@ class ChatRepository(
             stream.collect { event ->
                 when (event) {
                     is ChatApi.StreamEvent.Content -> {
-                        val evictions = coordinator.accept(event.text)
+                        val evictions = coordinator.accept(contentTransform(event.text))
                         evictions.forEach { dispatch(onEvent, it) }
                     }
                     is ChatApi.StreamEvent.ToolCalls -> {
@@ -692,6 +700,8 @@ class ChatRepository(
             addAll(senderNames.values)
         }
         val sanitizer = GroupReplyPrefixSanitizer(prefixNames)
+        // 流式剥离「名字：」前缀：在切分之前移除，避免前缀被拆成独立消息后剥离成空白
+        val prefixStripper = GroupReplyPrefixStripper(prefixNames)
         val cleanEvent: suspend (Event) -> Unit = { event ->
             when (event) {
                 is Event.NewMessage ->
@@ -716,7 +726,9 @@ class ChatRepository(
                 val roundRequest = p.responsesRequest?.let { ChatRoundRequest.Responses(it) }
                     ?: ChatRoundRequest.Completions(p.request)
                 val effectiveApiUrl = p.responsesApiUrl ?: p.apiUrl
-                runWithToolRound(api, effectiveApiUrl, p.apiKey, roundRequest, coordinator, group, cleanEvent)
+                runWithToolRound(
+                    api, effectiveApiUrl, p.apiKey, roundRequest, coordinator, group, cleanEvent
+                ) { prefixStripper.accept(it) }
             },
             onFailure = { emitError(onEvent, it, "") }
         )
@@ -1012,5 +1024,47 @@ internal class GroupReplyPrefixSanitizer(names: List<String>) {
             text = text.substring(name.length + 1).trimStart()
         }
         return text
+    }
+}
+
+/**
+ * 群聊回复前缀流式剥离器：在内容进入切分器之前，把开头可能跨 delta 分片到达的
+ * 「名字：/名字:」前缀剥掉。
+ *
+ * 与 [GroupReplyPrefixSanitizer]（对完整内容剥离）互补：
+ * - 本类负责流式开头：若前缀在切分阶段被拆成独立消息，剥离后会产生空白消息；
+ * - 匹配成功后立即切换直通模式（前缀只可能出现在回复开头）；
+ * - 只处理开头（含前导空白），正文中的「名字：」仍由 [GroupReplyPrefixSanitizer] 兜底。
+ */
+internal class GroupReplyPrefixStripper(names: List<String>) {
+
+    private val known = names.filter { it.isNotBlank() }.distinct().sortedByDescending { it.length }
+    private val pending = StringBuilder()
+    private var active = true
+
+    fun accept(delta: String): String {
+        if (!active || delta.isEmpty()) return delta
+        pending.append(delta)
+        val text = pending.toString()
+        val start = text.indexOfFirst { !it.isWhitespace() }
+        if (start < 0) return ""
+        val candidate = text.substring(start)
+        for (name in known) {
+            val full = "$name："
+            if (candidate == full || candidate == "$name:") return ""
+            if (candidate.startsWith(full)) return consume(candidate.substring(full.length))
+            if (candidate.startsWith("$name:")) return consume(candidate.substring("$name:".length))
+        }
+        for (name in known) {
+            if (name.startsWith(candidate)) return ""
+            if ("$name：".startsWith(candidate) || "$name:".startsWith(candidate)) return ""
+        }
+        return consume(candidate)
+    }
+
+    private fun consume(rest: String): String {
+        active = false
+        pending.clear()
+        return rest
     }
 }

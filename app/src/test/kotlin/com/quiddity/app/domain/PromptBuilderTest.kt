@@ -358,9 +358,23 @@ class PromptBuilderTest {
     @Test
     fun `group rules are generic and minimal`() {
         assertTrue(PromptBuilder.GROUP_RULES.contains("不替其他成员或用户发言"))
-        assertTrue(PromptBuilder.GROUP_RULES.contains("不要加名字前缀"))
-        assertTrue(PromptBuilder.GROUP_RULES.contains("被用户「@」点名时优先回应"))
         assertFalse(PromptBuilder.GROUP_RULES.contains("必须包含"), "不再强制台词硬规则（由切分器根因修复兜底）")
+        assertFalse(PromptBuilder.GROUP_RULES.contains("名字前缀"), "前缀规则已迁入【对话方式】节")
+        assertFalse(PromptBuilder.GROUP_RULES.contains("括号"), "括号规则已迁入【对话方式】节")
+    }
+
+    @Test
+    fun `group system prompt carries dialogue discipline section`() {
+        val member = conv().copy(
+            persona = com.quiddity.app.data.model.Persona(name = "小A", character = "温柔"),
+            userPersona = com.quiddity.app.data.model.UserPersona(name = "小明")
+        )
+        val prompt = PromptBuilder.buildGroupSystemPrompt(member, PromptBuilder.GROUP_RULES)
+        assertTrue(prompt.contains("【对话方式】"), "群聊提示词应包含对话方式节")
+        assertTrue(prompt.contains("动作、神态描写用括号括起，如（轻笑）。"), "括号动作规则应带示例：$prompt")
+        assertTrue(prompt.contains("不要加「名字：」前缀或解释"), "前缀规则应在对话方式节：$prompt")
+        assertTrue(prompt.contains("被用户「@」点名时优先回应"), "@点名规则应在对话方式节：$prompt")
+        assertTrue(prompt.contains("不提及自己是 AI 或模型"), "AI 身份纪律应在对话方式节：$prompt")
     }
 
     @Test

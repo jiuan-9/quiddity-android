@@ -289,6 +289,72 @@ class MessageStreamCoordinatorTest {
     }
 
     @Test
+    fun `speaker label before bracket merges into bracket message`() {
+        // 群聊根因：模型输出「小A：（轻笑）你好呀。」时，
+        // 「小A：」不得被拆成独立消息（剥离前缀后会变成空白消息），应并入括号段
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("小A：（轻笑）你好呀。")
+        val snap = coord.snapshot()
+        assertEquals(
+            listOf("小A：（轻笑）", "你好呀。"),
+            snap.map { it.content },
+            "说话人标记应并入括号段，不得产生孤立前缀消息：${snap.map { it.content }}"
+        )
+    }
+
+    @Test
+    fun `streamed speaker label before bracket does not produce blank message`() {
+        // 跨 delta：前缀先到、括号后到；半截前缀流式消息应被同索引 Update 补全，无空白残留
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("小A：")
+        coord.accept("（轻笑）你好呀。")
+        coord.finalize()
+        val snap = coord.snapshot()
+        assertEquals(
+            listOf("小A：（轻笑）", "你好呀。"),
+            snap.map { it.content },
+            "跨 delta 的说话人标记 + 括号应合并为一条，不得出现「小A：」空白消息"
+        )
+        assertTrue(snap.all { it.content.isNotBlank() }, "任何消息内容都不得为空白")
+    }
+
+    @Test
+    fun `speaker label newline bracket merges into bracket message`() {
+        // 前缀与括号之间带换行（「小A：\n（轻笑）」）同样并入括号段
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("小A：\n（轻笑）你好。")
+        val snap = coord.snapshot()
+        assertEquals(
+            listOf("小A：（轻笑）", "你好。"),
+            snap.map { it.content },
+            "带换行的说话人标记也应并入括号段"
+        )
+    }
+
+    @Test
+    fun `whitespace only delta after split produces no message`() {
+        // 群聊/私聊通用根因：切分后到达的纯空白 delta 不得产生空白消息
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("你好。")
+        coord.accept("\n")
+        coord.finalize()
+        val snap = coord.snapshot()
+        assertEquals(
+            listOf("你好。"),
+            snap.map { it.content },
+            "纯空白 delta 不应产生消息：${snap.map { it.content }}"
+        )
+    }
+
+    @Test
+    fun `whitespace only stream produces no message`() {
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("  \n\t")
+        coord.finalize()
+        assertEquals(0, coord.snapshot().size, "全空白流不应产生任何消息")
+    }
+
+    @Test
     fun `multiple consecutive brackets each become separate messages`() {
         val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
         coord.accept("（点头）（微笑）你好。")

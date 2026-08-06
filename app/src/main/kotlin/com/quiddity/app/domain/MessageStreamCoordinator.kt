@@ -167,8 +167,8 @@ class MessageStreamCoordinator(
             break
         }
 
-        // 单条更新（当前 buffer 内容）：buffer 为空时不发出（避免空消息）
-        if (buffer.isNotEmpty()) {
+        // 单条更新（当前 buffer 内容）：buffer 为空白时不发出（避免空消息/纯空白气泡）
+        if (buffer.isNotBlank()) {
             val current = buildMessage(streaming = true)
             if (knownIds.add(current.id)) {
                 signals += StreamCoordinator.Signal.New(current)
@@ -191,7 +191,7 @@ class MessageStreamCoordinator(
             val trailing = pendingBrackets.joinToString("") { it.second }
             pendingBrackets.clear()
             when {
-                buffer.isNotEmpty() -> buffer.append(trailing)
+                buffer.isNotBlank() -> buffer.append(trailing)
                 completed.isNotEmpty() -> {
                     val lastIdx = completed.lastIndex
                     val mergedContent = completed[lastIdx].content + trailing
@@ -220,8 +220,8 @@ class MessageStreamCoordinator(
                 }
             }
         }
-        // buffer 为空说明全部内容已在 accept 阶段切分完成（或流本就无内容），无需收尾
-        if (buffer.isEmpty()) return signals
+        // buffer 为空白说明全部内容已在 accept 阶段切分完成（或流本就无内容），无需收尾
+        if (buffer.isBlank()) return signals
         val finalMsg = buildMessage(streaming = false)
         if (finalMsg.id in knownIds) {
             signals += StreamCoordinator.Signal.Complete(finalMsg)
@@ -240,8 +240,9 @@ class MessageStreamCoordinator(
         pendingBrackets.forEach { (idx, text) ->
             out += buildMessageFromContentAt(idx, text, streaming = false)
         }
-        if (buffer.isNotEmpty() || (completed.isEmpty() && pendingBrackets.isEmpty())) {
-            out += buildMessage(streaming = buffer.isNotEmpty())
+        // 仅展示非空白缓冲；纯空白（切分后的换行等）不产生消息
+        if (buffer.isNotBlank()) {
+            out += buildMessage(streaming = true)
         }
         return out
     }
@@ -342,6 +343,21 @@ class MessageStreamCoordinator(
             if (openMatch != null) {
                 // 括号前的文本作为前一段消息（若非空）
                 if (i > 0 && text.subSequence(0, i).isNotBlank()) {
+                    val closeIdx = findMatchingCloseBracket(text, i)
+                    // 括号前以冒号结尾（说话人标记，如「小A：」或「小A：\n」）时并入括号段：
+                    // 避免「小A：（轻笑）」被拆成「小A：」+「（轻笑）」两条，
+                    // 前缀在群聊中被剥离后产生空白消息；未闭合时等待更多 delta，不提前发出前缀。
+                    if (endsWithColonAfterWhitespace(text.subSequence(0, i))) {
+                        if (closeIdx < 0) return null
+                        val prefix = text.subSequence(0, i).toString().trimEnd()
+                        val merged = prefix + text.subSequence(i, closeIdx + 1)
+                        return Segment(
+                            text = merged,
+                            consumeEnd = closeIdx + 1,
+                            emit = hasBracketInnerContent(merged, prefix.length, merged.length - 1),
+                            isBracket = true
+                        )
+                    }
                     return Segment(
                         text = text.subSequence(0, i).toString().trim(),
                         consumeEnd = i,
@@ -355,14 +371,10 @@ class MessageStreamCoordinator(
                     return null
                 }
                 val bracketContent = text.subSequence(i, closeIdx + 1).toString()
-                // 仅含括号 / 空白时不发出（如"（）"），但仍消费
-                val hasInnerContent = bracketContent.any { c ->
-                    !c.isWhitespace() && matchingClose(c) == null && matchingOpen(c) == null
-                }
                 return Segment(
                     text = bracketContent,
                     consumeEnd = closeIdx + 1,
-                    emit = hasInnerContent,
+                    emit = hasBracketInnerContent(bracketContent, 0, bracketContent.length - 1),
                     isBracket = true
                 )
             } else if (isOpenQuote(ch)) {
@@ -502,6 +514,19 @@ class MessageStreamCoordinator(
         '>' -> '<'
         else -> null
     }
+
+    /** 判断 [text] 末尾（忽略尾部空白）是否为冒号（全角/半角说话人标记）。 */
+    private fun endsWithColonAfterWhitespace(text: CharSequence): Boolean {
+        var p = text.length - 1
+        while (p >= 0 && text[p].isWhitespace()) p--
+        return p >= 0 && (text[p] == '：' || text[p] == ':')
+    }
+
+    /** 括号段是否含实质内容（排除括号符号与空白）；仅含空括号（如「（）」）时不发出。 */
+    private fun hasBracketInnerContent(text: String, bracketStart: Int, bracketEnd: Int): Boolean =
+        text.subSequence(bracketStart, bracketEnd + 1).any { c ->
+            !c.isWhitespace() && matchingClose(c) == null && matchingOpen(c) == null
+        }
 
     /** 从 [start] 起连续等于 [ch] 的字符数。 */
     private fun countConsecutive(text: CharSequence, start: Int, ch: Char): Int {
