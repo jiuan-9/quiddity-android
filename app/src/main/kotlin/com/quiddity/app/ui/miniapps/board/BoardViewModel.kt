@@ -257,6 +257,7 @@ class BoardViewModel(
             }
             _uiState.update { st ->
                 val s = st.session ?: return@update st
+                if (s.id != currentSession.id) return@update st
                 st.copy(session = s.copy(chat = s.chat + replyMsg, thinking = false))
             }
         }
@@ -369,11 +370,17 @@ class BoardViewModel(
                 }
             }
 
+            // 竞态防护：协程执行期间用户可能已认输/退出/重开，校验会话仍为同一局且对局未结束
+            val current = _uiState.value.session
+            if (current == null || current.id != latest.id || current.status != BoardStatus.Playing) {
+                return@launch
+            }
             if (finished != null) {
-                finishGame(latest.copy(board = newBoard, thinking = false), finished.first, finished.second, newBoard)
+                finishGame(current.copy(board = newBoard, thinking = false), finished.first, finished.second, newBoard)
             } else {
-                _uiState.update {
-                    it.copy(session = it.session?.copy(board = newBoard, thinking = false, notice = fallbackNotice))
+                _uiState.update { st ->
+                    if (st.session?.id != current.id) return@update st
+                    st.copy(session = st.session.copy(board = newBoard, thinking = false, notice = fallbackNotice))
                 }
             }
         }
