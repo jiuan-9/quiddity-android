@@ -110,7 +110,8 @@ private fun BoardAppRoot(
                 }
                 BoardGameScreen(
                     session = session,
-                    onBack = { vm.backToGames() },
+                    // 对局退出回到当前棋种的"选择对手"页，不跨级跳回棋种选择
+                    onBack = { vm.backToMode(session.gameType) },
                     onCellTap = vm::onUserMove,
                     onPass = vm::onPass,
                     onResign = vm::onResign,
