@@ -106,7 +106,7 @@ fun BoardGameSelectScreen(
             icon = Icons.Rounded.DonutLarge,
             title = BoardGameType.GO.displayName,
             subtitle = "9×9 · 提子、围空（简化规则）",
-            accent = MaterialTheme.colorScheme.tertiary,
+            accent = MaterialTheme.colorScheme.primary,
             onClick = { onSelect(BoardGameType.GO) }
         )
         Spacer(Modifier.size(8.dp))
@@ -155,7 +155,7 @@ fun BoardModeSelectScreen(
             icon = Icons.Rounded.Computer,
             title = "与电脑对战",
             subtitle = "无需联网，本地棋力即时应手",
-            accent = MaterialTheme.colorScheme.secondary,
+            accent = MaterialTheme.colorScheme.primary,
             onClick = onVsComputer
         )
     }
