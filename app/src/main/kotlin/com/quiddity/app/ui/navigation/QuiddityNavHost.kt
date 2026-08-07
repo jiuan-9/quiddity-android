@@ -37,6 +37,7 @@ import com.quiddity.app.ui.home.HomeScreen
 import com.quiddity.app.ui.home.HomeViewModel
 import com.quiddity.app.ui.home.HomeViewModelFactory
 import com.quiddity.app.ui.miniapps.MiniAppHost
+import com.quiddity.app.ui.miniapps.MiniAppLaunchGate
 import com.quiddity.app.ui.miniapps.MiniAppMissingScreen
 import com.quiddity.app.ui.miniapps.MiniAppRegistry
 import com.quiddity.app.ui.miniapps.MiniAppsCenterScreen
@@ -206,27 +207,14 @@ fun QuiddityNavHost() {
             route = QuiddityRoute.MiniAppHost.PATTERN,
             arguments = QuiddityRoute.MiniAppHost.arguments,
             enterTransition = {
-                // 外挂应用感：从聊天/中心打开小应用时，缩放 + 自下而上展开
-                scaleIn(
-                    animationSpec = tween(Motion.DurationPageTransition, easing = Motion.EasingEmphasizedDecelerate),
-                    initialScale = 0.88f
-                ) + fadeIn(tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedDecelerate)) +
-                    slideInVertically(
-                        animationSpec = tween(Motion.DurationPageTransition, easing = Motion.EasingEmphasizedDecelerate),
-                        initialOffsetY = { it / 10 }
-                    )
+                // 进入：由 MiniAppLaunchGate 的解压动画接管展开，外层仅做轻量淡入
+                fadeIn(tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedDecelerate))
             },
             exitTransition = {
-                scaleOut(
-                    animationSpec = tween(Motion.DurationPageTransition, easing = Motion.EasingEmphasizedAccelerate),
-                    targetScale = 0.92f
-                ) + fadeOut(tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate))
+                fadeOut(tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate))
             },
             popEnterTransition = {
-                scaleIn(
-                    animationSpec = tween(Motion.DurationPageTransition, easing = Motion.EasingEmphasizedDecelerate),
-                    initialScale = 0.94f
-                ) + fadeIn(tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedDecelerate))
+                fadeIn(tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedDecelerate))
             },
             popExitTransition = {
                 scaleOut(
@@ -256,7 +244,9 @@ fun QuiddityNavHost() {
                         }
                     )
                 }
-                app.Content(host)
+                MiniAppLaunchGate(appName = app.name) {
+                    app.Content(host)
+                }
             }
         }
 
