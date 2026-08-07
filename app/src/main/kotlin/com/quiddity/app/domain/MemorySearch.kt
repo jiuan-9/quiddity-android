@@ -27,14 +27,6 @@ package com.quiddity.app.domain
  */
 
 
-/*
- * 协作说明（临时，交付前删除）：检索链路改造进行中。本文件与 ChatRecordSearch.kt、
- * NgramRecall.kt 由检索任务修改；正在同时修改 UI 的同事请勿改动这三份文件。
- * 本文件 search() 打分内核已切换为 n-gram + IDF（NgramRecall），保留原参数与返回结构。
- */
-
-
-
 /**
  * 记忆检索（read_memory 工具后端）。
  *
@@ -43,9 +35,8 @@ package com.quiddity.app.domain
  *
  * 检索策略（轻量、确定性，不依赖第三方全文索引）：
  * 1. 把记忆按空行/换行切分为段落；
- * 2. 从 query 中提取词元（连续字母数字 + 连续汉字均视为一个词元，小写归一）；
- * 3. 段落得分 = 各词元的命中次数之和；按得分降序、原文顺序保留；
- * 4. 合并命中段落，总长不超过 [MEMORY_SEARCH_MAX_CHARS]，超出时截断。
+ * 2. 打分内核为字符 bigram + IDF（见 [NgramRecall]），天然容忍词序变化与口语差异；
+ * 3. 命中段落按得分降序、原文顺序保留，总长不超过 [MEMORY_SEARCH_MAX_CHARS]，超出时截断。
  *
  * 无命中时返回明确的"未找到"提示，AI 据此回答"没有相关记忆"而非编造。
  */
@@ -66,17 +57,15 @@ object MemorySearch {
     )
 
     /**
-     * 在 [memory] 中按 [query] 检索相关段落。
+     * 在 [memory] 中按 [query] 检索相关段落（read_memory 工具后端）。
+     *
+     * 打分内核为字符 n-gram + IDF（见 [NgramRecall]），中文自然问句
+     * （口语、无关键词、词序变化）也能命中。
      *
      * @param memory 记忆全文（压缩摘要 + 群聊小本本等，通常由
      *   [com.quiddity.app.domain.PromptBuilder.buildMemoryDrawerContent] 产出）
      * @param query 模型传入的检索关键词
      * @return [Result.found]=true 且有内容时返回命中片段；否则返回未找到提示
-     */
-    /**
-     * 压缩记忆检索（read_memory 工具后端）：n-gram + IDF 召回（见 [NgramRecall]）。
-     * 返回结构与旧版完全一致（[Result]），仅打分内核替换为字符 bigram，
-     * 使中文自然问句（口语、无关键词、词序变化）也能命中。
      */
     fun search(memory: String, query: String): Result {
         if (memory.isBlank()) {

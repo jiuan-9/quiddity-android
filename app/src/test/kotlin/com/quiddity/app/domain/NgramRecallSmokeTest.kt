@@ -7,11 +7,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
-/**
- * 临时冒烟测试（交付前删除）：
- * 验证 n-gram + IDF 检索在"自然口语/无关键词"场景下不再 0 命中，
- * 同时保留旧行为的兜底与上限。
- */
 class NgramRecallSmokeTest {
 
     private fun msg(id: String, content: String): Message =

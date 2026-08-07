@@ -41,13 +41,6 @@ import kotlinx.serialization.json.JsonPrimitive
  */
 
 
-/*
- * 协作说明（临时，交付前删除）：检索链路改造进行中。本文件压缩提示词
- * （COMPRESSION_SYSTEM_PROMPT）已加入"保留别名线索"一条，配合检索用 n-gran；
- * 正在同时修改 UI 的同事如无需改动压缩提示词可忽略。交付前删除本说明。
- */
-
-
 /**
  * 提示词中枢：统一管理所有发给 LLM 的提示词，分为两大类。
  *

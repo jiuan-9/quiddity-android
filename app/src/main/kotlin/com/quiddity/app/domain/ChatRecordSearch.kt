@@ -33,21 +33,14 @@ import java.time.format.DateTimeFormatter
  */
 
 
-/*
- * 协作说明（临时，交付前删除）：检索链路改造进行中。本文件与 MemorySearch.kt、
- * NgramRecall.kt 由检索任务修改；正在同时修改 UI 的同事请勿改动这三份文件。
- * 本文件 search() 打分内核已切换为 n-gram + IDF（NgramRecall），保留原参数与返回结构。
- */
-
-
-
 /**
  * 本地聊天记录检索（search_chat 工具后端）。
  *
  * 目标：让模型能够在**用户本机完整聊天记录**中按关键词查找历史消息并引用，
  * 与 [MemorySearch]（压缩记忆检索）互补——记忆是提炼后的摘要，聊天记录是原始内容。
  *
- * 检索策略与 [MemorySearch] 一致（词元命中打分），但对每条消息逐条评分，
+ * 检索策略与 [MemorySearch] 一致（字符 n-gram + IDF，见 [NgramRecall]），
+ * 但对每条消息逐条评分，
  * 返回命中消息的角色标签 + 内容摘录 + 发送时间，供模型在回复中引用。
  */
 object ChatRecordSearch {
@@ -180,29 +173,15 @@ object ChatRecordSearch {
 
     /**
      * 返回按相关度降序排列的命中消息列表（供聊天记录搜索界面逐条展示）。
+     * 打分内核与 [search] 一致（[NgramRecall]），保证 UI 搜索与工具检索行为统一。
      * 无关键词或列表为空时返回空列表。
      */
     fun searchResults(messages: List<Message>, query: String): List<Message> {
         if (messages.isEmpty()) return emptyList()
         val terms = MemorySearch.extractTerms(query)
         if (terms.isEmpty()) return emptyList()
-        return messages.mapNotNull { message ->
-            val lower = message.content.lowercase()
-            val hits = terms.sumOf { term ->
-                var count = 0
-                var from = 0
-                while (true) {
-                    val idx = lower.indexOf(term, from)
-                    if (idx < 0) break
-                    count++
-                    from = idx + term.length
-                }
-                count
-            }
-            if (hits > 0) message to hits else null
-        }
-            .sortedByDescending { it.second }
-            .map { it.first }
+        return NgramRecall.rank(messages.map { it.content }, query, topK = Int.MAX_VALUE)
+            .mapNotNull { hit -> messages.getOrNull(hit.index) }
     }
 
     private fun buildList(messages: List<Message>): String {
