@@ -2,6 +2,7 @@ package com.quiddity.app.ui.miniapps.board
 
 import com.quiddity.app.domain.board.BoardGameType
 import com.quiddity.app.domain.board.BoardState
+import com.quiddity.app.domain.board.GameChatTurn
 import com.quiddity.app.domain.board.LlmMove
 import com.quiddity.app.domain.board.Move
 import kotlinx.coroutines.runBlocking
@@ -9,6 +10,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class BoardLlmClientTest {
 
@@ -64,5 +66,30 @@ class BoardLlmClientTest {
             Result.failure(RuntimeException("boom"))
         })
         assertNull(runBlocking { client.chatReply(state, "棋圣", null, "在吗") })
+    }
+
+    @Test
+    fun requestMove_passesChatHistoryIntoUserContent() {
+        var capturedUser = ""
+        val client = BoardLlmClient(LlmGateway { _, user, _, _ ->
+            capturedUser = user
+            Result.success("MOVE(1,1)")
+        })
+        val history = listOf(GameChatTurn(fromUser = true, text = "饶我一命"))
+        runBlocking { client.requestMove(state, "棋圣", null, history) }
+        assertTrue(capturedUser.contains("饶我一命"), "落子请求应包含对局聊天记录")
+        assertTrue(capturedUser.contains("本局聊天记录"))
+    }
+
+    @Test
+    fun chatReply_passesChatHistoryIntoSystemContent() {
+        var capturedSystem = ""
+        val client = BoardLlmClient(LlmGateway { system, _, _, _ ->
+            capturedSystem = system
+            Result.success("好的")
+        })
+        val history = listOf(GameChatTurn(fromUser = false, text = "那我们说好了"))
+        runBlocking { client.chatReply(state, "棋圣", null, "嗯", history) }
+        assertTrue(capturedSystem.contains("那我们说好了"), "聊天回复应携带对局聊天记录")
     }
 }

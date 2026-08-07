@@ -11,6 +11,7 @@ import com.quiddity.app.data.repo.MiniAppSessionRepository
 import com.quiddity.app.domain.board.BoardBot
 import com.quiddity.app.domain.board.BoardGameType
 import com.quiddity.app.domain.board.BoardState
+import com.quiddity.app.domain.board.GameChatTurn
 import com.quiddity.app.domain.board.GoScore
 import com.quiddity.app.domain.board.LlmMove
 import com.quiddity.app.domain.board.MoveOutcome
@@ -191,6 +192,8 @@ class BoardViewModel(
         val session = _uiState.value.session ?: return
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return
+        // 最新这条用户消息不进"历史"，由 chatReply 的 user 消息单独携带，避免重复
+        val historyBefore = session.chat
         val userMsg = BoardChatMessage(
             id = IdGenerator.newId(IdGenerator.Prefix.USER_MESSAGE),
             fromUser = true,
@@ -223,7 +226,13 @@ class BoardViewModel(
         viewModelScope.launch {
             val reply = currentSession.access?.let { access ->
                 BoardLlmClient(access.toLlmGateway(chatApi))
-                    .chatReply(currentSession.board, currentSession.opponentName, currentSession.opponentPersona, trimmed)
+                    .chatReply(
+                        currentSession.board,
+                        currentSession.opponentName,
+                        currentSession.opponentPersona,
+                        trimmed,
+                        historyBefore.map { GameChatTurn(it.fromUser, it.text) }
+                    )
             }
             val latest = _uiState.value.session ?: return@launch
             val replyMsg = if (reply != null) {
@@ -315,7 +324,12 @@ class BoardViewModel(
             if (latest.llmEnabled) {
                 llmMove = latest.access?.let { access ->
                     BoardLlmClient(access.toLlmGateway(chatApi))
-                        .requestMove(latest.board, latest.opponentName, latest.opponentPersona)
+                        .requestMove(
+                            latest.board,
+                            latest.opponentName,
+                            latest.opponentPersona,
+                            latest.chat.map { GameChatTurn(it.fromUser, it.text) }
+                        )
                 }
             }
 

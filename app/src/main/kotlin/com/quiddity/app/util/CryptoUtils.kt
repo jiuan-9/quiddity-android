@@ -224,9 +224,12 @@ object CryptoUtils {
         if (plain.isEmpty()) "" else encryptWith(legacyKey, plain)
 
     private fun encryptWith(key: SecretKey, plain: String): String {
-        val iv = ByteArray(GCM_IV_LENGTH_BYTES).also { SecureRandom().nextBytes(it) }
         val cipher = Cipher.getInstance(TRANSFORMATION)
-        cipher.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv))
+        // 关键修复：Android Keystore 的 AES-GCM 密钥禁止调用方提供 IV
+        // （否则抛 InvalidAlgorithmParameterException: Caller-provided IV not permitted）。
+        // 加密时不传 IV，由 Cipher/Keystore 自行生成，初始化后从 cipher.iv 取回拼入密文。
+        cipher.init(Cipher.ENCRYPT_MODE, key)
+        val iv = cipher.iv
         val cipherText = cipher.doFinal(plain.toByteArray(Charsets.UTF_8))
         val combined = iv + cipherText
         // java.util.Base64 是 JDK 标准类，JVM 单元测试可运行；

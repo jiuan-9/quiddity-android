@@ -4,6 +4,7 @@ import com.quiddity.app.data.remote.ChatApi
 import com.quiddity.app.data.repo.ApiAccess
 import com.quiddity.app.domain.board.BoardLlmPrompt
 import com.quiddity.app.domain.board.BoardState
+import com.quiddity.app.domain.board.GameChatTurn
 import com.quiddity.app.domain.board.LlmMove
 
 /*
@@ -41,11 +42,12 @@ class BoardLlmClient(private val gateway: LlmGateway) {
     suspend fun requestMove(
         state: BoardState,
         opponentName: String,
-        persona: String?
+        persona: String?,
+        chatHistory: List<GameChatTurn> = emptyList()
     ): LlmMove? {
         val reply = gateway.complete(
             BoardLlmPrompt.buildMoveSystemMessage(state, opponentName, persona),
-            BoardLlmPrompt.buildMoveUserMessage(state),
+            BoardLlmPrompt.buildMoveUserMessage(state, chatHistory),
             MOVE_MAX_TOKENS,
             MOVE_TEMPERATURE
         ).getOrNull() ?: return null
@@ -57,10 +59,11 @@ class BoardLlmClient(private val gateway: LlmGateway) {
         state: BoardState,
         opponentName: String,
         persona: String?,
-        userText: String
+        userText: String,
+        chatHistory: List<GameChatTurn> = emptyList()
     ): String? {
         return gateway.complete(
-            BoardLlmPrompt.buildChatSystemMessage(state, opponentName, persona),
+            BoardLlmPrompt.buildChatSystemMessage(state, opponentName, persona, chatHistory),
             BoardLlmPrompt.buildChatUserMessage(userText, state),
             CHAT_MAX_TOKENS,
             CHAT_TEMPERATURE

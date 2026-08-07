@@ -8,6 +8,9 @@ package com.quiddity.app.domain.board
  */
 object BoardLlmPrompt {
 
+    /** 单条对局内聊天记录（供 LLM 参考，跨 UI/领域使用）。 */
+    const val MAX_CHAT_HISTORY_TURNS = 20
+
     private val MOVE_REGEX = Regex(
         """MOVE\s*[（(]\s*(\d+)\s*[,，]\s*(\d+)\s*[)）]""",
         RegexOption.IGNORE_CASE
@@ -40,8 +43,11 @@ object BoardLlmPrompt {
         }.trim()
     }
 
-    /** 构建落子 user 消息（当前局面 + 轮次）。 */
-    fun buildMoveUserMessage(state: BoardState): String {
+    /** 构建落子 user 消息（当前局面 + 轮次 + 对局聊天记录）。 */
+    fun buildMoveUserMessage(
+        state: BoardState,
+        chatHistory: List<GameChatTurn> = emptyList()
+    ): String {
         val passHint = if (state.gameType.isGo) "（围棋可回复 PASS 停一手）" else ""
         return buildString {
             appendLine("当前第 ${state.moveCount + 1} 手，轮到你（${state.current.label}棋）落子$passHint。")
@@ -49,6 +55,8 @@ object BoardLlmPrompt {
             state.lastMove?.let {
                 appendLine("上一手：${it.row},${it.col}")
             }
+            appendChatTranscript(this, chatHistory)
+            appendLine("请结合聊天记录里的约定、请求或情绪来决策落子（例如用户求饶时，可以适当手下留情，但不要完全放水）。")
             appendLine("请回复一行指令：MOVE(行,列) 或 PASS。")
         }.trim()
     }
@@ -57,7 +65,8 @@ object BoardLlmPrompt {
     fun buildChatSystemMessage(
         state: BoardState,
         opponentName: String,
-        persona: String?
+        persona: String?,
+        chatHistory: List<GameChatTurn> = emptyList()
     ): String {
         return buildString {
             appendLine("你正在扮演「$opponentName」，与用户正在下${state.gameType.displayName}。")
@@ -66,6 +75,7 @@ object BoardLlmPrompt {
             }
             appendLine("当前第 ${state.moveCount + 1} 手，轮到你（${state.current.label}棋）落子。")
             appendLine(boardStonesText(state))
+            appendChatTranscript(this, chatHistory)
             appendLine("请以角色口吻自然回复用户消息，可以谈棋局、聊闲天，但不要替用户决策。")
         }.trim()
     }
@@ -112,7 +122,23 @@ object BoardLlmPrompt {
             append("白子位置：${if (whites.isEmpty()) "无" else whites.joinToString(" ")}")
         }
     }
+
+    /** 把最近一段对局聊天追加进提示词，让 LLM 记住说过的话。 */
+    private fun appendChatTranscript(sb: StringBuilder, chatHistory: List<GameChatTurn>) {
+        if (chatHistory.isEmpty()) return
+        sb.appendLine()
+        sb.appendLine("本局聊天记录（最近 ${chatHistory.size} 条）：")
+        for (turn in chatHistory.takeLast(MAX_CHAT_HISTORY_TURNS)) {
+            sb.appendLine("${if (turn.fromUser) "用户" else "你"}：${turn.text}")
+        }
+    }
 }
+
+/** 对局内的一轮聊天（谁说的 + 内容），供 LLM 记忆对局对话。 */
+data class GameChatTurn(
+    val fromUser: Boolean,
+    val text: String
+)
 
 /** LLM 落子指令解析结果。 */
 sealed interface LlmMove {

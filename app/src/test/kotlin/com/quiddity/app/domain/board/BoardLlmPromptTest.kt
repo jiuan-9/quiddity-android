@@ -73,6 +73,20 @@ class BoardLlmPromptTest {
     }
 
     @Test
+    fun buildMoveUserMessage_containsChatHistory() {
+        val state = BoardState(gameType = BoardGameType.GOMOKU)
+        val history = listOf(
+            GameChatTurn(fromUser = true, text = "饶我一命吧"),
+            GameChatTurn(fromUser = false, text = "看你这盘表现")
+        )
+        val msg = BoardLlmPrompt.buildMoveUserMessage(state, history)
+        assertTrue(msg.contains("本局聊天记录"))
+        assertTrue(msg.contains("饶我一命吧"))
+        assertTrue(msg.contains("看你这盘表现"))
+        assertTrue(msg.contains("手下留情"))
+    }
+
+    @Test
     fun buildChatSystemMessage_containsPersonaAndGame() {
         val state = BoardState(gameType = BoardGameType.GOMOKU)
         val msg = BoardLlmPrompt.buildChatSystemMessage(state, "小林", "你是一名棋手")
@@ -92,6 +106,19 @@ class BoardLlmPromptTest {
         val msg = BoardLlmPrompt.buildChatSystemMessage(state, "小林", null)
         assertTrue(msg.contains("(7,7)"))
         assertTrue(msg.contains("(3,3)"))
+    }
+
+    @Test
+    fun buildChatSystemMessage_containsChatHistory() {
+        val state = BoardState(gameType = BoardGameType.GOMOKU)
+        val history = listOf(
+            GameChatTurn(fromUser = true, text = "你这步太狠了"),
+            GameChatTurn(fromUser = false, text = "那就温柔一点")
+        )
+        val msg = BoardLlmPrompt.buildChatSystemMessage(state, "小林", null, history)
+        assertTrue(msg.contains("本局聊天记录"))
+        assertTrue(msg.contains("你这步太狠了"))
+        assertTrue(msg.contains("那就温柔一点"))
     }
 
     @Test
