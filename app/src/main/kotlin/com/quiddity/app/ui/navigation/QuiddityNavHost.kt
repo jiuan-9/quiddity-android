@@ -2,6 +2,10 @@ package com.quiddity.app.ui.navigation
 
 import androidx.activity.ComponentActivity
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
@@ -200,7 +204,40 @@ fun QuiddityNavHost() {
 
         composable(
             route = QuiddityRoute.MiniAppHost.PATTERN,
-            arguments = QuiddityRoute.MiniAppHost.arguments
+            arguments = QuiddityRoute.MiniAppHost.arguments,
+            enterTransition = {
+                // 外挂应用感：从聊天/中心打开小应用时，缩放 + 自下而上展开
+                scaleIn(
+                    animationSpec = tween(Motion.DurationPageTransition, easing = Motion.EasingEmphasizedDecelerate),
+                    initialScale = 0.88f
+                ) + fadeIn(tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedDecelerate)) +
+                    slideInVertically(
+                        animationSpec = tween(Motion.DurationPageTransition, easing = Motion.EasingEmphasizedDecelerate),
+                        initialOffsetY = { it / 10 }
+                    )
+            },
+            exitTransition = {
+                scaleOut(
+                    animationSpec = tween(Motion.DurationPageTransition, easing = Motion.EasingEmphasizedAccelerate),
+                    targetScale = 0.92f
+                ) + fadeOut(tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate))
+            },
+            popEnterTransition = {
+                scaleIn(
+                    animationSpec = tween(Motion.DurationPageTransition, easing = Motion.EasingEmphasizedDecelerate),
+                    initialScale = 0.94f
+                ) + fadeIn(tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedDecelerate))
+            },
+            popExitTransition = {
+                scaleOut(
+                    animationSpec = tween(Motion.DurationPageTransition, easing = Motion.EasingEmphasizedAccelerate),
+                    targetScale = 0.9f
+                ) + fadeOut(tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate)) +
+                    slideOutVertically(
+                        animationSpec = tween(Motion.DurationPageTransition, easing = Motion.EasingEmphasizedAccelerate),
+                        targetOffsetY = { it / 8 }
+                    )
+            }
         ) { backStackEntry ->
             val appId = backStackEntry.arguments?.getString(QuiddityRoute.MiniAppHost.ARG_APP_ID).orEmpty()
             val app = MiniAppRegistry.byId(appId)
@@ -274,7 +311,10 @@ fun QuiddityNavHost() {
                 settingsViewModel = settingsVm,
                 initialMessageId = messageId,
                 onBack = { navController.popBackStack() },
-                onConversationExit = { chatHost.onScreenExit(convId) }
+                onConversationExit = { chatHost.onScreenExit(convId) },
+                onOpenMiniApp = { appId ->
+                    navController.navigate(QuiddityRoute.MiniAppHost.create(appId))
+                }
             )
         }
     }

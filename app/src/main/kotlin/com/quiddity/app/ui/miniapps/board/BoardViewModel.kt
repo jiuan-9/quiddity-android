@@ -135,9 +135,12 @@ class BoardViewModel(
         val game = (_uiState.value.route as? BoardRoute.Invite)?.game ?: return
         _uiState.update { it.copy(inviteChecking = true) }
         viewModelScope.launch {
-            val invite = inviteManager.prepare(character) { name ->
-                BoardMiniApp.inviteBubbleText(game, name)
-            }
+            val invite = inviteManager.prepare(
+                character = character,
+                inviteBubbleText = { name -> BoardMiniApp.inviteBubbleText(game, name) },
+                miniAppId = BoardMiniApp.id,
+                miniAppTitle = BoardMiniApp.name
+            )
 
             startSession(
                 game = game,

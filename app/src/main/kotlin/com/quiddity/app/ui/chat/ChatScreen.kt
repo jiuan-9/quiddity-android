@@ -111,6 +111,7 @@ import com.quiddity.app.ui.chat.components.GroupAvatarBar
 import com.quiddity.app.ui.chat.components.HamburgerMenu
 import com.quiddity.app.ui.chat.components.MessageBubble
 import com.quiddity.app.ui.chat.components.NoticeBubble
+import com.quiddity.app.ui.chat.components.MiniAppInviteCard
 import com.quiddity.app.ui.chat.components.RewriteBottomSheet
 import com.quiddity.app.ui.chat.components.TypingIndicator
 import com.quiddity.app.ui.chat.gesture.ChatDragController
@@ -162,7 +163,8 @@ fun ChatScreen(
     settingsViewModel: com.quiddity.app.ui.settings.SettingsViewModel,
     initialMessageId: String? = null,
     onBack: () -> Unit,
-    onConversationExit: () -> Unit = {}
+    onConversationExit: () -> Unit = {},
+    onOpenMiniApp: (String) -> Unit = {}
 ) {
     val conversation by viewModel.conversation.collectAsStateWithLifecycle()
     val messages by viewModel.messages.collectAsStateWithLifecycle()
@@ -861,6 +863,15 @@ fun ChatScreen(
                         }
                         // 场景/世界提示气泡显示在顶部，不遮挡居中的"让AI先说"按钮
                         Column(modifier = Modifier.fillMaxWidth()) {
+                            messages.filter { it.isNotice && !it.miniAppId.isNullOrBlank() }
+                                .forEach { invite ->
+                                    MiniAppInviteCard(
+                                        title = invite.miniAppTitle?.takeIf { it.isNotBlank() }
+                                            ?: "小应用",
+                                        content = invite.content,
+                                        onClick = { invite.miniAppId?.let(onOpenMiniApp) }
+                                    )
+                                }
                             if (sceneNoticeContent.isNotBlank()) {
                                 NoticeBubble(content = sceneNoticeContent)
                             }
@@ -1002,6 +1013,19 @@ fun ChatScreen(
                                     }
                                 }
 
+                            }
+
+                            // 小应用邀请卡片：按时间倒序固定在列表顶部区域，点击跳回对应小应用
+                            items(
+                                items = messages.filter { it.isNotice && !it.miniAppId.isNullOrBlank() },
+                                key = { it.id }
+                            ) { invite ->
+                                MiniAppInviteCard(
+                                    title = invite.miniAppTitle?.takeIf { it.isNotBlank() }
+                                        ?: "小应用",
+                                    content = invite.content,
+                                    onClick = { invite.miniAppId?.let(onOpenMiniApp) }
+                                )
                             }
 
                             // 场景/世界提示气泡：固定在消息列表最顶部（reverseLayout 的最后一项），

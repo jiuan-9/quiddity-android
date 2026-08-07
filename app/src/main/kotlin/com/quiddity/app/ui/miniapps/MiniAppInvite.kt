@@ -33,7 +33,9 @@ class MiniAppInviteManager(
 
     suspend fun prepare(
         character: Character,
-        inviteBubbleText: (opponentName: String) -> String
+        inviteBubbleText: (opponentName: String) -> String,
+        miniAppId: String? = null,
+        miniAppTitle: String? = null
     ): PreparedCharacterInvite {
         val settings = settingsRepository.currentSnapshot()
         val entry = settings.catalog.firstOrNull { it.id == settings.activeCatalogId }
@@ -44,7 +46,12 @@ class MiniAppInviteManager(
 
         val conversation = sessionRepository.findOrCreateCharacterConversation(character)
         val opponentName = character.persona.name.ifBlank { "神秘角色" }
-        sessionRepository.appendInviteBubble(conversation.id, inviteBubbleText(opponentName))
+        sessionRepository.appendInviteBubble(
+            conversation.id,
+            inviteBubbleText(opponentName),
+            miniAppId,
+            miniAppTitle
+        )
 
         val access = if (llmOk) resolveAccess(conversation) else null
         return PreparedCharacterInvite(

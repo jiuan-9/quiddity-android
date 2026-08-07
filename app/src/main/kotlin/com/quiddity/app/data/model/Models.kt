@@ -365,7 +365,14 @@ data class Message(
      * - 群聊消息带 senderId（指向成员私聊会话 id）
      * - 私聊消息为 null（默认值，兼容旧数据）
      */
-    val senderId: String? = null
+    val senderId: String? = null,
+    /**
+     * 小应用邀请卡片：仅 isNotice=true 且 miniAppId 非空时，
+     * 在私聊中渲染为可点击的"邀请卡片"（点击跳回对应小应用）。
+     * - 不发送给 LLM、不参与压缩（isNotice 已在各处过滤）
+     */
+    val miniAppId: String? = null,
+    val miniAppTitle: String? = null
 )
 
 /**

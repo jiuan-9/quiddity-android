@@ -39,7 +39,12 @@ class MiniAppSessionRepository(
     }
 
     /** 写入居中的"邀请气泡"（不发送给 LLM）。 */
-    suspend fun appendInviteBubble(convId: String, text: String) {
+    suspend fun appendInviteBubble(
+        convId: String,
+        text: String,
+        miniAppId: String? = null,
+        miniAppTitle: String? = null
+    ) {
         conversationRepository.appendMessage(
             Message(
                 id = IdGenerator.newId(IdGenerator.Prefix.USER_MESSAGE),
@@ -47,7 +52,9 @@ class MiniAppSessionRepository(
                 role = Role.SYSTEM,
                 content = text,
                 timestamp = System.currentTimeMillis(),
-                isNotice = true
+                isNotice = true,
+                miniAppId = miniAppId,
+                miniAppTitle = miniAppTitle
             )
         )
     }
