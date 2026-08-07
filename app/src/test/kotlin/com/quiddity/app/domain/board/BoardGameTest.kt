@@ -189,6 +189,50 @@ class BoardGameTest {
     }
 
     @Test
+    fun go_capturesMultipleStonesInOneMove() {
+        val grid = MutableList(81) { 0 }
+        for ((r, c) in listOf(0 to 0, 0 to 1, 1 to 0)) grid[r * 9 + c] = Stone.WHITE.code
+        for ((r, c) in listOf(0 to 2, 2 to 0)) grid[r * 9 + c] = Stone.BLACK.code
+        val state = BoardState(
+            gameType = BoardGameType.GO,
+            grid = grid.toList(),
+            current = Stone.BLACK
+        )
+        val result = state.applyMove(1, 1)
+        assertIs<MoveOutcome.Played>(result)
+        assertEquals(3, result.captured)
+        assertEquals(Stone.EMPTY, result.state.stoneAt(0, 0))
+        assertEquals(Stone.EMPTY, result.state.stoneAt(0, 1))
+        assertEquals(Stone.EMPTY, result.state.stoneAt(1, 0))
+    }
+
+    @Test
+    fun go_moveAfterPassResetsPassCounter() {
+        var state = go()
+        val p1 = state.pass()
+        assertIs<PassOutcome.Done>(p1)
+        assertEquals(1, p1.state.consecutivePasses)
+        val move = p1.state.applyMove(4, 4)
+        assertIs<MoveOutcome.Played>(move)
+        assertEquals(0, move.state.consecutivePasses)
+        val p2 = move.state.pass()
+        assertIs<PassOutcome.Done>(p2)
+        assertTrue(!p2.gameOver)
+    }
+
+    @Test
+    fun go_scoreEqualAreaPrefersWhiteByKomi() {
+        val grid = MutableList(81) { 0 }
+        for ((r, c) in listOf(0 to 0, 0 to 1, 1 to 0, 1 to 1)) grid[r * 9 + c] = Stone.BLACK.code
+        for ((r, c) in listOf(6 to 6, 6 to 7, 7 to 6, 7 to 7)) grid[r * 9 + c] = Stone.WHITE.code
+        val state = BoardState(gameType = BoardGameType.GO, grid = grid.toList(), current = Stone.WHITE)
+        val score = state.score()
+        assertEquals(4.0, score.black)
+        assertEquals(11.5, score.white)
+        assertEquals(Stone.WHITE, score.winner)
+    }
+
+    @Test
     fun go_applyMoveWhenGameOverIsRejected() {
         val state = go()
         val resigned = state.resign()

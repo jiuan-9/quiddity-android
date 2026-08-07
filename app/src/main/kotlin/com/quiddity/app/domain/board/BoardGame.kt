@@ -136,12 +136,14 @@ data class BoardState(
             if (grid[idx] != Stone.EMPTY.code || visited[idx]) continue
             val boundary = mutableSetOf<Stone>()
             val queue = ArrayDeque<Int>()
+            var touchesEdge = false
             queue.add(idx)
             visited[idx] = true
             while (queue.isNotEmpty()) {
                 val cur = queue.removeFirst()
                 val r = cur / size
                 val c = cur % size
+                if (r == 0 || r == size - 1 || c == 0 || c == size - 1) touchesEdge = true
                 for ((dr, dc) in DIRECTIONS) {
                     val nr = r + dr
                     val nc = c + dc
@@ -158,7 +160,8 @@ data class BoardState(
                     }
                 }
             }
-            if (boundary.size == 1) {
+            // 触边的空区域不是被围住的地域（如棋盘边缘大块空地），不应计给任何一方
+            if (!touchesEdge && boundary.size == 1) {
                 when (boundary.first()) {
                     Stone.BLACK -> blackTerritory++
                     Stone.WHITE -> whiteTerritory++
