@@ -92,4 +92,37 @@ class BoardLlmClientTest {
         runBlocking { client.chatReply(state, "棋圣", null, "嗯", history) }
         assertTrue(capturedSystem.contains("那我们说好了"), "聊天回复应携带对局聊天记录")
     }
+
+    @Test
+    fun requestMove_retriesAfterTransientFailure() {
+        var calls = 0
+        val client = BoardLlmClient(LlmGateway { _, _, _, _ ->
+            calls++
+            if (calls == 1) {
+                Result.failure(RuntimeException("timeout"))
+            } else {
+                Result.success("MOVE(2,3)")
+            }
+        })
+        val move = runBlocking { client.requestMove(state, "棋圣", null) }
+        assertIs<LlmMove.Place>(move)
+        assertEquals(Move(2, 3), move.move)
+        assertEquals(2, calls, "首次失败后应重试")
+    }
+
+    @Test
+    fun chatReply_retriesAfterTransientFailure() {
+        var calls = 0
+        val client = BoardLlmClient(LlmGateway { _, _, _, _ ->
+            calls++
+            if (calls == 1) {
+                Result.failure(RuntimeException("timeout"))
+            } else {
+                Result.success("在呢")
+            }
+        })
+        val reply = runBlocking { client.chatReply(state, "棋圣", null, "hi") }
+        assertEquals("在呢", reply)
+        assertEquals(2, calls, "首次失败后应重试")
+    }
 }

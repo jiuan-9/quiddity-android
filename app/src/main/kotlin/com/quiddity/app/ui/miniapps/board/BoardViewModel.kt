@@ -331,6 +331,10 @@ class BoardViewModel(
                             latest.chat.map { GameChatTurn(it.fromUser, it.text) }
                         )
                 }
+                // LLM 调用彻底失败（重试后仍不可用）→ 交给本地棋力代下，并明确告知用户
+                if (llmMove == null) {
+                    fallbackNotice = "AI 接口暂时不可用，本手由本地棋力代下"
+                }
             }
 
             var moveOutcome: MoveOutcome? = null

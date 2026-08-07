@@ -79,6 +79,7 @@ import androidx.compose.ui.unit.dp
 import com.quiddity.app.domain.board.BoardState
 import com.quiddity.app.domain.board.Stone
 import com.quiddity.app.ui.theme.Motion
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -98,6 +99,22 @@ fun BoardGameScreen(
     onOpenChat: (() -> Unit)?
 ) {
     var showExitConfirm by remember { mutableStateOf(false) }
+    // 开局"分先"动画：随机黑白归属，简单展示后淡出（朴素）
+    var showColorDraw by remember(session.id) { mutableStateOf(false) }
+    val drawAlpha = remember(session.id) { Animatable(0f) }
+    val drawScale = remember(session.id) { Animatable(0.92f) }
+    LaunchedEffect(session.id) {
+        if (session.board.moveCount == 0 && session.status == BoardStatus.Playing) {
+            showColorDraw = true
+            drawAlpha.snapTo(0f)
+            drawScale.snapTo(0.92f)
+            drawAlpha.animateTo(1f, tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedDecelerate))
+            drawScale.animateTo(1f, tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedDecelerate))
+            delay(900)
+            drawAlpha.animateTo(0f, tween(Motion.DurationShort + 60, easing = Motion.EasingEmphasizedAccelerate))
+            showColorDraw = false
+        }
+    }
     BackHandler {
         if (session.status == BoardStatus.Playing) {
             showExitConfirm = true
@@ -241,6 +258,56 @@ fun BoardGameScreen(
             onExit = onBack,
             onOpenChat = onOpenChat
         )
+    }
+
+    if (showColorDraw) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.3f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Surface(
+                modifier = Modifier.graphicsLayer {
+                    alpha = drawAlpha.value
+                    scaleX = drawScale.value
+                    scaleY = drawScale.value
+                },
+                shape = RoundedCornerShape(28.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                tonalElevation = 8.dp
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 36.dp, vertical = 26.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = "分先",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(20.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        DrawDot(color = Color(0xFF1B1B1F), highlighted = session.userStone == Stone.BLACK)
+                        DrawDot(color = Color(0xFFF2EEE6), highlighted = session.userStone == Stone.WHITE)
+                    }
+                    Text(
+                        text = "你执${session.userStone.label}",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = if (session.userStone == Stone.BLACK) "黑方先手" else "对方执黑先行",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
     }
 
     if (showExitConfirm) {
@@ -485,6 +552,22 @@ private fun StoneDot(color: Color) {
             .clip(CircleShape)
             .background(color)
             .border(1.dp, Color.Gray.copy(alpha = 0.5f), CircleShape)
+    )
+}
+
+@Composable
+private fun DrawDot(color: Color, highlighted: Boolean) {
+    val outline = if (highlighted) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        Color.Gray.copy(alpha = 0.45f)
+    }
+    Box(
+        modifier = Modifier
+            .size(if (highlighted) 34.dp else 30.dp)
+            .clip(CircleShape)
+            .background(color)
+            .border(2.dp, outline, CircleShape)
     )
 }
 
