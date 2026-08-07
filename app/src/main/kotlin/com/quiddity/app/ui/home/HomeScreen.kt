@@ -330,6 +330,8 @@ fun HomeScreen(
     val thresholdDp = 108f
     var pullDp by remember { mutableStateOf(0f) }
     var pullTriggered by remember { mutableStateOf(false) }
+    // 时间闸：一次下拉手势只推一次小应用中心，防止手指未抬起时跨阈值重复 navigate
+    var lastOpenTriggerMs by remember { mutableStateOf(0L) }
     val soloListState = rememberLazyListState()
     val groupListState = rememberLazyListState()
     val atTop by remember(conversations, searchQuery, pagerState.currentPage, isMultiSelect) {
@@ -361,8 +363,12 @@ fun HomeScreen(
                 if (dyDp > 0 && !pullTriggered) {
                     pullDp = (pullDp + dyDp).coerceAtMost(maxPullDp)
                     if (pullDp >= thresholdDp) {
-                        pullTriggered = true
-                        onOpenMiniApps()
+                        val now = System.currentTimeMillis()
+                        if (now - lastOpenTriggerMs > 800L) {
+                            lastOpenTriggerMs = now
+                            pullTriggered = true
+                            onOpenMiniApps()
+                        }
                     }
                     return Offset(0f, available.y)
                 }
@@ -441,8 +447,12 @@ fun HomeScreen(
                         val dyDp = dragAmount / density.density
                         pullDp = (pullDp + dyDp).coerceIn(0f, maxPullDp)
                         if (pullDp >= thresholdDp) {
-                            pullTriggered = true
-                            onOpenMiniApps()
+                            val now = System.currentTimeMillis()
+                            if (now - lastOpenTriggerMs > 800L) {
+                                lastOpenTriggerMs = now
+                                pullTriggered = true
+                                onOpenMiniApps()
+                            }
                         }
                     }
                 )

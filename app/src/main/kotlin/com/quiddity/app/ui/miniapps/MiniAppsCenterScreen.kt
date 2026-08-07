@@ -45,6 +45,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -62,6 +63,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Velocity
 import com.quiddity.app.ui.theme.Motion
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /*
  * 小应用中心：收藏 / 全部 两个分区。
@@ -77,31 +79,41 @@ fun MiniAppsCenterScreen(
 ) {
     BackHandler(onBack = onBack)
     val density = LocalDensity.current
-    var dragUp by remember { mutableStateOf(0f) }
-    // 整页"下拉关闭"：列表在顶部时向下拉超过阈值即返回主页（微信式），头部上滑仍可用
+    val scope = rememberCoroutineScope()
+    // 收回手势：上拉面板（整页跟手位移），松手超过阈值即收回（NavHost 滑出动画收尾）
     val listState = rememberLazyListState()
-    var pullDown by remember { mutableStateOf(0f) }
-    var pullClosed by remember { mutableStateOf(false) }
+    var pullUp by remember { mutableStateOf(0f) }
+    var pullTriggered by remember { mutableStateOf(false) }
+    val maxPullDp = 160f
+    val closeThresholdDp = 50f
     val atListTop by remember {
         derivedStateOf {
             listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
         }
     }
-    val closeConnection = remember(atListTop, onBack, density) {
+    fun animatePullBack() {
+        val from = pullUp
+        if (from <= 0f) return
+        scope.launch {
+            val anim = Animatable(from)
+            anim.animateTo(
+                targetValue = 0f,
+                animationSpec = Motion.SpringSoft
+            ) { pullUp = value }
+        }
+    }
+    // 列表区域：列表在顶部且内容已到底（无法再下滑）时，上拉手势用来收回面板
+    val closeConnection = remember(atListTop, listState, onBack, density) {
         object : NestedScrollConnection {
             override fun onPostScroll(
                 consumed: Offset,
                 available: Offset,
                 source: NestedScrollSource
             ): Offset {
-                if (source != NestedScrollSource.UserInput || !atListTop || pullClosed) return Offset.Zero
+                if (source != NestedScrollSource.UserInput || !atListTop || pullTriggered) return Offset.Zero
                 val dyDp = available.y / density.density
-                if (dyDp > 0) {
-                    pullDown = (pullDown + dyDp).coerceAtMost(160f)
-                    return Offset(0f, available.y)
-                }
-                if (dyDp < 0 && pullDown > 0f) {
-                    pullDown = (pullDown + dyDp).coerceAtLeast(0f)
+                if (dyDp < 0 && !listState.canScrollForward) {
+                    pullUp = (pullUp - dyDp).coerceAtMost(maxPullDp)
                     return Offset(0f, available.y)
                 }
                 return Offset.Zero
@@ -112,19 +124,14 @@ fun MiniAppsCenterScreen(
                 consumed: Velocity,
                 available: Velocity
             ): Velocity {
-                if (pullDown >= 80f && !pullClosed) {
-                    pullClosed = true
+                if (pullUp >= closeThresholdDp && !pullTriggered) {
+                    pullTriggered = true
                     onBack()
+                } else {
+                    animatePullBack()
                 }
-                pullDown = 0f
                 return Velocity.Zero
             }
-        }
-    }
-    LaunchedEffect(pullClosed) {
-        if (pullClosed) {
-            pullDown = 0f
-            pullClosed = false
         }
     }
     Column(
@@ -134,24 +141,32 @@ fun MiniAppsCenterScreen(
             .windowInsetsPadding(WindowInsets.statusBars)
             .windowInsetsPadding(WindowInsets.navigationBars)
             .nestedScroll(closeConnection)
+            .graphicsLayer {
+                // 跟手位移：上拉多少，整页上移多少（收回动画收尾交给 NavHost 滑出）
+                translationY = -pullUp * density.density
+            }
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(top = 8.dp, bottom = 16.dp)
-                .pointerInput(onBack) {
+                .pointerInput(onBack, density) {
                     detectVerticalDragGestures(
                         onVerticalDrag = { change, dragAmount ->
                             change.consume()
-                            dragUp = (dragUp + dragAmount).coerceAtMost(0f)
+                            if (pullTriggered) return@detectVerticalDragGestures
+                            val dyDp = dragAmount / density.density
+                            pullUp = (pullUp - dyDp).coerceIn(0f, maxPullDp)
                         },
                         onDragEnd = {
-                            if (dragUp <= -with(density) { 60.dp.toPx() }) {
+                            if (pullUp >= closeThresholdDp && !pullTriggered) {
+                                pullTriggered = true
                                 onBack()
+                            } else {
+                                animatePullBack()
                             }
-                            dragUp = 0f
                         },
-                        onDragCancel = { dragUp = 0f }
+                        onDragCancel = { animatePullBack() }
                     )
                 },
             horizontalAlignment = Alignment.CenterHorizontally
