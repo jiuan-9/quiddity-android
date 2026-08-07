@@ -1,8 +1,14 @@
 package com.quiddity.app.ui.miniapps.board
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,9 +38,17 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -44,6 +58,8 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.quiddity.app.data.model.Character
 import com.quiddity.app.domain.board.BoardGameType
+import com.quiddity.app.ui.theme.Motion
+import kotlinx.coroutines.delay
 
 /*
  * 棋盘小应用的前置页面：选棋种 / 选模式 / 邀请角色。
@@ -237,17 +253,38 @@ private fun GameTypeCard(
     accent: androidx.compose.ui.graphics.Color,
     onClick: () -> Unit
 ) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) 0.97f else 1f,
+        animationSpec = tween(110, easing = Motion.EasingEmphasizedAccelerate),
+        label = "card_press"
+    )
+    val appear = remember { Animatable(0f) }
+    LaunchedEffect(Unit) {
+        appear.animateTo(1f, tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedDecelerate))
+    }
     Surface(
         modifier = Modifier
             .fillMaxWidth()
+            .scale(scale)
+            .graphicsLayer {
+                alpha = appear.value
+                translationY = (1f - appear.value) * 18f
+            }
             .clip(RoundedCornerShape(24.dp))
-            .clickable(onClick = onClick),
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                onClick = onClick
+            ),
         shape = RoundedCornerShape(24.dp),
         color = MaterialTheme.colorScheme.surfaceContainerLow,
         tonalElevation = 1.dp,
+        shadowElevation = if (pressed) 0.dp else 2.dp,
         border = androidx.compose.foundation.BorderStroke(
             1.dp,
-            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
+            accent.copy(alpha = if (pressed) 0.35f else 0.18f)
         )
     ) {
         Row(
@@ -259,14 +296,19 @@ private fun GameTypeCard(
                 modifier = Modifier
                     .size(52.dp)
                     .clip(CircleShape)
-                    .background(accent.copy(alpha = 0.14f)),
+                    .background(
+                        Brush.radialGradient(
+                            colors = listOf(accent.copy(alpha = 0.28f), accent.copy(alpha = 0.1f)),
+                            radius = 40f
+                        )
+                    ),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = icon,
                     contentDescription = null,
                     tint = accent,
-                    modifier = Modifier.size(26.dp)
+                    modifier = Modifier.size(27.dp)
                 )
             }
             Column(Modifier.weight(1f)) {
@@ -288,7 +330,7 @@ private fun GameTypeCard(
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                tint = accent.copy(alpha = if (pressed) 0.9f else 0.45f),
                 modifier = Modifier
                     .size(20.dp)
                     .rotate(180f)
@@ -304,16 +346,34 @@ private fun CharacterInviteCard(
     onClick: () -> Unit
 ) {
     val name = character.persona.name.ifBlank { "未命名角色" }
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (pressed && enabled) 0.97f else 1f,
+        animationSpec = tween(110, easing = Motion.EasingEmphasizedAccelerate),
+        label = "invite_press"
+    )
     Surface(
         modifier = Modifier
             .fillMaxWidth()
+            .scale(scale)
             .clip(RoundedCornerShape(20.dp))
-            .clickable(enabled = enabled, onClick = onClick),
+            .clickable(
+                enabled = enabled,
+                interactionSource = interaction,
+                indication = null,
+                onClick = onClick
+            ),
         shape = RoundedCornerShape(20.dp),
         color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shadowElevation = if (pressed) 0.dp else 1.dp,
         border = androidx.compose.foundation.BorderStroke(
             1.dp,
-            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+            if (pressed && enabled) {
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
+            } else {
+                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+            }
         )
     ) {
         Row(
