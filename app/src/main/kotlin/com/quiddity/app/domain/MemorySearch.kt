@@ -27,6 +27,13 @@ package com.quiddity.app.domain
  */
 
 
+/*
+ * 协作说明（临时，交付前删除）：检索链路改造进行中。本文件与 ChatRecordSearch.kt、
+ * NgramRecall.kt 由检索任务修改；正在同时修改 UI 的同事请勿改动这三份文件。
+ * 本文件 search() 打分内核已切换为 n-gram + IDF（NgramRecall），保留原参数与返回结构。
+ */
+
+
 
 /**
  * 记忆检索（read_memory 工具后端）。
@@ -47,6 +54,9 @@ object MemorySearch {
     /** 检索结果单条内容上限（字符），约 800 token，避免工具回填撑爆上下文。 */
     const val MEMORY_SEARCH_MAX_CHARS = 2_000
 
+    /** 检索回填候选段落的条数上限（n-gram 召回，压缩记忆通常很短，3 条足以定位）。 */
+    const val MEMORY_TOP_K = 3
+
     /** 无命中提示（found=false 时 AI 应如实回答）。 */
     const val NOT_FOUND_TEXT = "未找到与查询相关的记忆摘要"
 
@@ -63,46 +73,35 @@ object MemorySearch {
      * @param query 模型传入的检索关键词
      * @return [Result.found]=true 且有内容时返回命中片段；否则返回未找到提示
      */
+    /**
+     * 压缩记忆检索（read_memory 工具后端）：n-gram + IDF 召回（见 [NgramRecall]）。
+     * 返回结构与旧版完全一致（[Result]），仅打分内核替换为字符 bigram，
+     * 使中文自然问句（口语、无关键词、词序变化）也能命中。
+     */
     fun search(memory: String, query: String): Result {
         if (memory.isBlank()) {
             return Result(found = false, content = NOT_FOUND_TEXT)
         }
-        val terms = extractTerms(query)
-        if (terms.isEmpty()) {
-            // 无有效关键词：回退返回记忆开头片段，避免工具空转
-            val head = memory.trim().take(MEMORY_SEARCH_MAX_CHARS)
-            return Result(found = true, content = "【记忆检索结果】\n$head")
-        }
-
         val paragraphs = memory.split(Regex("\\n\\s*\\n|\\n"))
             .map { it.trim() }
             .filter { it.isNotEmpty() }
 
-        data class Scored(val text: String, val score: Int, val order: Int)
-        val scored = paragraphs.mapIndexedNotNull { index, paragraph ->
-            var score = 0
-            for (term in terms) {
-                var from = 0
-                while (true) {
-                    val hit = paragraph.lowercase().indexOf(term, from)
-                    if (hit < 0) break
-                    score++
-                    from = hit + term.length
-                }
-            }
-            if (score > 0) Scored(paragraph, score, index) else null
+        // 无有效关键词：回退返回记忆开头片段，避免工具空转
+        val terms = extractTerms(query)
+        if (terms.isEmpty()) {
+            val head = memory.trim().take(MEMORY_SEARCH_MAX_CHARS)
+            return Result(found = true, content = "【记忆检索结果】\n$head")
         }
 
-        if (scored.isEmpty()) {
+        val hits = NgramRecall.rank(paragraphs, query, topK = MEMORY_TOP_K)
+        if (hits.isEmpty()) {
             return Result(found = false, content = NOT_FOUND_TEXT)
         }
 
-        val ordered = scored
-            .sortedWith(compareByDescending<Scored> { it.score }.thenBy { it.order })
-            .map { it.text }
-
         val sb = StringBuilder("【记忆检索结果】\n")
-        for (paragraph in ordered) {
+        for (hit in hits) {
+            if (hit.index !in paragraphs.indices) continue
+            val paragraph = paragraphs[hit.index]
             if (sb.length >= MEMORY_SEARCH_MAX_CHARS) break
             val remain = MEMORY_SEARCH_MAX_CHARS - sb.length
             if (paragraph.length <= remain) {

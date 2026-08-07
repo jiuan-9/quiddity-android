@@ -33,6 +33,13 @@ import java.time.format.DateTimeFormatter
  */
 
 
+/*
+ * 协作说明（临时，交付前删除）：检索链路改造进行中。本文件与 MemorySearch.kt、
+ * NgramRecall.kt 由检索任务修改；正在同时修改 UI 的同事请勿改动这三份文件。
+ * 本文件 search() 打分内核已切换为 n-gram + IDF（NgramRecall），保留原参数与返回结构。
+ */
+
+
 
 /**
  * 本地聊天记录检索（search_chat 工具后端）。
@@ -162,30 +169,12 @@ object ChatRecordSearch {
             return Result(found = true, content = content)
         }
 
-        data class Scored(val message: Message, val score: Int, val order: Int)
-        val scored = messages.mapIndexedNotNull { index, message ->
-            var score = 0
-            val lower = message.content.lowercase()
-            for (term in terms) {
-                var from = 0
-                while (true) {
-                    val hit = lower.indexOf(term, from)
-                    if (hit < 0) break
-                    score++
-                    from = hit + term.length
-                }
-            }
-            if (score > 0) Scored(message, score, index) else null
-        }
-
-        if (scored.isEmpty()) {
+        // n-gram + IDF 打分（NgramRecall）：中文口语/词序变化也能命中
+        val top = NgramRecall.rank(messages.map { it.content }, query, topK = MAX_RESULTS)
+            .mapNotNull { hit -> messages.getOrNull(hit.index) }
+        if (top.isEmpty()) {
             return Result(found = false, content = NOT_FOUND_TEXT)
         }
-
-        val top = scored
-            .sortedWith(compareByDescending<Scored> { it.score }.thenBy { it.order })
-            .take(MAX_RESULTS)
-            .map { it.message }
         return Result(found = true, content = buildList(top))
     }
 

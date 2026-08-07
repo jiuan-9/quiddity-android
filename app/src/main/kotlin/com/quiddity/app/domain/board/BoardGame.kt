@@ -37,6 +37,17 @@ enum class BoardGameType(val size: Int, val displayName: String) {
     val isGo: Boolean get() = this == GO
 }
 
+/** 本地电脑棋力难度。 */
+enum class BoardDifficulty(val label: String, val description: String) {
+    EASY("简单", "落子随性，适合新手热身"),
+    NORMAL("普通", "会提子、懂基本攻防"),
+    HARD("困难", "攻防计算更深入，步步紧逼");
+
+    companion object {
+        fun default(): BoardDifficulty = NORMAL
+    }
+}
+
 /** 落子坐标（0 起）。 */
 data class Move(val row: Int, val col: Int) {
     init {

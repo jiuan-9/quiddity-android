@@ -149,7 +149,11 @@ fun BoardGameScreen(
             horizontalPadding = 12.dp,
             trailing = {
                 Text(
-                    text = if (session.llmEnabled) "LLM" else "本地电脑",
+                    text = if (session.llmEnabled) {
+                        "LLM"
+                    } else {
+                        "本地电脑 · ${session.difficulty.label}"
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     color = if (session.llmEnabled) {
                         MaterialTheme.colorScheme.primary

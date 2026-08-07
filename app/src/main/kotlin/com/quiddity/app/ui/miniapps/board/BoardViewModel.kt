@@ -9,6 +9,7 @@ import com.quiddity.app.data.repo.ApiAccess
 import com.quiddity.app.data.repo.CharacterRepository
 import com.quiddity.app.data.repo.MiniAppSessionRepository
 import com.quiddity.app.domain.board.BoardBot
+import com.quiddity.app.domain.board.BoardDifficulty
 import com.quiddity.app.domain.board.BoardGameType
 import com.quiddity.app.domain.board.BoardState
 import com.quiddity.app.domain.board.GameChatTurn
@@ -39,6 +40,7 @@ import kotlin.random.Random
 sealed interface BoardRoute {
     data object GameSelect : BoardRoute
     data class ModeSelect(val game: BoardGameType) : BoardRoute
+    data class DifficultySelect(val game: BoardGameType) : BoardRoute
     data class Invite(val game: BoardGameType) : BoardRoute
     data class Playing(val sessionId: String) : BoardRoute
 }
@@ -73,6 +75,7 @@ data class BoardSession(
     val opponentName: String,
     val opponentPersona: String?,
     val userStone: Stone,
+    val difficulty: BoardDifficulty = BoardDifficulty.default(),
     val llmEnabled: Boolean,
     val access: ApiAccess.Resolved?,
     val board: BoardState,
@@ -117,13 +120,19 @@ class BoardViewModel(
         _uiState.update { it.copy(route = BoardRoute.Invite(game)) }
     }
 
-    /** 与电脑对战：固定使用本地棋力，无需联网，不与 AI 混在一起。 */
+    /** 进入难度选择页。 */
     fun onChooseVsComputer(game: BoardGameType) {
+        _uiState.update { it.copy(route = BoardRoute.DifficultySelect(game)) }
+    }
+
+    /** 选定难度后与电脑开局：固定本地棋力，无需联网。 */
+    fun onStartVsComputer(game: BoardGameType, difficulty: BoardDifficulty) {
         startSession(
             game = game,
             mode = BoardGameMode.VS_COMPUTER,
             opponentName = "电脑棋手",
             opponentPersona = null,
+            difficulty = difficulty,
             conversationId = null,
             access = null,
             notice = null
@@ -147,6 +156,7 @@ class BoardViewModel(
                 mode = BoardGameMode.INVITE_CHARACTER,
                 opponentName = invite.opponentName,
                 opponentPersona = invite.opponentPersona,
+                difficulty = BoardDifficulty.default(),
                 conversationId = invite.conversationId,
                 access = invite.access,
                 notice = if (invite.access == null) "API 连接失败，已切换为本地电脑对弈" else null
@@ -268,6 +278,7 @@ class BoardViewModel(
             mode = session.mode,
             opponentName = session.opponentName,
             opponentPersona = session.opponentPersona,
+            difficulty = session.difficulty,
             conversationId = session.conversationId,
             access = session.access,
             notice = null
@@ -279,6 +290,7 @@ class BoardViewModel(
         mode: BoardGameMode,
         opponentName: String,
         opponentPersona: String?,
+        difficulty: BoardDifficulty,
         conversationId: String?,
         access: ApiAccess.Resolved?,
         notice: String?
@@ -291,6 +303,7 @@ class BoardViewModel(
             opponentName = opponentName,
             opponentPersona = opponentPersona,
             userStone = userStone,
+            difficulty = difficulty,
             llmEnabled = access != null,
             access = access,
             board = BoardState(gameType = game),
@@ -356,7 +369,7 @@ class BoardViewModel(
             }
 
             if (moveOutcome == null && passOutcome == null) {
-                val botMove = BoardBot.nextMove(latest.board)
+                val botMove = BoardBot.nextMove(latest.board, difficulty = latest.difficulty)
                 moveOutcome = botMove?.let { latest.board.applyMove(it) } as? MoveOutcome.Played
                 if (moveOutcome == null && latest.gameType.isGo) {
                     passOutcome = latest.board.pass()

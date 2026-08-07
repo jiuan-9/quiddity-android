@@ -92,6 +92,13 @@ private fun BoardAppRoot(
                     onVsComputer = { vm.onChooseVsComputer(route.game) }
                 )
             }
+            is BoardRoute.DifficultySelect -> {
+                BoardDifficultySelectScreen(
+                    game = route.game,
+                    onBack = { vm.backToMode(route.game) },
+                    onSelect = { difficulty -> vm.onStartVsComputer(route.game, difficulty) }
+                )
+            }
             is BoardRoute.Invite -> {
                 val characters by vm.characters.collectAsStateWithLifecycle()
                 BoardInviteScreen(
@@ -129,6 +136,7 @@ private fun BoardAppRoot(
 private fun routeDepth(route: BoardRoute): Int = when (route) {
     BoardRoute.GameSelect -> 0
     is BoardRoute.ModeSelect -> 1
+    is BoardRoute.DifficultySelect -> 2
     is BoardRoute.Invite -> 2
     is BoardRoute.Playing -> 3
 }

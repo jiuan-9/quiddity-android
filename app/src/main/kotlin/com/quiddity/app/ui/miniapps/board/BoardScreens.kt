@@ -32,6 +32,7 @@ import androidx.compose.material.icons.rounded.DonutLarge
 import androidx.compose.material.icons.rounded.DonutSmall
 import androidx.compose.material.icons.rounded.Computer
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -57,6 +58,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.quiddity.app.data.model.Character
+import com.quiddity.app.domain.board.BoardDifficulty
 import com.quiddity.app.domain.board.BoardGameType
 import com.quiddity.app.ui.theme.Motion
 import kotlinx.coroutines.delay
@@ -158,6 +160,50 @@ fun BoardModeSelectScreen(
             accent = MaterialTheme.colorScheme.primary,
             onClick = onVsComputer
         )
+    }
+}
+
+@Composable
+fun BoardDifficultySelectScreen(
+    game: BoardGameType,
+    onBack: () -> Unit,
+    onSelect: (BoardDifficulty) -> Unit
+) {
+    BackHandler(onBack = onBack)
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .windowInsetsPadding(WindowInsets.statusBars)
+            .windowInsetsPadding(WindowInsets.navigationBars)
+            .padding(horizontal = 20.dp)
+    ) {
+        BoardTopBar(title = "${game.displayName} · 选择难度", onBack = onBack)
+        Spacer(Modifier.size(8.dp))
+        Text(
+            text = "电脑棋手水平",
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onBackground
+        )
+        Text(
+            text = "难度决定电脑的棋力，对局中可随时认输重开换难度",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.size(24.dp))
+        BoardDifficulty.entries.forEachIndexed { index, difficulty ->
+            GameTypeCard(
+                icon = Icons.Rounded.Star,
+                title = "${difficulty.label} · ${"★".repeat(index + 1)}${"☆".repeat(2 - index)}",
+                subtitle = difficulty.description,
+                accent = MaterialTheme.colorScheme.primary,
+                onClick = { onSelect(difficulty) }
+            )
+            if (index < BoardDifficulty.entries.lastIndex) {
+                Spacer(Modifier.size(16.dp))
+            }
+        }
     }
 }
 

@@ -41,6 +41,33 @@ class BoardBotTest {
     }
 
     @Test
+    fun hardDifficulty_takesWinningMoveAndBlocksThreat() {
+        val grid = MutableList(15 * 15) { 0 }
+        for (c in 3..6) grid[7 * 15 + c] = Stone.BLACK.code
+        val toWin = BoardState(gameType = BoardGameType.GOMOKU, grid = grid.toList(), current = Stone.BLACK)
+        val winMove = BoardBot.nextMove(toWin, Random(1), difficulty = BoardDifficulty.HARD)
+        assertNotNull(winMove)
+        assertEquals(7, winMove.row)
+        assertTrue(winMove.col == 2 || winMove.col == 7, "困难难度应直接成五")
+
+        val toBlock = BoardState(gameType = BoardGameType.GOMOKU, grid = grid.toList(), current = Stone.WHITE)
+        val blockMove = BoardBot.nextMove(toBlock, Random(1), difficulty = BoardDifficulty.HARD)
+        assertNotNull(blockMove)
+        assertEquals(7, blockMove.row)
+        assertTrue(blockMove.col == 2 || blockMove.col == 7, "困难难度应堵住对手四连")
+    }
+
+    @Test
+    fun easyDifficulty_returnsLegalMove() {
+        val grid = MutableList(15 * 15) { 0 }
+        for (c in 3..6) grid[7 * 15 + c] = Stone.BLACK.code
+        val state = BoardState(gameType = BoardGameType.GOMOKU, grid = grid.toList(), current = Stone.WHITE)
+        val move = BoardBot.nextMove(state, Random(7), difficulty = BoardDifficulty.EASY)
+        assertNotNull(move)
+        assertIs<MoveOutcome.Played>(state.applyMove(move))
+    }
+
+    @Test
     fun goBot_returnsLegalMove() {
         val state = BoardState(gameType = BoardGameType.GO)
         val move = BoardBot.nextMove(state, Random(1))
