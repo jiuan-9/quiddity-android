@@ -106,7 +106,7 @@ data class ImportSkipItem(
  * @param payload 解析 + 校验 + 资产恢复后的完整数据（v1 文件已按 2.6 迁移为 v2 形态）
  * @param skipItems 跳过清单（对象 + 原因）
  * @param needsKeyRefill 需重新填写密钥的模型配置条目名称列表（3.2 密文解密自检失败项）
- * @param groupChatsSkipped 群聊条目数（1.3.0 群聊实体未加入，一律跳过并提示）
+ * @param groupChatsSkipped 因成员引用悬空被跳过的群聊条目数（1.5.0 起可正常恢复群聊）
  */
 @Immutable
 data class ImportPlan(

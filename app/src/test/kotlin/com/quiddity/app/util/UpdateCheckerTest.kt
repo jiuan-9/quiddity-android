@@ -73,4 +73,23 @@ class UpdateCheckerTest {
         )
         assertEquals(latest, url)
     }
+
+    @Test
+    fun `github releases page uses injected fetcher and reachable check`() = runBlocking {
+        val latest = "https://github.com/jiuan-9/Quiddity-website/releases/download/v1.3.1/quiddity-1.3.1.apk"
+        var injectedOwner = ""
+        var injectedRepo = ""
+        val url = UpdateChecker.resolveApkUrl(
+            rawUrl = "https://github.com/jiuan-9/Quiddity-website/releases/latest",
+            fetchLatestApk = { owner, repo ->
+                injectedOwner = owner
+                injectedRepo = repo
+                latest
+            },
+            isReachable = { it == latest }
+        )
+        assertEquals(latest, url)
+        assertEquals("jiuan-9", injectedOwner)
+        assertEquals("Quiddity-website", injectedRepo)
+    }
 }

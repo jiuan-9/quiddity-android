@@ -1,0 +1,824 @@
+群聊功能 1.5.0 实施计划
+========================
+
+> 执行说明：本计划按任务逐步执行，每步先写失败测试、再实现、再验证、再提交。
+> 项目文档规范：全仓库文档统一纯文本格式，不用 markdown（方案第一节第 2 条）。
+> 代码注释规范：文件内仅允许保留两类注释——当前规则说明注释（开发规范头块）与
+>   模块划分注释（// ===== xxx =====）；禁止其他任何形式的代码注释。
+> 开发规范：完成开发并通过单元/集成测试后，必须打包为标准 APK。
+
+目标：把 docs/群聊方案.txt（1.5.0）描述的群聊功能完整落地：首页私聊/群聊双 Tab、
+建群流程、头像点击回复 + 排队机制、群聊消息展示、群设置与成员管理、导入导出、
+用户名强制、删除保护、教程弹窗，并统一上下文格式为「名字：内容」。
+
+架构：数据层沿用已预留字段（Conversation.type=GROUP / memberConversationIds /
+groupMemory / Message.senderId），实现 ChatRepository 三个预留接口中的
+streamGroupMemberReply 与 compressGroupMemory（decideGroupResponder 按方案第三节
+"暂时只有头像点击一种回复模式" 不实现）。排队状态机抽成纯 Kotlin 类
+GroupReplyQueue 便于 JVM 单测。UI 层在现有 Compose 页面内新增群聊分支：
+首页用 HorizontalPager 做私聊/群聊双列表，聊天页在输入框上方加成员头像栏。
+
+技术栈：Kotlin 2.0 / Compose BOM 2024.10.01 / Navigation Compose /
+kotlinx-serialization / DataStore / Coil。测试用 JUnit4（src/test）。
+
+当前工作区状态：分支 codex/chat-share-search，存在未提交改动（长图导出/搜索的
+后续优化），实施时保留这些改动；共享文件（HomeScreen/ChatScreen/HamburgerMenu）
+的提交会一并带上这些未提交改动，最终在收尾阶段统一说明。
+
+----------------------------------------------------------------------------
+阶段 A：数据模型与全局设置
+----------------------------------------------------------------------------
+
+任务 A1：QuiddityConstants 新增群聊常量
+文件：app/src/main/kotlin/com/quiddity/app/util/QuiddityConstants.kt
+
+在 "===== 群聊 =====（新增节）" 下新增：
+    // ===== 群聊 =====
+    const val GROUP_DEFAULT_CONTEXT_LIMIT = 50
+    const val GROUP_MIN_CONTEXT_LIMIT = 1
+    const val GROUP_MAX_CONTEXT_LIMIT = 200
+    const val GROUP_MAX_MEMBERS = 3
+    const val GROUP_RETRY_COUNT = 5
+    const val GROUP_STOP_MODE_A = "A"
+    const val GROUP_STOP_MODE_B = "B"
+    const val GROUP_DEFAULT_STOP_MODE = GROUP_STOP_MODE_B
+    const val SOLO_DEFAULT_TITLE_PREFIX = "新会话"
+    const val GROUP_DEFAULT_TITLE_PREFIX = "新群聊"
+
+先写测试（QuiddityConstantsTest）断言上述常量存在且 GROUP_DEFAULT_CONTEXT_LIMIT
+== 50、GROUP_MAX_CONTEXT_LIMIT == 200、GROUP_MAX_MEMBERS == 3、GROUP_RETRY_COUNT
+== 5、GROUP_DEFAULT_STOP_MODE == "B"。
+验证：gradlew.bat :app:testDebugUnitTest --tests "*QuiddityConstantsTest*"
+提交：git add -A && git commit -m "feat: 群聊常量"
+
+任务 A2：Conversation 新增群聊字段
+文件：app/src/main/kotlin/com/quiddity/app/data/model/Models.kt
+
+在 groupMemory 字段后新增（带默认值，向后兼容旧数据）：
+    /**
+     * 群聊上下文条数 N（仅 type=GROUP 使用；默认 50，范围 1～200）。
+     */
+    val groupContextLimit: Int = QuiddityConstants.GROUP_DEFAULT_CONTEXT_LIMIT,
+    /**
+     * 群聊停止模式（仅 type=GROUP 使用）：A=只停当前、B=清空队列（默认）。
+     */
+    val stopMode: String = QuiddityConstants.GROUP_DEFAULT_STOP_MODE
+
+验证：gradlew.bat :app:compileDebugKotlin 编译通过；PromptBuilderTest 等现有
+测试不受影响（默认值兜底）。
+提交：git add app/src/main/kotlin/com/quiddity/app/data/model/Models.kt &&
+git commit -m "feat: Conversation 新增群聊字段 groupContextLimit/stopMode"
+
+任务 A3：AppSettings 新增教程标记与命名计数器
+文件：
+- app/src/main/kotlin/com/quiddity/app/data/model/Models.kt（AppSettings）
+- app/src/main/kotlin/com/quiddity/app/data/local/SettingsStore.kt
+- app/src/main/kotlin/com/quiddity/app/data/repo/SettingsRepository.kt
+- app/src/main/kotlin/com/quiddity/app/ui/settings/SettingsViewModel.kt
+
+AppSettings 末尾新增：
+    /**
+     * 群聊教程弹窗是否已看过（首次进入群聊模式列表页弹一次）。
+     */
+    val groupTutorialSeen: Boolean = false,
+    /**
+     * 私聊默认名计数器：新会话 1、2、3…，删除不补号。
+     */
+    val soloChatCounter: Int = 0,
+    /**
+     * 群聊默认名计数器：新群聊 1、2、3…，删除不补号。
+     */
+    val groupChatCounter: Int = 0
+
+SettingsStore：
+    object Keys 新增：
+        val GROUP_TUTORIAL_SEEN = booleanPreferencesKey("group_tutorial_seen")
+        val SOLO_CHAT_COUNTER = intPreferencesKey("solo_chat_counter")
+        val GROUP_CHAT_COUNTER = intPreferencesKey("group_chat_counter")
+    toAppSettings() 新增三行（? 或 d.xxx 兜底）
+    update() 新增三行写入
+
+SettingsRepository 新增：
+    suspend fun setGroupTutorialSeen(seen: Boolean) = update { it.copy(groupTutorialSeen = seen) }
+    suspend fun nextSoloTitle(): String {
+        val n = currentSnapshot().soloChatCounter + 1
+        update { it.copy(soloChatCounter = n) }
+        return QuiddityConstants.SOLO_DEFAULT_TITLE_PREFIX + " " + n
+    }
+    suspend fun nextGroupTitle(): String {
+        val n = currentSnapshot().groupChatCounter + 1
+        update { it.copy(groupChatCounter = n) }
+        return QuiddityConstants.GROUP_DEFAULT_TITLE_PREFIX + " " + n
+    }
+
+SettingsViewModel 新增（转发即可，供首页/聊天页调用）：
+    fun setGroupTutorialSeen(seen: Boolean) = viewModelScope.launch { settingsRepository.setGroupTutorialSeen(seen) }
+    suspend fun nextGroupTitle(): String = settingsRepository.nextGroupTitle()
+    suspend fun nextSoloTitle(): String = settingsRepository.nextSoloTitle()
+
+验证：gradlew.bat :app:compileDebugKotlin。
+提交：git add -A && git commit -m "feat: 群聊教程标记与私聊/群聊默认名计数器"
+
+----------------------------------------------------------------------------
+阶段 B：提示词与上下文格式统一
+----------------------------------------------------------------------------
+
+任务 B1：buildGroupTranscript 输出格式改为「名字：内容」
+文件：
+- app/src/main/kotlin/com/quiddity/app/domain/PromptBuilder.kt
+- app/src/test/kotlin/com/quiddity/app/domain/PromptBuilderTest.kt
+
+先改测试（PromptBuilderTest 第 209-221 行 buildGroupTranscript takes last N
+messages with names）：
+    断言从 "[小B] 第二句\n[小A] 第三句" 改为 "小B：第二句\n小A：第三句"
+
+实现：buildGroupTranscript 中
+    val name = msg.senderId?.let { senderNames[it] ?: it } ?: "未知成员"
+    "$name：${msg.content}"
+
+任务 B2：toApiMessages 群聊标签前缀改为「名字：」
+文件同上。测试（第 184-197 行 toApiMessages prefixes sender label when
+mapping provided）断言从 "[小A] 早上好" 改为 "小A：早上好"。
+实现：content = if (msg.senderId != null && senderLabels.isNotEmpty()) {
+    (senderLabels[msg.senderId] ?: msg.senderId) + "：" + msg.content
+} else msg.content
+
+任务 B3：新增群聊规则常量与测试
+PromptBuilder 新增：
+    const val GROUP_RULES =
+        "1. 你正在参与一场群聊，群聊中有用户和其他 AI 成员。\n" +
+        "2. 每次发言前先完整阅读群聊转述，保持你的人设一致。\n" +
+        "3. 只说你作为该角色会说的话，不要替别人发言。\n" +
+        "4. 直接输出发言内容，不要输出名字前缀、冒号或任何解释。"
+
+新增测试：
+- buildGroupSystemPrompt 含成员人设名与 GROUP_RULES
+- buildGroupDecisionPrompt 含转述文本与输出约束
+- buildGroupMemorySummaryPrompt 含待压缩群聊转述
+
+验证：gradlew.bat :app:testDebugUnitTest --tests "*PromptBuilderTest*"
+提交：git add -A && git commit -m "feat: 群聊上下文格式统一为名字：内容"
+
+----------------------------------------------------------------------------
+阶段 C：仓库层群聊实现
+----------------------------------------------------------------------------
+
+任务 C1：GroupReplyQueue 纯 Kotlin 排队状态机
+新建文件：app/src/main/kotlin/com/quiddity/app/domain/GroupReplyQueue.kt
+新建测试：app/src/test/kotlin/com/quiddity/app/domain/GroupReplyQueueTest.kt
+
+实现（完整代码）：
+package com.quiddity.app.domain
+
+import com.quiddity.app.data.model.Message
+import com.quiddity.app.util.QuiddityConstants
+
+/**
+ * 群聊点名回复队列（纯 Kotlin，便于 JVM 单测）。
+ * 规则：正在回复最多 1 个，排队最多 2 个（方案第四节）。
+ * 每个成员入队时冻结点击那一刻的群聊消息快照（方案四.8 上下文定格）。
+ */
+class GroupReplyQueue(
+    private val maxReplying: Int = 1,
+    private val maxQueued: Int = QuiddityConstants.GROUP_MAX_MEMBERS - 1
+) {
+    data class Item(
+        val memberId: String,
+        val frozenMessages: List<Message>
+    )
+
+    private val items = ArrayDeque<Item>()
+
+    val isFull: Boolean get() = items.size >= maxReplying + maxQueued
+    val size: Int get() = items.size
+    val isEmpty: Boolean get() = items.isEmpty()
+
+    fun contains(memberId: String): Boolean = items.any { it.memberId == memberId }
+
+    /** 入队：已在队/队满时返回 false。 */
+    fun enqueue(memberId: String, frozenMessages: List<Message>): Boolean {
+        if (isFull || contains(memberId)) return false
+        items.addLast(Item(memberId, frozenMessages))
+        return true
+    }
+
+    /** 当前正在回复的成员；队空时 null。 */
+    fun replyingMember(): String? = items.firstOrNull()?.memberId
+
+    /** 取出正在回复的成员（回复完成后调用）。 */
+    fun dequeue(): Item? = if (items.isEmpty()) null else items.removeFirst()
+
+    /** 清空整个队列（停止模式 B）。 */
+    fun clear() = items.clear()
+
+    /** 只移除正在回复的成员（停止模式 A），排队的顺位递补。 */
+    fun removeReplying(): Item? = if (items.isEmpty()) null else items.removeFirst()
+
+    /** 成员当前排队序号：0=正在回复，1=第 1 个排队，2=第 2 个排队；不在队返回 -1。 */
+    fun positionOf(memberId: String): Int =
+        items.indexOfFirst { it.memberId == memberId }
+
+    fun snapshot(): List<Item> = items.toList()
+}
+
+测试覆盖：
+- enqueue 成功入队、isFull 在第 4 个入队时返回 false
+- 重复入队同一成员返回 false
+- positionOf：0/1/2/-1
+- dequeue 后下一个成员成为 replyingMember
+- clear 清空；removeReplying 只移除队首
+
+验证：gradlew.bat :app:testDebugUnitTest --tests "*GroupReplyQueueTest*"
+提交：git add -A && git commit -m "feat: 群聊排队状态机 GroupReplyQueue"
+
+任务 C2：ChatRepository.streamGroupMemberReply 实现
+文件：
+- app/src/main/kotlin/com/quiddity/app/data/repo/ChatRepository.kt
+- 新建测试：app/src/test/kotlin/com/quiddity/app/data/repo/ChatRepositoryGroupTest.kt
+
+替换占位实现：
+    suspend fun streamGroupMemberReply(
+        member: Conversation,
+        group: Conversation,
+        transcript: List<Message>,
+        senderId: String,
+        onEvent: suspend (Event) -> Unit
+    ) {
+        val settings = settingsRepo.currentSnapshot()
+        val access = ApiAccess.resolve(settings, member)
+        if (access is ApiAccess.Failure) {
+            return emitError(onEvent, access.toChatException(), "")
+        }
+        access as ApiAccess.Resolved
+
+        val systemPrompt = PromptBuilder.buildGroupSystemPrompt(member, PromptBuilder.GROUP_RULES)
+        val senderNames = transcript
+            .mapNotNull { it.senderId }
+            .distinct()
+            .associateWith { senderId ->
+                conversationRepo.getConversation(senderId)?.persona?.name
+                    ?.takeIf { it.isNotBlank() }
+                    ?: senderId
+            }
+        val apiMessages = PromptBuilder.toApiMessages(systemPrompt, transcript, senderNames)
+
+        val maxTokens = member.maxTokens ?: settings.globalMaxTokens
+        val singleMsgTokens = member.singleMessageTokens ?: settings.globalSingleMessageTokens
+        val tier = if (member.apiCatalogId != null) {
+            settings.catalog.firstOrNull { it.id == member.apiCatalogId }?.let {
+                ApiCatalogManager... // 见任务 C4 的 resolveMemberTier 说明
+            }
+        } else null
+
+        // 方案六.3：完整级成员可用工具检索完整群聊消息；基础级只带最近 N 条
+        val useSearchTool = resolveTier(member, settings) == ModelTier.FULL
+        val request = ChatCompletionRequest(
+            model = access.model,
+            messages = apiMessages,
+            max_tokens = maxTokens,
+            temperature = 0.8,
+            stream = true,
+            tools = if (useSearchTool) listOf(PromptBuilder.buildSearchChatTool()) else null,
+            tool_choice = if (useSearchTool) "auto" else null
+        )
+        val coordinator = coordinatorFactory(
+            group.id,
+            IdGenerator.newUuid(),
+            settings.multilineAutoSplit,
+            singleMsgTokens,
+            senderId
+        )
+        runWithToolRound(api, access.apiUrl, access.apiKey, request, coordinator, group, onEvent)
+    }
+
+说明：
+- 群聊不带成员私聊记忆（方案六.1）：不注入 read_memory 工具、不读成员压缩记忆；
+  search_chat 回填走 runWithToolRound 的 buildToolResultMessages，其中
+  conversationRepo.observeMessages(conv.id) 的 conv 为群聊 → 检索范围是群聊记录。
+- resolveTier(member, settings) 是 ChatRepository 私有函数：按
+  member.apiCatalogId -> settings.activeCatalogId -> catalog.first 解析条目，
+  用 ApiCatalogManager 判断分级；无配置回退 BASIC。
+  （ChatRepository 构造函数需新增可选依赖 apiCatalogManager:
+  ApiCatalogManager? = null，ServiceLocator 注入真实实例。）
+
+测试（新建 ChatRepositoryGroupTest）：
+- FakeChatApi 返回固定流；FakeCoordinator 记录 senderId；
+  断言 Event 透传、请求 model/max_tokens 来自 member、消息 senderId == 传入 senderId。
+- ApiAccess 失败（member 无 key）→ 只发 Error 事件。
+
+验证：gradlew.bat :app:testDebugUnitTest --tests "*ChatRepositoryGroupTest*"
+提交：git add -A && git commit -m "feat: 实现 streamGroupMemberReply"
+
+任务 C3：ChatRepository.compressGroupMemory 实现
+文件同上。
+
+替换占位实现：
+    suspend fun compressGroupMemory(
+        group: Conversation,
+        transcript: List<Message>
+    ): String {
+        val settings = settingsRepo.currentSnapshot()
+        val access = ApiAccess.resolve(settings, group)
+            as? ApiAccess.Resolved
+            ?: throw IllegalStateException("API 未配置，无法压缩群聊记忆")
+        val senderNames = transcript
+            .mapNotNull { it.senderId }
+            .distinct()
+            .associateWith { id ->
+                conversationRepo.getConversation(id)?.persona?.name
+                    ?.takeIf { it.isNotBlank() }
+                    ?: id
+            }
+        val transcriptText = PromptBuilder.buildGroupTranscript(
+            transcript.filterNot { it.isNotice },
+            lastN = 0,
+            senderNames = senderNames
+        )
+        val raw = api.completeNonStreaming(
+            apiUrl = access.apiUrl,
+            apiKey = access.apiKey,
+            model = access.model,
+            systemPrompt = PromptBuilder.GROUP_MEMORY_SYSTEM_PROMPT,
+            userContent = PromptBuilder.buildGroupMemorySummaryPrompt(transcriptText),
+            maxTokens = QuiddityConstants.GROUP_MEMORY_MAX_TOKENS,
+            temperature = QuiddityConstants.COMPRESSION_TEMPERATURE,
+            emptyError = "群聊记忆压缩返回空内容"
+        )
+        val parsed = PromptBuilder.parseCompressionResult(raw)
+        return if (parsed.success) parsed.summary else group.groupMemory
+    }
+
+测试：FakeChatApi 返回「【摘要】...\n【索引】...」→ 返回摘要；失败返回旧
+groupMemory。
+验证：gradlew.bat :app:testDebugUnitTest --tests "*ChatRepositoryGroupTest*"
+提交：git add -A && git commit -m "feat: 实现 compressGroupMemory"
+
+任务 C4：ConversationRepository 建群与成员辅助
+文件：
+- app/src/main/kotlin/com/quiddity/app/data/repo/ConversationRepository.kt
+- 新建测试：app/src/test/kotlin/com/quiddity/app/data/repo/ConversationRepositoryGroupTest.kt
+
+新增：
+    suspend fun createGroupConversation(
+        memberIds: List<String>,
+        title: String? = null
+    ): Conversation {
+        val now = System.currentTimeMillis()
+        val resolvedTitle = title?.takeIf { it.isNotBlank() }
+            ?: settingsRepository?.nextGroupTitle()
+            ?: QuiddityConstants.GROUP_DEFAULT_TITLE_PREFIX
+        val conv = Conversation(
+            id = IdGenerator.newId(IdGenerator.Prefix.CONVERSATION),
+            title = resolvedTitle,
+            createdAt = now,
+            updatedAt = now,
+            type = ConversationType.GROUP,
+            memberConversationIds = memberIds.distinct(),
+            groupContextLimit = QuiddityConstants.GROUP_DEFAULT_CONTEXT_LIMIT,
+            stopMode = QuiddityConstants.GROUP_DEFAULT_STOP_MODE,
+            lastMessagePreview = ""
+        )
+        store.createConversation(conv)
+        return conv
+    }
+
+    /** 被 [memberId] 引用的群聊列表（私聊删除保护用）。 */
+    fun groupsReferencing(memberId: String): List<Conversation> =
+        store.conversations.value.filter {
+            it.type == ConversationType.GROUP && memberId in it.memberConversationIds
+        }
+
+    /** 从所有群聊中移除成员（私聊删除后调用；消息气泡保留）。 */
+    suspend fun removeMemberFromGroups(memberId: String) {
+        groupsReferencing(memberId).forEach { group ->
+            updateConversation(
+                group.copy(memberConversationIds = group.memberConversationIds - memberId)
+            )
+        }
+    }
+
+    /** 成员校验：用户名、AI 名、API 可用（方案七.4）。 */
+    suspend fun validateGroupMember(member: Conversation): Result<String> {
+        if (member.userPersona.name.isBlank()) {
+            return Result.failure(IllegalStateException("用户名未设置"))
+        }
+        if (member.persona.name.isBlank()) {
+            return Result.failure(IllegalStateException("AI 名未设置"))
+        }
+        val settings = settingsRepository?.currentSnapshot() ?: return Result.failure(IllegalStateException("设置未加载"))
+        val access = ApiAccess.resolve(settings, member)
+        return when (access) {
+            is ApiAccess.Failure -> Result.failure(access.toChatException())
+            is ApiAccess.Resolved -> apiCatalogManager?.testConnection(
+                access.apiUrl, access.apiKey, access.model
+            ) ?: Result.failure(IllegalStateException("API 名册未加载"))
+        }
+    }
+
+说明：ApiAccess 是 internal 吗？需要检查（ApiAccess 在 data/repo 包，同包可访问；
+ConversationRepository 同包，可访问）。
+
+测试（用假 store 或直接构造 Conversation）：
+- createGroupConversation 默认标题走 settingsRepository.nextGroupTitle
+- groupsReferencing 只返回 GROUP 且包含该成员
+- removeMemberFromGroups 从所有群聊移除
+- validateGroupMember：userPersona.name 空 / persona.name 空 / 配置缺失均失败
+
+验证：gradlew.bat :app:testDebugUnitTest --tests "*ConversationRepositoryGroupTest*"
+提交：git add -A && git commit -m "feat: 建群/成员校验/删除保护仓库方法"
+
+----------------------------------------------------------------------------
+阶段 D：导入导出支持群聊
+----------------------------------------------------------------------------
+
+任务 D1：DataPorter 恢复群聊
+文件：
+- app/src/main/kotlin/com/quiddity/app/util/DataPorter.kt
+- app/src/test/kotlin/com/quiddity/app/util/ChatImageExporterTest.kt（不动）
+- 新建：app/src/test/kotlin/com/quiddity/app/util/DataPorterGroupTest.kt
+
+改动点：
+1. buildSkipItems：不再整体跳过群聊；仅当 memberConversationIds 悬空（引用的
+   私聊 id 不在 privateChats 中）时才计入跳过清单，reason 说明悬空成员 id。
+2. ImportPlan.groupChatsSkipped 改为只统计「真正跳过」的群聊数
+   （buildSkipItems 返回的群聊项数），不再等于 groupChats.size。
+3. restoreV2Assets：对 groupChats 的会话壁纸也做恢复（复用 privateChats 的逻辑，
+   把 updatedBundles 的 map 同时应用于 privateChats 与 groupChats）。
+4. ConversationRepository.importV2Snapshot：
+   conversations = privateChats.conversation + groupChats.conversation
+   messages = privateChats.messages + groupChats.messages
+   （Merge/Replace 均走现有 store 逻辑，群聊消息文件按 conversation.id 落盘）
+
+测试（DataPorterGroupTest）：
+- buildSkipItems：成员引用完整的群聊不跳过；悬空成员引用的群聊跳过
+- ImportPlan.groupChatsSkipped 只统计悬空群聊
+
+验证：gradlew.bat :app:testDebugUnitTest --tests "*DataPorterGroupTest*"
+提交：git add -A && git commit -m "feat: 导入导出支持群聊恢复"
+
+----------------------------------------------------------------------------
+阶段 E：首页私聊/群聊双 Tab
+----------------------------------------------------------------------------
+
+任务 E1：HomeViewModel 支持按类型过滤与建群
+文件：app/src/main/kotlin/com/quiddity/app/ui/home/HomeViewModel.kt
+
+新增：
+    // 会话按类型分组：私聊 / 群聊
+    val soloConversations: StateFlow<List<Conversation>> = conversations.map { list ->
+        list.filter { it.type != ConversationType.GROUP }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    val groupConversations: StateFlow<List<Conversation>> = conversations.map { list ->
+        list.filter { it.type == ConversationType.GROUP }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /** 群聊成员会话解析（id -> Conversation），供列表头像拼合与成员校验。 */
+    fun memberConversations(ids: List<String>): List<Conversation> =
+        ids.mapNotNull { id -> conversationRepository.getConversation(id) }
+
+建群流程（E2 的弹窗调用）：
+    fun createGroup(memberIds: List<String>, title: String?, onDone: (Result<String>) -> Unit)
+    实现：viewModelScope.launch {
+        val members = memberConversations(memberIds)
+        if (members.isEmpty()) { onDone(Result.failure(IllegalStateException("未选择成员"))); return@launch }
+        // 逐个校验（用户名 / AI 名 / API 测试），全部通过才建群
+        val failures = mutableListOf<String>()
+        for (m in members) {
+            val r = conversationRepository.validateGroupMember(m)
+            if (r.isFailure) failures += "${m.persona.name.ifBlank { m.title }}：${r.exceptionOrNull()?.message}"
+        }
+        if (failures.isNotEmpty()) { onDone(Result.failure(IllegalStateException(failures.joinToString("\n")))); return@launch }
+        val group = conversationRepository.createGroupConversation(memberIds, title)
+        onDone(Result.success(group.id))
+    }
+
+删除保护：
+    fun deleteConversations(convIds: List<String>, onReferencedByGroups: (List<String>) -> Unit = {})
+    实现：先取被群聊引用的私聊 id（groupsReferencing 非空），若存在则回调
+    onReferencedByGroups（UI 弹确认），确认后再真正删除并调用
+    conversationRepository.removeMemberFromGroups(每个被删且被引用的私聊 id)。
+
+任务 E2：HomeScreen 双 Tab 布局
+文件：app/src/main/kotlin/com/quiddity/app/ui/home/HomeScreen.kt
+
+改造：
+1. 引入 HorizontalPager（androidx.compose.foundation.pager.rememberPagerState，
+   BOM 2024.10 支持），两页：私聊列表 / 群聊列表。
+2. 底部新增「私聊」「群聊」两个按钮 + 随滑动进度移动的高亮指示块：
+   - 高亮块用 pagerState.currentPage + pageOffset 计算位置（两词之间滑动联动）
+   - 浅色模式高亮文字为黑色，深色模式为白色（用 isSystemInDarkTheme 或
+     settings.darkMode 判断）
+3. 顶部 HomeTopBar 的 onNewConversation 改为按当前页创建：
+   - 私聊页 → viewModel.createConversation()
+   - 群聊页 → 打开新建群聊弹窗（任务 E3）
+4. 群聊卡片 GroupConversationCard：群名称 + 更新时间 +
+   头像拼合图（用户头像 + 成员头像，按人数自适应 1/2/3/4 布局），不显示预览。
+5. 切换 Tab 时列表淡出/淡入（AnimatedContent targetState = currentPage）。
+6. 首次进入群聊页：若 settings.groupTutorialSeen == false →
+   弹教程 AlertDialog，确认后 settingsViewModel.setGroupTutorialSeen(true)。
+7. 群聊页右下角问号按钮（进入群聊模式淡入，随时可再开教程）。
+
+教程内容（按方案三.8 六条）：
+   1. 发送消息后，点一下成员的头像，TA 才会回复你
+   2. 可以连着点好几个头像，TA 们会排队依次回复（最多 1 个在回复、2 个在排队）
+   3. 不点头像就没人回；想听谁说，就点谁
+   4. 成员管理、上下文条数等都可以在群聊设置里调整
+   5. 用户名、AI 名没设置或 API 测试没通过的角色不能加入群聊，会收到通知，可重试
+   6. 点头像没反应的可能原因：成员已被踢出、群聊没有成员、或已到排队上限
+
+任务 E3：新建群聊弹窗
+文件：app/src/main/kotlin/com/quiddity/app/ui/home/HomeScreen.kt
+（或拆分到 ui/home/components/NewGroupDialog.kt）
+
+流程（方案二.6）：
+1. 弹窗展示私聊会话列表（会话名、AI 名、头像、校验状态：用户名/AI 名/API 配置
+   是否就绪），勾选 1～3 个 → 确定
+2. 确定后对每个选中成员执行 validateGroupMember（API 测试）
+3. 通过的角色加入；未通过的返回通知（逐条列出原因），可重试
+4. 群名可空（自动编号「新群聊 N」）→ 创建后 onOpenConversation(groupId)
+
+校验状态展示：静态预检（用户名/AI 名是否为空、能否解析 API 配置）在列表中
+标绿/标灰；API 实测在点击确定后执行。
+
+任务 E4：删除保护确认
+文件：app/src/main/kotlin/com/quiddity/app/ui/home/HomeScreen.kt
+
+deleteConversations 调用改为：
+    viewModel.deleteConversations(
+        ids,
+        onReferencedByGroups = { referenced ->
+            pendingReferencedDelete = referenced  // 弹「该会话是群聊成员，删除后将从群聊中移除」确认框
+        }
+    )
+确认后再真正删除（重新调用一次无引用版本或让 ViewModel 二次确认）。
+多选删除与长按删除同一路径。
+
+验证（E1-E4）：gradlew.bat :app:compileDebugKotlin；手动走查在真机/模拟器。
+提交：git add -A && git commit -m "feat: 首页私聊/群聊双 Tab 与建群流程"
+
+----------------------------------------------------------------------------
+阶段 F：群聊会话页（头像栏 + 队列 + 消息展示 + 群设置）
+----------------------------------------------------------------------------
+
+任务 F1：ChatViewModel 群聊队列接入
+文件：app/src/main/kotlin/com/quiddity/app/ui/chat/ChatViewModel.kt
+
+新增状态：
+    private val _groupQueue = MutableStateFlow<List<GroupReplyQueue.Item>>(emptyList())
+    val groupQueue: StateFlow<List<GroupReplyQueue.Item>> = _groupQueue.asStateFlow()
+    private val groupQueueEngine = GroupReplyQueue()
+    private var groupStreamJob: Job? = null
+
+新增方法：
+    fun isGroup(): Boolean = conversation.value?.type == ConversationType.GROUP
+
+    fun enqueueGroupMember(memberId: String) {
+        if (!isGroup()) return
+        val group = conversation.value ?: return
+        if (memberId !in group.memberConversationIds) return
+        if (groupStreamJob?.isActive == true && groupQueueEngine.isFull) return
+        // 上下文定格：入队那一刻冻结消息快照（方案四.8）
+        val frozen = _messages.value
+        if (!groupQueueEngine.enqueue(memberId, frozen)) return
+        syncGroupQueue()
+        if (groupStreamJob?.isActive != true) startGroupQueueProcessor()
+    }
+
+    private fun syncGroupQueue() {
+        _groupQueue.value = groupQueueEngine.snapshot()
+    }
+
+    private fun startGroupQueueProcessor() {
+        groupStreamJob = viewModelScope.launch {
+            _isGenerating.value = true
+            try {
+                while (groupQueueEngine.isNotEmpty()) {
+                    val item = groupQueueEngine.replyingMember()?.let { id ->
+                        groupQueueEngine.snapshot().firstOrNull { it.memberId == id }
+                    } ?: break
+                    val ok = runGroupMemberReplyWithRetry(item)
+                    groupQueueEngine.dequeue()
+                    syncGroupQueue()
+                    if (!ok) {
+                        // 任一成员 5 次失败 → 整个队列取消，所有头像恢复（方案十三.3）
+                        groupQueueEngine.clear()
+                        syncGroupQueue()
+                        _errorEvent.value = "群聊回复失败，队列已取消"
+                        break
+                    }
+                }
+            } finally {
+                _isGenerating.value = false
+                notifyIdleIfNoWork()
+            }
+            awaitGroupMemoryCompressionIfNeeded()
+            notifyIdleIfNoWork()
+        }
+    }
+
+    private suspend fun runGroupMemberReplyWithRetry(item: GroupReplyQueue.Item): Boolean {
+        val group = conversation.value ?: return false
+        val member = conversationRepository.getConversation(item.memberId) ?: return false
+        var attempt = 0
+        while (attempt < QuiddityConstants.GROUP_RETRY_COUNT) {
+            attempt++
+            var failed = false
+            chatRepository.streamGroupMemberReply(member, group, item.frozenMessages, item.memberId) { event ->
+                when (event) {
+                    is ChatRepository.Event.Error -> {
+                        failed = true
+                        if (attempt < QuiddityConstants.GROUP_RETRY_COUNT) {
+                            _errorEvent.value = "网络错误，重试中 $attempt/${QuiddityConstants.GROUP_RETRY_COUNT}"
+                        } else {
+                            _errorEvent.value = "成员 ${member.persona.name.ifBlank { "AI" }} 回复失败"
+                        }
+                    }
+                    else -> handleStreamEvent(event)
+                }
+            }
+            if (!failed) return true
+        }
+        return false
+    }
+
+停止（方案四.6-7）：
+    override fun stopGeneration() 增加群聊分支：
+        if (isGroup()) {
+            groupStreamJob?.cancel()
+            groupStreamJob = null
+            val mode = conversation.value?.stopMode ?: QuiddityConstants.GROUP_DEFAULT_STOP_MODE
+            if (mode == QuiddityConstants.GROUP_STOP_MODE_B) {
+                groupQueueEngine.clear()
+            } else {
+                groupQueueEngine.removeReplying()
+            }
+            syncGroupQueue()
+            _isGenerating.value = false
+            notifyIdleIfNoWork()
+            return
+        }
+        // 私聊原有逻辑...
+
+队列状态暴露给 UI：
+    fun queuePosition(memberId: String): Int = groupQueueEngine.positionOf(memberId)
+    fun isQueueFull(): Boolean = groupQueueEngine.isFull
+
+群聊小本本（方案六.2/十六.3）：回复队列全部结束后若群聊消息数 >=
+GROUP_MEMORY_THRESHOLD(40)，调用 chatRepository.compressGroupMemory 并把摘要
+写入 group.groupMemory（失败静默，不打断用户）。
+
+说明：私聊的 sendMessage/letAiStart/regenerate/continueGeneration 在群聊模式下
+应禁止（群聊只走 enqueueGroupMember）；在方法开头加 isGroup() 守卫。
+
+任务 F2：成员头像栏 UI
+新建文件：app/src/main/kotlin/com/quiddity/app/ui/chat/components/GroupAvatarBar.kt
+
+签名：
+    @Composable
+    fun GroupAvatarBar(
+        members: List<Conversation>,          // 按加入顺序（memberConversationIds）
+        queue: List<GroupReplyQueue.Item>,    // 当前队列快照
+        onTap: (String) -> Unit,
+        modifier: Modifier = Modifier
+    )
+
+行为（方案四/十一）：
+- 只显示 3 个 AI 成员头像，按加入顺序排列，不显示用户头像
+- 布局在输入框上方、向右靠齐（Row + Arrangement.End）
+- 头像状态：
+  - 普通：原图
+  - 正在回复（queue[0].memberId）：变灰 + 中央三点加载动画
+  - 排队 1（queue[1]）：变灰 + 中央数字 1
+  - 排队 2（queue[2]）：变灰 + 中央数字 2
+  - 已在队再点击：无反应（enqueue 返回 false）
+- 三点加载动画的持续时长与逐字淡入一致：整个流式期间保持
+  （isStreaming 消息存在即保持三点，直到流完成；打字延迟由 MessageBubble
+  按字渲染，三点由「该成员消息仍在流式」驱动，不会提前结束）
+
+任务 F3：群聊消息展示
+文件：
+- app/src/main/kotlin/com/quiddity/app/ui/chat/ChatScreen.kt
+- app/src/main/kotlin/com/quiddity/app/ui/chat/components/MessageBubble.kt
+
+MessageBubble 增加参数：
+    senderName: String? = null,
+    senderAvatarUri: String? = null
+（null 时走现有私聊逻辑：AI 显示 aiAvatarUri、用户显示 userAvatarUri）
+
+ChatScreen 消息列表按消息 senderId 解析展示信息：
+    fun displayFor(msg: Message): Triple<String?, String?, Boolean> {
+        // (头像Uri, 名字, 是否用户消息)
+        if (conversation?.type != GROUP) → 现有逻辑（AI 头像 + 名字显示"AI名"？）
+        if (msg.role == USER) → (settings.userAvatarUri, "我", true)
+        val member = members[msg.senderId]
+        → (member?.persona?.aiAvatarUri, member?.persona?.name ?: "未知成员", false)
+    }
+
+要点：
+- 群聊每条消息左侧显示发送者头像，气泡上方或气泡内显示名字（方案十二.1）
+- 成员消息：角色卡头像 + AI 名字；用户消息显示「我」（方案十二.2）
+- 用户消息带全局用户头像；未设置用默认占位（现有 AvatarSlot 已处理）
+- 流式输出气泡带打字动画（现有 MessageBubble 已支持）
+- 气泡操作：用户可撤回/改写自己的消息；成员消息可重新生成/改写；
+  操作只作用于该条消息，不打断当前队列（方案十二.5-6）
+  - 群聊模式下：isLastAi 判定改为「该成员最后一条消息」
+  - regenerate() 群聊分支：删除该成员最后一条消息及其后该成员消息后重生成
+    （简化：定位该消息 index，删除其后所有消息，再以冻结快照触发
+    streamGroupMemberReply）
+- 群聊不显示「让 AI 先发消息」空态按钮（初始为空，不插入提示气泡，
+  方案三.7）；空态显示「暂无消息，发送后点击成员头像让 TA 回复」
+- 群聊顶部 0 成员时显示「请添加成员」横幅，点击跳成员管理（方案十.7）
+
+任务 F4：群聊设置（汉堡菜单）
+文件：app/src/main/kotlin/com/quiddity/app/ui/chat/components/HamburgerMenu.kt
+
+群聊分支（isGroup）：
+- 群名称（改 title）
+- 上下文条数 N：默认 50，范围 1～200（groupContextLimit）
+- 成员管理：查看/添加/移除
+  - 显示当前成员头像；满 3 个显示 3 个；不足 3 个显示 1～2 个头像 + 加号按钮
+  - 添加：弹私聊列表勾选（会话名/AI 名/头像/校验状态），最多选到 3 个，
+    确定后逐个 validateGroupMember，通过加入、未通过通知可重试
+  - 移除：从 memberConversationIds 删除（踢出）；历史消息气泡保留
+  - 最少 1 个：管理页不能移除最后 1 个成员（按钮禁用 + 提示）
+- 停止模式 A/B 切换（方案四.7）
+- 不显示：共享用户人设、时间库入口（方案十.2-3）
+
+ChatViewModel 新增：
+    fun updateGroupContextLimit(limit: Int)
+    fun updateGroupStopMode(mode: String)
+    fun addGroupMembers(ids: List<String>, onDone: (Result<Unit>) -> Unit)  // 校验后加入
+    fun removeGroupMember(memberId: String)  // 踢出，保留历史
+
+任务 F5：用户名强制（私聊）
+文件：
+- app/src/main/kotlin/com/quiddity/app/ui/chat/ChatScreen.kt
+- app/src/main/kotlin/com/quiddity/app/ui/chat/ChatViewModel.kt
+
+方案九.4/6：会话内用户名未设置时，进入会话先弹窗要求填写，未填写不能发送消息。
+- ChatScreen：私聊（type != GROUP）且 conversation.userPersona.name.isBlank()
+  → 弹 UserNameDialog（输入框 + 确定），确定后
+  viewModel.updateUserPersona(userPersona.copy(name = text))
+- ChatViewModel.sendMessage 开头：
+    val conv = conversation.value ?: return
+    if (conv.type != ConversationType.GROUP && conv.userPersona.name.isBlank()) {
+        _errorEvent.value = "请先设置用户名"
+        return
+    }
+  （群聊用户名字取自各成员私聊的用户人设，不在此限制）
+
+任务 F6：延迟输出一致性
+文件：app/src/main/kotlin/com/quiddity/app/ui/chat/components/GroupAvatarBar.kt（已在 F2）
+
+方案十八：加载动画（群聊头像三点）在整个逐字淡入期间持续，全部文字显示完才停。
+实现：三点状态由「该成员最新消息 isStreaming」驱动；MessageBubble 的逐字渲染
+完成后会收到 CompleteMessage（isStreaming=false）→ 三点消失，与私聊气泡状态
+行为一致。网络快时动画不会提前结束（isStreaming 在流结束前恒 true）。
+
+验证（F1-F6）：gradlew.bat :app:testDebugUnitTest --tests "*GroupReplyQueueTest*"
+；gradlew.bat :app:compileDebugKotlin；真机走查群聊全流程。
+提交：git add -A && git commit -m "feat: 群聊会话页：头像栏/排队/消息展示/群设置"
+
+----------------------------------------------------------------------------
+阶段 G：首页删除保护收尾
+----------------------------------------------------------------------------
+
+任务 G1：私聊删除保护完整接入
+文件：app/src/main/kotlin/com/quiddity/app/ui/home/HomeScreen.kt
+      app/src/main/kotlin/com/quiddity/app/ui/home/HomeViewModel.kt
+
+已完成 E4 的主体；补：
+- 删除确认文案：当引用群聊的私聊被删除时，提示「该会话被 N 个群聊引用，
+  删除后将从这些群聊中移除成员」。
+- 确认后先删私聊（含消息文件），再 removeMemberFromGroups。
+- 群聊本身删除：走现有多选删除（群聊记录一并删除，成员私聊不受影响，
+  方案十四.6）。
+
+验证：编译 + 真机走查。
+提交：git add -A && git commit -m "feat: 私聊删除保护"
+
+----------------------------------------------------------------------------
+阶段 H：收尾（全量测试 + 构建 + 文档）
+----------------------------------------------------------------------------
+
+任务 H1：全量单元测试
+运行：gradlew.bat :app:testDebugUnitTest
+修复所有失败；更新受影响的旧测试（如 PromptBuilderTest 格式断言）。
+
+任务 H2：编译 Debug/Release APK
+按仓库交付规范：
+- gradlew.bat :app:assembleDebug（含签名校验路径）
+- 检查 keystore.properties 存在性；存在则 assembleRelease
+- verify-apk.bat / verify-release.bat 若存在则运行
+
+任务 H3：版本说明文档
+新建 RELEASE-1.5.0.md（纯文本风格，参照 RELEASE-1.4.0.md），记录：
+- 群聊功能：双 Tab、建群、头像点名回复、排队、群设置、成员管理
+- 上下文格式统一为「名字：内容」
+- 导入导出支持群聊、删除保护、用户名强制
+- 已知限制：decideGroupResponder 未启用（方案定为用户点名模式）
+
+任务 H4：最终提交
+git add -A && git commit -m "feat: 群聊 1.5.0 完整实现"
+说明：提交会包含工作区既有的长图导出/搜索未提交改动，收尾时向用户说明。

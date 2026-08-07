@@ -366,6 +366,9 @@ object DataPorter {
      * 4. 资产恢复：Base64 解码 → 写回 filesDir 稳定文件名 → 更新 URI。
      * 5. 校验：引用断裂按 3.3 处理，群聊条目计入跳过清单。
      * 6. API Key 解密自检（3.2）：失败条目标记「需重新填写密钥」，不阻塞其他数据。
+     *
+     * 注：资产（壁纸/头像）恢复不在解析阶段执行，由 UI 在用户确认导入模式后
+     * 调用 [restoreAssets] 完成，避免用户取消导入时在磁盘留下孤儿文件。
      */
     suspend fun importFrom(context: Context, uri: Uri): Result<ImportPlan> =
         withContext(Dispatchers.IO) {
@@ -401,24 +404,21 @@ object DataPorter {
                 // 3. v1 → v2 迁移（2.6）
                 val migrated = if (payload.isV2) payload else migrateV1ToV2(payload)
 
-                // 4. 资产写回（v2 形态：privateChats + characters + assets）
-                val (restored, assetSkips) = restoreV2Assets(context, migrated)
-
-                // 5. 引用校验 → 跳过清单（3.3 / 3.4）
-                val skipItems = buildSkipItems(restored) + assetSkips
+                // 4. 引用校验 → 跳过清单（3.3 / 3.4）
+                val skipItems = buildSkipItems(migrated)
 
                 // 6. API Key 密文解密自检（3.2）：失败条目标记「需重新填写密钥」
-                val needsKeyRefill = restored.settings.catalog
+                val needsKeyRefill = migrated.settings.catalog
                     .filter { entry ->
-                        runCatching { CryptoUtils.decrypt(entry.apiKeyEnc) }.isFailure
+                        !CryptoUtils.isDecryptable(entry.apiKeyEnc)
                     }
                     .map { it.name }
 
                 ImportPlan(
-                    payload = restored,
+                    payload = migrated,
                     skipItems = skipItems,
                     needsKeyRefill = needsKeyRefill,
-                    groupChatsSkipped = restored.groupChats.size
+                    groupChatsSkipped = skipItems.count { it.objectType == "群聊" }
                 )
             }.onFailure { Log.e("DataPorter", "导入失败", it) }
         }
@@ -482,23 +482,26 @@ object DataPorter {
     /**
      * 资产写回（v2 形态）：壁纸 / 头像 Base64 解码 → 写回 filesDir 稳定文件名 → 更新 URI。
      * 写回失败计入跳过清单，不影响其他数据（3.4 / 3.5）。
+     *
+     * 在用户确认导入模式后调用（[SettingsViewModel.importAllPayload] 之前），
+     * 返回恢复后的 payload 与资产跳过清单。
      */
-    private suspend fun restoreV2Assets(
+    suspend fun restoreAssets(
         context: Context,
         payload: ExportPayload
     ): Pair<ExportPayload, List<ImportSkipItem>> {
         val assets = payload.assets ?: ExportAssets()
         val skipItems = mutableListOf<ImportSkipItem>()
 
-        // 会话级壁纸
-        val updatedBundles = payload.privateChats.map { bundle ->
+        // 会话级壁纸（私聊与群聊共用恢复逻辑）
+        val restoredBundles = (payload.privateChats + payload.groupChats).map { bundle ->
             var conv = bundle.conversation
             val wallpaperData = assets.wallpapers[conv.id]
             if (wallpaperData != null) {
                 try {
                     val bytes = Base64.decode(wallpaperData.base64, Base64.DEFAULT)
                     val wallpaperDir = File(context.filesDir, "wallpapers").apply { mkdirs() }
-                    val wallpaperFile = File(wallpaperDir, "${conv.id}.jpg")
+                    val wallpaperFile = File(wallpaperDir, "${safeAssetName(conv.id)}.jpg")
                     wallpaperFile.writeBytes(bytes)
                     Log.i("DataPorter", "已恢复会话 ${conv.id} 的壁纸到 ${wallpaperFile.absolutePath}")
                     conv = conv.copy(
@@ -512,6 +515,9 @@ object DataPorter {
             }
             bundle.copy(conversation = conv)
         }
+        val privateIds = payload.privateChats.map { it.conversation.id }.toSet()
+        val updatedBundles = restoredBundles.filter { it.conversation.id in privateIds }
+        val updatedGroupBundles = restoredBundles.filterNot { it.conversation.id in privateIds }
 
         // 列表壁纸（稳定文件名 list_wallpaper.jpg，覆盖而非累积）
         var updatedSettings = payload.settings
@@ -561,7 +567,7 @@ object DataPorter {
                 try {
                     val bytes = Base64.decode(avatarData.base64, Base64.DEFAULT)
                     val avatarDir = File(context.filesDir, "avatars").apply { mkdirs() }
-                    val avatarFile = File(avatarDir, "ai_avatar_${ch.id}.jpg")
+                    val avatarFile = File(avatarDir, "ai_avatar_${safeAssetName(ch.id)}.jpg")
                     avatarFile.writeBytes(bytes)
                     Log.i("DataPorter", "已恢复角色 ${ch.id} 的 AI 头像到 ${avatarFile.absolutePath}")
                     updated = ch.copy(
@@ -587,7 +593,7 @@ object DataPorter {
                 try {
                     val bytes = Base64.decode(avatarData.base64, Base64.DEFAULT)
                     val avatarDir = File(context.filesDir, "avatars").apply { mkdirs() }
-                    val avatarFile = File(avatarDir, "ai_avatar_$key.jpg")
+                    val avatarFile = File(avatarDir, "ai_avatar_${safeAssetName(key)}.jpg")
                     avatarFile.writeBytes(bytes)
                     Log.i("DataPorter", "已恢复会话 $key 的 AI 头像到 ${avatarFile.absolutePath}")
                     convAvatarUris[key] = FileProvider.getUriForFile(
@@ -617,6 +623,7 @@ object DataPorter {
 
         val updated = payload.copy(
             privateChats = finalBundles,
+            groupChats = updatedGroupBundles,
             characters = updatedCharacters,
             settings = updatedSettings
         )
@@ -625,24 +632,24 @@ object DataPorter {
 
     /**
      * 导入前引用校验 → 跳过清单（3.3）：
-     * - 群聊整体跳过（1.3.0 群聊实体未加入；成员引用悬空时同样整体跳过）
+     * - 群聊仅当成员引用悬空时整体跳过（1.5.0 已支持恢复群聊，方案十七.2）
      * - 消息 senderId 悬空仅发生在文件本身损坏时（导出前已校验），导入保留并显示「未知成员」，不跳过
      * - 会话 characterId 悬空回退使用 conversation.persona 内嵌副本（旧数据路径），不阻塞
      */
-    private fun buildSkipItems(payload: ExportPayload): List<ImportSkipItem> {
+    internal fun buildSkipItems(payload: ExportPayload): List<ImportSkipItem> {
         val privateIds = payload.privateChats.map { it.conversation.id }.toSet()
-        return payload.groupChats.map { bundle ->
+        return payload.groupChats.mapNotNull { bundle ->
             val conv = bundle.conversation
             val danglingMembers = conv.memberConversationIds.filterNot { it in privateIds }
-            ImportSkipItem(
-                objectType = "群聊",
-                id = conv.id,
-                reason = if (danglingMembers.isNotEmpty()) {
-                    "群聊功能未实现且成员引用悬空（${danglingMembers.joinToString(",")}），整体跳过"
-                } else {
-                    "群聊功能未实现（1.3.0 仅预留接口），整体跳过"
-                }
-            )
+            if (danglingMembers.isNotEmpty()) {
+                ImportSkipItem(
+                    objectType = "群聊",
+                    id = conv.id,
+                    reason = "成员引用悬空（${danglingMembers.joinToString(",")}），整体跳过"
+                )
+            } else {
+                null
+            }
         }
     }
 
@@ -675,5 +682,14 @@ object DataPorter {
             Log.w("DataPorter", "读取图片失败: $uriString", e)
             null
         }
+    }
+
+    /**
+     * 资产文件名白名单清洗：导入数据的 id 可能被恶意构造（含路径分隔符），
+     * 一律替换为非白名单字符，防止路径穿越写出 filesDir。
+     */
+    private fun safeAssetName(id: String): String {
+        val cleaned = id.replace(Regex("[^A-Za-z0-9_-]"), "_")
+        return cleaned.ifBlank { "asset" }
     }
 }

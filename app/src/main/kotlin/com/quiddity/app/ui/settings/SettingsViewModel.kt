@@ -15,6 +15,8 @@ import com.quiddity.app.data.repo.ConversationRepository
 import com.quiddity.app.data.repo.SettingsRepository
 import com.quiddity.app.domain.ApiCatalogManager
 import com.quiddity.app.util.QuiddityConstants
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
@@ -54,6 +56,22 @@ class SettingsViewModel(
     private val characterRepository: CharacterRepository
 ) : ViewModel() {
 
+    /** 写操作失败提示（防未捕获协程异常导致 App 闪退）。 */
+    private val _errorEvent = MutableStateFlow<String?>(null)
+    val errorEvent: StateFlow<String?> = _errorEvent.asStateFlow()
+
+    fun consumeError() {
+        _errorEvent.value = null
+    }
+
+    /** 写操作成功提示（如"模型配置已保存"）。 */
+    private val _toastEvent = MutableStateFlow<String?>(null)
+    val toastEvent: StateFlow<String?> = _toastEvent.asStateFlow()
+
+    fun consumeToast() {
+        _toastEvent.value = null
+    }
+
     val settings: StateFlow<AppSettings> = settingsRepository.observeSettings()
         .stateIn(
             scope = viewModelScope,
@@ -89,6 +107,10 @@ class SettingsViewModel(
         settingsRepository.setBracketGrayEnabled(enabled)
     }
 
+    fun setMarkdownEnabled(enabled: Boolean) = viewModelScope.launch {
+        settingsRepository.setMarkdownEnabled(enabled)
+    }
+
     /**
      * 暴露给 [SettingsBottomSheet] 的"显示"section → 会话列表壁纸 子面板使用。
      */
@@ -112,6 +134,18 @@ class SettingsViewModel(
             value.coerceIn(
                 QuiddityConstants.MIN_SINGLE_MESSAGE_TOKENS,
                 QuiddityConstants.MAX_SINGLE_MESSAGE_TOKENS
+            )
+        )
+    }
+
+    /**
+     * 设置全局默认采样温度（0～2，[QuiddityConstants.MIN_TEMPERATURE]～[QuiddityConstants.MAX_TEMPERATURE]）。
+     */
+    fun setGlobalTemperature(value: Double) = viewModelScope.launch {
+        settingsRepository.setGlobalTemperature(
+            value.coerceIn(
+                QuiddityConstants.MIN_TEMPERATURE,
+                QuiddityConstants.MAX_TEMPERATURE
             )
         )
     }
@@ -153,6 +187,17 @@ class SettingsViewModel(
         settingsRepository.setProactiveMessageEnabled(enabled)
     }
 
+    /** 群聊教程弹窗已看标记（首次进入群聊列表页弹一次后置 true）。 */
+    fun setGroupTutorialSeen(seen: Boolean) = viewModelScope.launch {
+        settingsRepository.setGroupTutorialSeen(seen)
+    }
+
+    /** 下一个群聊默认名（新群聊 N）。 */
+    suspend fun nextGroupTitle(): String = settingsRepository.nextGroupTitle()
+
+    /** 下一个私聊默认名（新会话 N）。 */
+    suspend fun nextSoloTitle(): String = settingsRepository.nextSoloTitle()
+
     fun setFontScale(value: Float) = viewModelScope.launch {
         settingsRepository.setFontScale(value)
     }
@@ -175,38 +220,61 @@ class SettingsViewModel(
         apiModel: String,
         apiKey: String
     ) = viewModelScope.launch {
-        // 编辑时未重新输入密钥（表单明文未持久化，进程回收后为空）：保留原密文
-        val existing = id?.let { settingsRepository.getCatalogEntry(it) }
-        val entry = if (apiKey.isBlank() && existing != null) {
-            existing.copy(
-                name = name,
-                providerId = providerId,
-                apiUrl = apiUrl,
-                apiModel = apiModel
-            )
-        } else {
-            apiCatalogManager.buildEntry(
-                id = id,
-                name = name,
-                providerId = providerId,
-                apiUrl = apiUrl,
-                apiModel = apiModel,
-                apiKey = apiKey
-            )
+        val result = runCatching {
+            // 编辑时未重新输入密钥（表单明文未持久化，进程回收后为空）：保留原密文
+            val existing = id?.let { settingsRepository.getCatalogEntry(it) }
+            val entry = if (apiKey.isBlank() && existing != null) {
+                existing.copy(
+                    name = name,
+                    providerId = providerId,
+                    apiUrl = apiUrl,
+                    apiModel = apiModel
+                )
+            } else {
+                apiCatalogManager.buildEntry(
+                    id = id,
+                    name = name,
+                    providerId = providerId,
+                    apiUrl = apiUrl,
+                    apiModel = apiModel,
+                    apiKey = apiKey
+                )
+            }
+            settingsRepository.upsertCatalog(entry)
         }
-        settingsRepository.upsertCatalog(entry)
+        result.onSuccess { ok ->
+            if (ok) {
+                _toastEvent.value = "模型配置已保存"
+            } else {
+                _errorEvent.value = "保存模型配置失败（写入失败）"
+            }
+        }.onFailure {
+            android.util.Log.e("SettingsViewModel", "保存模型配置失败", it)
+            _errorEvent.value = "保存模型配置失败：${it.javaClass.simpleName} ${it.message ?: ""}"
+        }
     }
 
     fun removeCatalog(entryId: String) = viewModelScope.launch {
-        settingsRepository.removeCatalog(entryId)
+        val result = runCatching { settingsRepository.removeCatalog(entryId) }
+        result.onSuccess { ok ->
+            if (ok) _toastEvent.value = "模型配置已删除"
+            else _errorEvent.value = "删除模型配置失败（写入失败）"
+        }.onFailure {
+            android.util.Log.e("SettingsViewModel", "删除模型配置失败", it)
+            _errorEvent.value = "删除模型配置失败：${it.javaClass.simpleName} ${it.message ?: ""}"
+        }
     }
 
     fun setActiveCatalog(id: String?) = viewModelScope.launch {
-        settingsRepository.setActiveCatalog(id)
+        val result = runCatching { settingsRepository.setActiveCatalog(id) }
+        result.onSuccess { ok ->
+            if (ok) _toastEvent.value = "已切换模型配置"
+            else _errorEvent.value = "切换模型配置失败（写入失败）"
+        }.onFailure {
+            android.util.Log.e("SettingsViewModel", "切换模型配置失败", it)
+            _errorEvent.value = "切换模型配置失败：${it.javaClass.simpleName} ${it.message ?: ""}"
+        }
     }
-
-    /** 解密 API Key 用于在编辑器中显示（用户可看到原值）。 */
-    fun decryptApiKey(entry: ApiCatalogEntry): String = apiCatalogManager.decryptKey(entry)
 
     /** 测试 API 连接（封装 Result，UI 层只关心成功 / 失败）。 */
     suspend fun testApiConnection(
@@ -255,35 +323,53 @@ class SettingsViewModel(
      * @param payload 解析后的导出数据
      * @param mode 导入模式（3.1）：REPLACE=替换 / MERGE=合并 / CHARACTERS_ONLY=仅导入角色库
      */
+    /**
+     * 导入完整备份数据。
+     *
+     * @return true=导入成功；false=任一步骤写盘失败（错误已记录日志），UI 据此提示
+     */
     suspend fun importAllPayload(
         payload: com.quiddity.app.data.model.ExportPayload,
         mode: ImportMode = ImportMode.MERGE
-    ) {
-        val hasWallpaperAsset = payload.listWallpaper != null || payload.assets?.listWallpaper != null
-        val sanitizedSettings = if (!hasWallpaperAsset) {
-            payload.settings.copy(listWallpaperUri = null)
-        } else {
-            payload.settings
-        }
-        when (mode) {
-            ImportMode.REPLACE -> {
-                settingsRepository.update { _ -> sanitizedSettings }
+    ): Boolean {
+        return try {
+            val hasWallpaperAsset = payload.listWallpaper != null || payload.assets?.listWallpaper != null
+            val sanitizedSettings = if (!hasWallpaperAsset) {
+                payload.settings.copy(listWallpaperUri = null)
+            } else {
+                payload.settings
             }
-            ImportMode.MERGE -> {
-                // 合并模式：保留本机 UI 偏好（暗色/字体/延迟等），只合并模型配置与缺失的媒体资源，
-                // 避免"合并导入"把用户本机设置整个覆盖掉
-                settingsRepository.update { local ->
-                    mergeSettings(local, sanitizedSettings, hasWallpaperAsset)
+            when (mode) {
+                ImportMode.REPLACE -> {
+                    if (!settingsRepository.update { _ -> sanitizedSettings }) {
+                        throw IllegalStateException("写入设置失败")
+                    }
                 }
+                ImportMode.MERGE -> {
+                    // 合并模式：保留本机 UI 偏好（暗色/字体/延迟等），只合并模型配置与缺失的媒体资源，
+                    // 避免"合并导入"把用户本机设置整个覆盖掉
+                    if (!settingsRepository.update { local ->
+                            mergeSettings(local, sanitizedSettings, hasWallpaperAsset)
+                        }
+                    ) {
+                        throw IllegalStateException("写入设置失败")
+                    }
+                }
+                ImportMode.CHARACTERS_ONLY -> Unit
             }
-            ImportMode.CHARACTERS_ONLY -> Unit
+            // 1.5.0：群聊随私聊一并导入（方案十七.2），群聊消息按会话 id 落盘
+            val allBundles = payload.privateChats + payload.groupChats
+            conversationRepository.importV2Snapshot(
+                characters = payload.characters,
+                conversations = allBundles.map { it.conversation },
+                messages = allBundles.associate { it.conversation.id to it.messages },
+                mode = mode
+            )
+            true
+        } catch (t: Throwable) {
+            android.util.Log.e("SettingsViewModel", "导入数据失败", t)
+            false
         }
-        conversationRepository.importV2Snapshot(
-            characters = payload.characters,
-            conversations = payload.privateChats.map { it.conversation },
-            messages = payload.privateChats.associate { it.conversation.id to it.messages },
-            mode = mode
-        )
     }
 
     /**

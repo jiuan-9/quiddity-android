@@ -56,7 +56,12 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         super.onCreate(savedInstanceState)
+        // 全局沉浸式（内容延伸到系统栏，壁纸/背景铺满全屏）。
+        // 键盘处理在聊天页内完成：窗口可见区域测量键盘高度 + 内容平滑跟随（见 ChatScreen）。
         enableEdgeToEdge()
+        // adjustResize：确保键盘弹起时窗口可见区域（visibleFrame）正确缩小，
+        // 应用据此测量键盘高度，不依赖 ROM 的 IME insets 派发。
+        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
 
         // ===== 高刷新率支持 =====
         // 国产 ROM（MIUI/HyperOS/ColorOS/OriginOS/OneUI 等）对非白名单 App 默认锁 60Hz。

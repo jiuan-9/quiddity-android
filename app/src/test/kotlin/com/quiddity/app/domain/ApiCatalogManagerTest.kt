@@ -1,8 +1,13 @@
 package com.quiddity.app.domain
 
 import com.quiddity.app.data.remote.ChatApi
+import com.quiddity.app.data.model.AppSettings
+import com.quiddity.app.data.model.Conversation
+import com.quiddity.app.util.QuiddityConstants
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /*
@@ -42,6 +47,72 @@ import kotlin.test.assertTrue
 class ApiCatalogManagerTest {
 
     private val manager = ApiCatalogManager(ChatApi())
+
+    @Test
+    fun `buildEntry with blank id generates a fresh id`() {
+        val a = manager.buildEntry(
+            id = "",
+            name = "配置A",
+            providerId = "deepseek",
+            apiUrl = "https://api.deepseek.com/v1/chat/completions",
+            apiModel = "deepseek-chat",
+            apiKey = "test-key-a"
+        )
+        val b = manager.buildEntry(
+            id = "",
+            name = "配置B",
+            providerId = "deepseek",
+            apiUrl = "https://api.deepseek.com/v1/chat/completions",
+            apiModel = "deepseek-chat",
+            apiKey = "test-key-b"
+        )
+        assertTrue(a.id.isNotBlank(), "空串 id 必须生成独立新 id，否则保存第二条会覆盖第一条")
+        assertTrue(b.id.isNotBlank(), "空串 id 必须生成独立新 id")
+        assertTrue(a.id != b.id, "两次新建生成的 id 不能相同")
+        assertTrue(a.apiKeyEnc.isNotEmpty(), "配置A的密钥应已加密保存")
+        assertTrue(b.apiKeyEnc.isNotEmpty(), "配置B的密钥应已加密保存")
+    }
+
+    @Test
+    fun `buildEntry keeps non blank id`() {
+        val entry = manager.buildEntry(
+            id = "fixed-id",
+            name = "配置",
+            providerId = "deepseek",
+            apiUrl = "https://api.deepseek.com/v1/chat/completions",
+            apiModel = "deepseek-chat",
+            apiKey = "test-key"
+        )
+        assertEquals("fixed-id", entry.id)
+    }
+
+    @Test
+    fun `decryptKey returns null when key missing or undecryptable`() {
+        val noKey = manager.buildEntry(
+            id = "e1",
+            name = "无密钥",
+            providerId = "deepseek",
+            apiUrl = "https://api.deepseek.com/v1/chat/completions",
+            apiModel = "deepseek-chat",
+            apiKey = ""
+        )
+        assertEquals(false, manager.hasStoredKey(noKey))
+        assertEquals(null, manager.decryptKey(noKey))
+
+        val withKey = manager.buildEntry(
+            id = "e2",
+            name = "有密钥",
+            providerId = "deepseek",
+            apiUrl = "https://api.deepseek.com/v1/chat/completions",
+            apiModel = "deepseek-chat",
+            apiKey = "sk-test"
+        )
+        assertEquals(true, manager.hasStoredKey(withKey))
+        assertEquals("sk-test", manager.decryptKey(withKey))
+
+        val corrupt = withKey.copy(apiKeyEnc = "corrupt-!!!")
+        assertEquals(null, manager.decryptKey(corrupt))
+    }
 
     @Test
     fun `all provider models have a tier`() {
@@ -107,5 +178,64 @@ class ApiCatalogManagerTest {
 
         val all = tiered.values.flatten()
         assertEquals(all.size, all.toSet().size, "分级表中不允许重复模型 ID")
+    }
+
+    @Test
+    fun `server web search is deepseek flash only`() {
+        val deepseekFlash = manager.buildEntry(
+            id = null, name = "DS", providerId = "deepseek",
+            apiUrl = "https://api.deepseek.com/v1/chat/completions",
+            apiModel = "deepseek-v4-flash", apiKey = "k"
+        )
+        val deepseekPro = deepseekFlash.copy(apiModel = "deepseek-v4-pro")
+        val aggregated = manager.buildEntry(
+            id = null, name = "聚合", providerId = "siliconflow",
+            apiUrl = "https://api.siliconflow.cn/v1/chat/completions",
+            apiModel = "deepseek-ai/DeepSeek-V4-Flash", apiKey = "k"
+        )
+        val custom = deepseekFlash.copy(providerId = "custom")
+        assertTrue(manager.supportsServerWebSearch(deepseekFlash), "官方 deepseek-v4-flash 应支持服务端搜索")
+        assertFalse(manager.supportsServerWebSearch(deepseekPro), "官方 deepseek-v4-pro 暂不支持 Responses API")
+        assertFalse(manager.supportsServerWebSearch(aggregated), "聚合平台不具备 DeepSeek 官方服务端搜索")
+        assertFalse(manager.supportsServerWebSearch(custom), "自定义服务商不具备官方服务端搜索")
+    }
+
+    @Test
+    fun `responses api url comes from provider preset`() {
+        val deepseek = manager.buildEntry(
+            id = null, name = "DS", providerId = "deepseek",
+            apiUrl = "https://api.deepseek.com/v1/chat/completions",
+            apiModel = "deepseek-v4-flash", apiKey = "k"
+        )
+        val other = manager.buildEntry(
+            id = null, name = "Qwen", providerId = "alibaba",
+            apiUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+            apiModel = "qwen-plus", apiKey = "k"
+        )
+        assertEquals(QuiddityConstants.DEEPSEEK_RESPONSES_URL, manager.responsesApiUrl(deepseek))
+        assertNull(manager.responsesApiUrl(other), "无官方 Responses 端点时应返回 null")
+    }
+
+    @Test
+    fun `resolveEntry follows conversation override then active then first`() {
+        val a = manager.buildEntry(
+            id = "a", name = "A", providerId = "deepseek",
+            apiUrl = "https://api.deepseek.com/v1/chat/completions",
+            apiModel = "deepseek-v4-flash", apiKey = "k"
+        )
+        val b = a.copy(id = "b", apiModel = "deepseek-v4-pro")
+        val c = a.copy(id = "c")
+        val settings = AppSettings.Default.copy(activeCatalogId = "b", catalog = listOf(a, b, c))
+        val base = Conversation(id = "conv", createdAt = 0, updatedAt = 0)
+        assertEquals("b", manager.resolveEntry(settings, base)?.id, "无会话覆盖时使用全局激活条目")
+        assertEquals(
+            "a",
+            manager.resolveEntry(settings, base.copy(apiCatalogId = "a"))?.id,
+            "会话级覆盖优先于全局激活"
+        )
+        assertNull(
+            manager.resolveEntry(settings.copy(catalog = emptyList()), base),
+            "catalog 为空时返回 null"
+        )
     }
 }

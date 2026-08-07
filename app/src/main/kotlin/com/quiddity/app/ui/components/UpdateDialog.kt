@@ -50,6 +50,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.quiddity.app.ui.theme.Motion
 import com.quiddity.app.util.UpdateChecker
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -86,20 +87,18 @@ import java.io.File
  *
  * 功能：
  * - 显示新版本号、发布日期、更新说明
- * - "立即下载"按钮：解析 APK 直链 → 系统 DownloadManager 下载 → 进度展示 → 自动触发安装
- * - "浏览器下载"兜底：解析失败时退化为浏览器跳转
+ * - "立即下载"按钮：解析 APK 直链 → 应用内直接下载 → 进度展示 → 校验安装包 → 自动触发安装
+ * - 下载失败兜底：弹窗内提示并引导用户「去官网下载」（保证同一签名安装包覆盖安装、数据保留）
  * - "本次不再提醒"按钮：记录当前远程版本到 SharedPreferences，后续不再弹窗
- * - 下载中可"取消"
+ * - 下载中可"取消"（真正停止下载并清理半截文件）
  *
  * @param result 检测结果（仅 UpdateAvailable 时显示弹窗）
  * @param onDismiss 关闭回调
- * @param onOpenBrowser 浏览器兜底回调（默认走 [UpdateChecker.openDownloadPage]）
  */
 @Composable
 fun UpdateDialog(
     result: UpdateChecker.Result.UpdateAvailable,
-    onDismiss: () -> Unit,
-    onOpenBrowser: (Context, String) -> Unit = { ctx, url -> UpdateChecker.openDownloadPage(ctx, url) }
+    onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -107,10 +106,13 @@ fun UpdateDialog(
 
     var phase by remember { mutableStateOf<DownloadPhase>(DownloadPhase.Idle) }
     var currentDownloadId by remember { mutableStateOf(0L) }
+    var downloadJob by remember { mutableStateOf<Job?>(null) }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_DESTROY) {
+                downloadJob?.cancel()
+                downloadJob = null
                 if (currentDownloadId > 0) {
                     UpdateChecker.cancelDownload(context, currentDownloadId)
                 }
@@ -271,6 +273,17 @@ fun UpdateDialog(
                     }
                 }
 
+                val failed = phase as? DownloadPhase.Failed
+                if (failed != null) {
+                    Spacer(modifier = Modifier.size(12.dp))
+                    Text(
+                        text = failed.message,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
                 Spacer(modifier = Modifier.size(20.dp))
 
                 Row(
@@ -278,7 +291,7 @@ fun UpdateDialog(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     when (val p = phase) {
-                        is DownloadPhase.Idle, is DownloadPhase.Failed -> {
+                        is DownloadPhase.Idle -> {
                             TextButton(
                                 onClick = {
                                     UpdateChecker.dismissVersion(context, result.remoteVersion)
@@ -293,25 +306,73 @@ fun UpdateDialog(
                             }
                             TextButton(
                                 onClick = {
-                                    if (p is DownloadPhase.Failed) {
-                                        phase = DownloadPhase.Idle
-                                    }
-                                    startDownload(
+                                    downloadJob = startDownload(
                                         context = context,
                                         scope = scope,
                                         result = result,
                                         onPhase = { phase = it },
-                                        onDownloadId = { currentDownloadId = it },
-                                        onOpenBrowser = onOpenBrowser
+                                        onDownloadId = { currentDownloadId = it }
                                     )
                                 },
                                 modifier = Modifier.weight(1f)
                             ) {
                                 Text(
-                                    if (p is DownloadPhase.Failed) "重试" else "立即下载",
+                                    "立即下载",
                                     color = MaterialTheme.colorScheme.primary,
                                     fontWeight = FontWeight.SemiBold
                                 )
+                            }
+                        }
+                        is DownloadPhase.Failed -> {
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    if (p.offerOfficialSite) {
+                                        TextButton(
+                                            onClick = {
+                                                UpdateChecker.openOfficialDownloadPage(context)
+                                            },
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            Text(
+                                                "去官网下载",
+                                                color = MaterialTheme.colorScheme.primary,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                        }
+                                    }
+                                    TextButton(
+                                        onClick = {
+                                            downloadJob = startDownload(
+                                                context = context,
+                                                scope = scope,
+                                                result = result,
+                                                onPhase = { phase = it },
+                                                onDownloadId = { currentDownloadId = it }
+                                            )
+                                        },
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text(
+                                            "重试",
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                                TextButton(
+                                    onClick = {
+                                        UpdateChecker.dismissVersion(context, result.remoteVersion)
+                                        onDismiss()
+                                    },
+                                    modifier = Modifier.align(Alignment.CenterHorizontally)
+                                ) {
+                                    Text(
+                                        "本次不再提醒",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
                         }
                         is DownloadPhase.Resolving -> {
@@ -335,6 +396,8 @@ fun UpdateDialog(
                         is DownloadPhase.Downloading -> {
                             TextButton(
                                 onClick = {
+                                    downloadJob?.cancel()
+                                    downloadJob = null
                                     if (currentDownloadId > 0) {
                                         UpdateChecker.cancelDownload(context, currentDownloadId)
                                     }
@@ -411,25 +474,69 @@ private fun startDownload(
     scope: kotlinx.coroutines.CoroutineScope,
     result: UpdateChecker.Result.UpdateAvailable,
     onPhase: (DownloadPhase) -> Unit,
-    onDownloadId: (Long) -> Unit,
-    onOpenBrowser: (Context, String) -> Unit
-) {
-    scope.launch {
+    onDownloadId: (Long) -> Unit
+): Job {
+    return scope.launch {
         onPhase(DownloadPhase.Resolving)
         val apkUrl = UpdateChecker.resolveApkUrl(result.downloadUrl)
         if (apkUrl.isNullOrBlank()) {
-            onOpenBrowser(context, result.downloadUrl)
-            onPhase(DownloadPhase.Idle)
+            onPhase(
+                DownloadPhase.Failed(
+                    message = "无法解析下载链接，请前往官网下载最新版本",
+                    offerOfficialSite = true
+                )
+            )
             return@launch
         }
         val fileName = "quiddity-${result.remoteVersion}.apk"
         UpdateChecker.downloadApkDirect(context, apkUrl, fileName).collect { progress ->
             when (progress.status) {
                 UpdateChecker.DownloadStatus.SUCCESSFUL -> {
-                    onPhase(DownloadPhase.Ready(downloadId = 0, localPath = progress.localUri))
+                    val apkFile = progress.localUri?.let { File(it) }
+                    if (apkFile == null || !apkFile.exists()) {
+                        onPhase(
+                            DownloadPhase.Failed(
+                                message = "下载完成但找不到安装包文件，请重试或前往官网下载",
+                                offerOfficialSite = true
+                            )
+                        )
+                        return@collect
+                    }
+                    when (val verify = UpdateChecker.verifyApk(context, apkFile)) {
+                        is UpdateChecker.ApkVerifyResult.Ok,
+                        is UpdateChecker.ApkVerifyResult.Unverifiable -> {
+                            if (verify is UpdateChecker.ApkVerifyResult.Unverifiable) {
+                                Toast.makeText(
+                                    context,
+                                    "无法校验安装包签名，请确认来自官网渠道",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                            onPhase(
+                                DownloadPhase.Ready(
+                                    downloadId = 0,
+                                    localPath = apkFile.absolutePath
+                                )
+                            )
+                        }
+                        is UpdateChecker.ApkVerifyResult.Mismatch -> {
+                            apkFile.delete()
+                            onPhase(
+                                DownloadPhase.Failed(
+                                    message = "下载的安装包不是本应用官方版本（${verify.reason}），请前往官网下载",
+                                    offerOfficialSite = true
+                                )
+                            )
+                        }
+                    }
                 }
                 UpdateChecker.DownloadStatus.FAILED -> {
-                    onPhase(DownloadPhase.Failed(progress.reason.ifBlank { "下载失败" }))
+                    onPhase(
+                        DownloadPhase.Failed(
+                            message = "下载失败：${progress.reason.ifBlank { "未知原因" }}，请前往官网下载",
+                            offerOfficialSite = true
+                        )
+                    )
                 }
                 else -> {
                     onPhase(
@@ -452,7 +559,7 @@ sealed class DownloadPhase {
     object Resolving : DownloadPhase()
     data class Downloading(val percent: Int, val fraction: Float) : DownloadPhase()
     data class Ready(val downloadId: Long, val localPath: String? = null) : DownloadPhase()
-    data class Failed(val message: String) : DownloadPhase()
+    data class Failed(val message: String, val offerOfficialSite: Boolean = true) : DownloadPhase()
 }
 
 /**
@@ -495,7 +602,10 @@ class UpdateController(
             isChecking = true
             try {
                 kotlinx.coroutines.delay(2000)
-                val result = UpdateChecker.checkForUpdates(context, forceCheck = false)
+                // 容错：检查更新异常不崩溃 App
+                val result = runCatching {
+                    UpdateChecker.checkForUpdates(context, forceCheck = false)
+                }.getOrElse { UpdateChecker.Result.Error(it.message ?: "检查更新失败") }
                 if (result is UpdateChecker.Result.UpdateAvailable) {
                     updateResult = result
                 }

@@ -46,6 +46,25 @@ object QuiddityConstants {
     const val MAX_MAX_TOKENS = 32_000
     const val DEFAULT_MAX_TOKENS = 4_096
 
+    // ===== 采样温度 =====
+    /** 采样温度上下界（DeepSeek 官方文档：0～2，默认 1.0）。 */
+    const val MIN_TEMPERATURE = 0.0
+    const val MAX_TEMPERATURE = 2.0
+    /** 采样温度默认值（DeepSeek 官方默认 1.0；聊天场景官方建议 1.3，由用户自主调节）。 */
+    const val DEFAULT_TEMPERATURE = 1.0
+
+    // ===== DeepSeek 官方服务端联网搜索（Responses API） =====
+    /** DeepSeek 官方服务商 id（Provider 预设）。 */
+    const val DEEPSEEK_PROVIDER_ID = "deepseek"
+    /** Responses API 目前唯一支持的模型（官方文档：暂不支持 deepseek-v4-pro）。 */
+    const val DEEPSEEK_RESPONSES_MODEL = "deepseek-v4-flash"
+    /** DeepSeek 官方 Responses API 端点（服务端执行 web_search）。 */
+    const val DEEPSEEK_RESPONSES_URL = "https://api.deepseek.com/responses"
+    /** 思考深度：浅（默认，reasoning_effort=low）。 */
+    const val THINKING_DEPTH_SHALLOW = "SHALLOW"
+    /** 思考深度：深（reasoning_effort=high）。 */
+    const val THINKING_DEPTH_DEEP = "DEEP"
+
     /** 单条消息 Token 上下界。 */
     const val MIN_SINGLE_MESSAGE_TOKENS = 32
     const val MAX_SINGLE_MESSAGE_TOKENS = 8_000
@@ -94,8 +113,32 @@ object QuiddityConstants {
     const val GROUP_MEMORY_MAX_TOKENS = 1_000
     /** 群聊快速判断 max_tokens 上限（5.2：只输出「0 / 要说的内容」）。 */
     const val GROUP_DECIDE_MAX_TOKENS = 16
-    /** v1 群聊人数上限建议（5.2）。 */
-    const val GROUP_MEMBER_LIMIT = 4
+    // ===== 群聊 =====
+    /** 群聊上下文条数默认值（方案六.2：最近 N 条，默认 50）。 */
+    const val GROUP_DEFAULT_CONTEXT_LIMIT = 50
+    /** 群聊上下文条数下界。 */
+    const val GROUP_MIN_CONTEXT_LIMIT = 1
+    /** 群聊上下文条数上界。 */
+    const val GROUP_MAX_CONTEXT_LIMIT = 200
+    /** 群聊 AI 成员数量上限（方案二.2：最多 3 个 LLM 成员）。 */
+    const val GROUP_MAX_MEMBERS = 3
+    /** 成员回复失败重试次数（方案十三.1：重试 5 次）。 */
+    const val GROUP_RETRY_COUNT = 5
+    /** 停止模式 A：只停止当前正在回复的成员（方案四.7）。 */
+    const val GROUP_STOP_MODE_A = "A"
+    /** 停止模式 B：停止时同时清空整个队列（默认，方案四.7）。 */
+    const val GROUP_STOP_MODE_B = "B"
+    const val GROUP_DEFAULT_STOP_MODE = GROUP_STOP_MODE_B
+    /** 群聊背景/场景合并设置的模式：背景（氛围描述）。 */
+    const val GROUP_BACKGROUND_MODE_BACKGROUND = "BACKGROUND"
+    /** 群聊背景/场景合并设置的模式：场景（多人情境）。 */
+    const val GROUP_BACKGROUND_MODE_SCENE = "SCENE"
+    /** 群聊背景/场景的默认模式：背景。 */
+    const val GROUP_DEFAULT_BACKGROUND_MODE = GROUP_BACKGROUND_MODE_BACKGROUND
+    /** 私聊默认名前缀（新会话 1、2、3…，方案二.4）。 */
+    const val SOLO_DEFAULT_TITLE_PREFIX = "新会话"
+    /** 群聊默认名前缀（新群聊 1、2、3…，方案二.4）。 */
+    const val GROUP_DEFAULT_TITLE_PREFIX = "新群聊"
 
     // ===== 快速设定 =====
     /** 快速设定的 max_tokens 上限（全面档 5000 汉字，按 ~1.6 token/字 预留余量）。 */
@@ -154,8 +197,9 @@ object QuiddityConstants {
     /** 发送延迟默认开启。 */
     const val DEFAULT_SEND_DELAY_ENABLED = true
     /** 发送延迟默认秒数。 */
-    const val DEFAULT_SEND_DELAY_SECONDS = 3
-    const val MIN_SEND_DELAY_SECONDS = 1
+    const val DEFAULT_SEND_DELAY_SECONDS = 2
+    /** 最小 0 秒 = 关闭发送延迟。 */
+    const val MIN_SEND_DELAY_SECONDS = 0
     const val MAX_SEND_DELAY_SECONDS = 30
 
     // ===== 记忆库 =====

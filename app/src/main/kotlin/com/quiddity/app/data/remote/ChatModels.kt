@@ -1,5 +1,8 @@
 package com.quiddity.app.data.remote
 
+import com.quiddity.app.util.QuiddityConstants
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.Serializable
 
 /*
@@ -38,8 +41,13 @@ data class ChatCompletionRequest(
     val model: String,
     val messages: List<ChatMessage>,
     val max_tokens: Int? = null,
-    val temperature: Double = 0.8,
+    val temperature: Double = QuiddityConstants.DEFAULT_TEMPERATURE,
     val stream: Boolean = true,
+    /**
+     * DeepSeek 思考深度（OpenAI 兼容 reasoning 能力字段：low / high）。
+     * 仅 DeepSeek 官方模型开启思考时携带；服务端不识别时忽略该字段。
+     */
+    val reasoning_effort: String? = null,
     /**
      * 工具定义列表（6.6.2 记忆调用式 read_memory；默认不携带，向后兼容）。
      */
@@ -48,6 +56,61 @@ data class ChatCompletionRequest(
      * 工具调用策略（"auto" / "none" / "required"；null = 不携带该字段，兼容不支持工具调用的接口）。
      */
     val tool_choice: String? = null
+)
+
+/**
+ * DeepSeek 官方 Responses API（POST /responses）请求体。
+ *
+ * 与 Chat Completions 的区别（官方文档）：
+ * - 请求结构为 input（消息/工具结果 item 列表）+ instructions（系统级指令）+ tools；
+ * - 内置 web_search 工具由服务端直接执行搜索，客户端无需接入第三方搜索引擎；
+ * - 流式返回语义化 SSE 事件（response.output_text.delta / response.completed 等，无 [DONE]）。
+ */
+@Serializable
+data class DeepSeekResponsesRequest(
+    val model: String,
+    val input: List<ResponsesInputItem>,
+    val instructions: String? = null,
+    val max_output_tokens: Int? = null,
+    val temperature: Double = QuiddityConstants.DEFAULT_TEMPERATURE,
+    val stream: Boolean = true,
+    /**
+     * DeepSeek 思考深度（low / high）；仅思考开启时携带。
+     */
+    val reasoning_effort: String? = null,
+    val tools: List<ResponsesTool>? = null,
+    val tool_choice: JsonElement? = null
+)
+
+/**
+ * Responses API input item。
+ *
+ * 支持 message / function_call / function_call_output / reasoning / web_search_call；
+ * 消息角色支持 user / assistant / system / developer。
+ */
+@Serializable
+data class ResponsesInputItem(
+    val type: String = "message",
+    val role: String? = null,
+    val content: String? = null,
+    val call_id: String? = null,
+    val name: String? = null,
+    val arguments: String? = null,
+    val output: String? = null
+)
+
+/**
+ * Responses API 工具声明。
+ *
+ * - type = "web_search"：内置服务端搜索（无需任何客户端实现）
+ * - type = "function"：函数工具（name / description / parameters）
+ */
+@Serializable
+data class ResponsesTool(
+    val type: String,
+    val name: String? = null,
+    val description: String? = null,
+    val parameters: JsonObject? = null
 )
 
 @Serializable
@@ -110,6 +173,11 @@ data class Choice(
 @Serializable
 data class Delta(
     val content: String? = null,
+    /**
+     * DeepSeek 思考内容增量（deepseek 系列思考模型流式返回；
+     * 普通内容在 [content]，思考内容在 reasoning_content）。
+     */
+    val reasoning_content: String? = null,
     val role: String? = null,
     /**
      * 流式工具调用增量分片（6.6.3：按 index 聚合 name 与 arguments）。

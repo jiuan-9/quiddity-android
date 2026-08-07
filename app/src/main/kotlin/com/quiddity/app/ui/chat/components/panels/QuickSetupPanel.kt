@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoFixHigh
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -53,6 +54,7 @@ import com.quiddity.app.domain.AiPersonaField
 import com.quiddity.app.domain.ApiCatalogManager
 import com.quiddity.app.domain.QuickSetupPrompt
 import com.quiddity.app.domain.QuickSetupTier
+import com.quiddity.app.domain.missingRequiredFieldKeys
 import com.quiddity.app.ui.components.ConfirmDialog
 import com.quiddity.app.ui.components.QuiddityTextField
 import com.quiddity.app.ui.theme.Motion
@@ -99,8 +101,13 @@ import kotlinx.coroutines.launch
 fun QuickSetupPanel(
     currentTier: ApiCatalogManager.ModelTier,
     hasExistingContent: Boolean,
+    hasMessages: Boolean = false,
+    initialDraft: String = "",
+    onDraftChange: (String) -> Unit = {},
     onGenerate: suspend (String, QuickSetupTier) -> String,
     onApply: (String, QuickSetupTier) -> Unit,
+    onFinished: () -> Unit = {},
+    onClearMessages: () -> Unit = {},
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -110,16 +117,28 @@ fun QuickSetupPanel(
     val availableTiers = remember(currentTier) { QuickSetupTier.availableTiers(currentTier) }
     val defaultTier = remember(currentTier) { QuickSetupTier.defaultForTier(currentTier) }
     var selectedTier by rememberSaveable(currentTier) { mutableStateOf(defaultTier) }
-    var description by rememberSaveable { mutableStateOf("") }
+    var description by rememberSaveable(initialDraft) { mutableStateOf(initialDraft) }
     var isGenerating by remember { mutableStateOf(false) }
     var resultText by rememberSaveable { mutableStateOf<String?>(null) }
     var toastMsg by remember { mutableStateOf<String?>(null) }
     var pendingApplyText by remember { mutableStateOf<String?>(null) }
+    var pendingClearMessages by remember { mutableStateOf(false) }
 
     toastMsg?.let { msg ->
         LaunchedEffect(msg) {
             Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
             toastMsg = null
+        }
+    }
+
+    // 应用结果：先落盘（onApply），再询问是否清除聊天记录，全部结束后回调 onFinished 关闭面板
+    fun performApply(text: String, tier: QuickSetupTier) {
+        onApply(text, tier)
+        if (hasMessages) {
+            pendingClearMessages = true
+        } else {
+            toastMsg = "已填入人设"
+            onFinished()
         }
     }
 
@@ -174,12 +193,47 @@ fun QuickSetupPanel(
                     pendingApplyText = editedText
                     resultText = null
                 } else {
-                    onApply(editedText, selectedTier)
+                    performApply(editedText, selectedTier)
                     resultText = null
-                    toastMsg = "已填入人设"
                 }
             },
             onCancel = { resultText = null }
+        )
+    }
+
+    // ===== 填入后询问是否清除现有聊天记录（是/否） =====
+    if (pendingClearMessages) {
+        AlertDialog(
+            onDismissRequest = {
+                pendingClearMessages = false
+                toastMsg = "已填入人设"
+                onFinished()
+            },
+            title = { Text("清除聊天记录") },
+            text = { Text("是否直接清除现有聊天记录？") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingClearMessages = false
+                        onClearMessages()
+                        toastMsg = "已填入人设"
+                        onFinished()
+                    }
+                ) {
+                    Text("是", fontWeight = FontWeight.SemiBold)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        pendingClearMessages = false
+                        toastMsg = "已填入人设"
+                        onFinished()
+                    }
+                ) {
+                    Text("否")
+                }
+            }
         )
     }
 
@@ -190,9 +244,8 @@ fun QuickSetupPanel(
             message = "当前已有人设 / 用户人设 / 场景 / 记忆内容，填入将直接覆盖，此操作不可撤销。确认填入？",
             confirmText = "确认覆盖",
             onConfirm = {
-                onApply(textToApply, selectedTier)
+                performApply(textToApply, selectedTier)
                 pendingApplyText = null
-                toastMsg = "已填入人设"
             },
             onDismiss = { pendingApplyText = null }
         )
@@ -233,7 +286,10 @@ fun QuickSetupPanel(
         Spacer(modifier = Modifier.size(12.dp))
         QuiddityTextField(
             value = description,
-            onValueChange = { description = it },
+            onValueChange = {
+                description = it
+                onDraftChange(it)
+            },
             label = "人设描述",
             placeholder = "如：一个温柔的学姐，叫林夕，喜欢读书；我是大一新生小明",
             singleLine = false,
@@ -329,7 +385,7 @@ private fun TierIndicator(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .background(com.quiddity.app.ui.components.glassCardColor())
             .padding(4.dp)
             .drawBehind {
                 if (tiers.isNotEmpty()) {
@@ -446,6 +502,10 @@ private fun QuickSetupResultDialog(
         return sb.toString()
     }
 
+    val currentMissing = QuickSetupPrompt
+        .parseQuickSetupResult(buildText(), tier)
+        .missingRequiredFieldKeys(tier)
+
     Dialog(
         onDismissRequest = onCancel,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -471,6 +531,14 @@ private fun QuickSetupResultDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                 )
+                if (currentMissing.isNotEmpty()) {
+                    Spacer(modifier = Modifier.size(8.dp))
+                    Text(
+                        text = "以下字段不能为空：" + currentMissing.map { missingLabel(it) }.joinToString("、"),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
                 Spacer(modifier = Modifier.size(12.dp))
                 Column(
                     modifier = Modifier
@@ -479,32 +547,72 @@ private fun QuickSetupResultDialog(
                         .verticalScroll(rememberScrollState())
                 ) {
                     SectionHeader(title = "AI 人设")
-                    SectionField(label = "名字", value = aiName, onValueChange = { aiName = it }, singleLine = true)
-                    SectionField(label = "身份背景", value = aiPersona, onValueChange = { aiPersona = it })
-                    SectionField(label = "性格", value = aiCharacter, onValueChange = { aiCharacter = it })
+                    SectionField(
+                        label = "名字", value = aiName, onValueChange = { aiName = it },
+                        singleLine = true, isError = "ai_name" in currentMissing
+                    )
+                    SectionField(
+                        label = "身份背景", value = aiPersona, onValueChange = { aiPersona = it },
+                        isError = "ai_persona" in currentMissing
+                    )
+                    SectionField(
+                        label = "性格", value = aiCharacter, onValueChange = { aiCharacter = it },
+                        isError = "ai_character" in currentMissing
+                    )
                     if (AiPersonaField.APPEARANCE in aiFields) {
-                        SectionField(label = "外观", value = aiAppearance, onValueChange = { aiAppearance = it })
+                        SectionField(
+                            label = "外观", value = aiAppearance, onValueChange = { aiAppearance = it },
+                            isError = "ai_appearance" in currentMissing
+                        )
                     }
                     if (AiPersonaField.WORLD_BACKGROUND in aiFields) {
-                        SectionField(label = "世界背景", value = aiWorld, onValueChange = { aiWorld = it })
+                        SectionField(
+                            label = "世界背景", value = aiWorld, onValueChange = { aiWorld = it },
+                            isError = "ai_world_background" in currentMissing
+                        )
                     }
                     if (AiPersonaField.DESIRED in aiFields) {
-                        SectionField(label = "期望特质", value = aiDesired, onValueChange = { aiDesired = it })
+                        SectionField(
+                            label = "期望特质", value = aiDesired, onValueChange = { aiDesired = it },
+                            isError = "ai_desired" in currentMissing
+                        )
                     }
 
                     SectionHeader(title = "用户人设")
-                    SectionField(label = "名字", value = userName, onValueChange = { userName = it }, singleLine = true)
-                    SectionField(label = "身份", value = userIdentity, onValueChange = { userIdentity = it })
-                    SectionField(label = "性别", value = userGender, onValueChange = { userGender = it }, singleLine = true)
-                    SectionField(label = "年龄", value = userAge, onValueChange = { userAge = it }, singleLine = true)
-                    SectionField(label = "外观", value = userAppearance, onValueChange = { userAppearance = it })
+                    SectionField(
+                        label = "名字", value = userName, onValueChange = { userName = it },
+                        singleLine = true, isError = "user_name" in currentMissing
+                    )
+                    SectionField(
+                        label = "身份", value = userIdentity, onValueChange = { userIdentity = it },
+                        isError = "user_identity" in currentMissing
+                    )
+                    GenderSelector(
+                        value = userGender,
+                        onValueChange = { userGender = it },
+                        isError = "user_gender" in currentMissing
+                    )
+                    SectionField(
+                        label = "年龄", value = userAge, onValueChange = { userAge = it },
+                        singleLine = true, isError = "user_age" in currentMissing
+                    )
+                    SectionField(
+                        label = "外观", value = userAppearance, onValueChange = { userAppearance = it },
+                        isError = "user_appearance" in currentMissing
+                    )
 
                     SectionHeader(title = "场景设置")
-                    SectionField(label = "当前场景", value = scene, onValueChange = { scene = it })
+                    SectionField(
+                        label = "当前场景", value = scene, onValueChange = { scene = it },
+                        isError = "scene" in currentMissing
+                    )
 
                     if (tier.includesMemory) {
                         SectionHeader(title = "记忆设置")
-                        SectionField(label = "需要记住的事", value = memory, onValueChange = { memory = it })
+                        SectionField(
+                            label = "需要记住的事", value = memory, onValueChange = { memory = it },
+                            isError = "memory" in currentMissing
+                        )
                     }
                 }
                 Spacer(modifier = Modifier.size(16.dp))
@@ -513,7 +621,10 @@ private fun QuickSetupResultDialog(
                     horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
                 ) {
                     TextButton(onClick = onCancel) { Text("取消") }
-                    TextButton(onClick = { onFillIn(buildText()) }) {
+                    TextButton(
+                        onClick = { onFillIn(buildText()) },
+                        enabled = currentMissing.isEmpty()
+                    ) {
                         Text("填入", fontWeight = FontWeight.SemiBold)
                     }
                 }
@@ -544,12 +655,14 @@ private fun SectionField(
     label: String,
     value: String,
     onValueChange: (String) -> Unit,
-    singleLine: Boolean = false
+    singleLine: Boolean = false,
+    isError: Boolean = false
 ) {
     Text(
         text = label,
         style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
+        color = if (isError) MaterialTheme.colorScheme.error
+        else MaterialTheme.colorScheme.onSurfaceVariant
     )
     Spacer(modifier = Modifier.size(4.dp))
     OutlinedTextField(
@@ -561,7 +674,90 @@ private fun SectionField(
         textStyle = MaterialTheme.typography.bodySmall,
         singleLine = singleLine,
         minLines = if (singleLine) 1 else 2,
-        maxLines = if (singleLine) 1 else 6
+        maxLines = if (singleLine) 1 else 6,
+        isError = isError
     )
     Spacer(modifier = Modifier.size(8.dp))
+}
+
+/**
+ * 性别选择器：男 / 女 / 暂不设置 三选一（替代填空，避免 LLM 返回的杂值）。
+ * LLM 返回的"男性/女生"等写法自动归一到标准选项。
+ */
+@Composable
+private fun GenderSelector(
+    value: String,
+    onValueChange: (String) -> Unit,
+    isError: Boolean
+) {
+    val options = listOf("男", "女", "暂不设置")
+    val normalized = normalizeGender(value)
+    Text(
+        text = "性别",
+        style = MaterialTheme.typography.labelSmall,
+        color = if (isError) MaterialTheme.colorScheme.error
+        else MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    Spacer(modifier = Modifier.size(4.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        options.forEach { option ->
+            val selected = normalized == option
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(
+                        if (selected) {
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                        } else {
+                            com.quiddity.app.ui.components.glassCardColor()
+                        }
+                    )
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { onValueChange(option) }
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = option,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (selected) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    }
+                )
+            }
+        }
+    }
+    Spacer(modifier = Modifier.size(8.dp))
+}
+
+/** 把 LLM 返回的性别写法归一到标准选项。 */
+private fun normalizeGender(raw: String): String = when (raw.trim()) {
+    "男", "男性", "男生", "male", "Male" -> "男"
+    "女", "女性", "女生", "female", "Female" -> "女"
+    else -> "暂不设置"
+}
+
+/**
+ * 必填缺失 key → 中文名映射（用于错误提示）。
+ */
+private fun missingLabel(key: String): String = when (key) {
+    "ai_name" -> "AI 名字"
+    "ai_persona" -> "AI 身份背景"
+    "ai_character" -> "AI 性格"
+    "ai_appearance" -> "AI 外观"
+    "ai_world_background" -> "AI 世界背景"
+    "ai_desired" -> "AI 期望特质"
+    "user_name" -> "用户名字"
+    "user_identity" -> "用户身份"
+    "user_gender" -> "用户性别"
+    "user_age" -> "用户年龄"
+    "user_appearance" -> "用户外观"
+    "scene" -> "当前场景"
+    "memory" -> "需要记住的事"
+    else -> key
 }

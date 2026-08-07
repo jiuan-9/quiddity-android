@@ -7,6 +7,13 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -52,7 +59,7 @@ import com.quiddity.app.util.QuiddityConstants
  * 通过 SSE 流式接收响应，向上层暴露为 Flow<String>。
  * 每条 String 是一个内容片段；Flow 正常结束代表 [DONE]。
  */
-class ChatApi {
+open class ChatApi {
 
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(QuiddityConstants.CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
@@ -74,6 +81,8 @@ class ChatApi {
     sealed class StreamEvent {
         /** 内容片段（可能为空串，调用方自行忽略）。 */
         data class Content(val text: String) : StreamEvent()
+        /** DeepSeek 思考内容片段（reasoning_content，先于普通内容到达）。 */
+        data class Reasoning(val text: String) : StreamEvent()
         /** 流结束（[DONE] 或连接关闭）时聚合出的完整工具调用列表，无工具调用时为空列表。 */
         data class ToolCalls(val calls: List<ChatStreamParser.AggregatedToolCall>) : StreamEvent()
     }
@@ -90,7 +99,7 @@ class ChatApi {
      * @param request 请求体
      * @return [Flow] of [StreamEvent]；Flow 完成表示流结束
      */
-    fun streamChat(
+    open fun streamChat(
         apiUrl: String,
         apiKey: String,
         request: ChatCompletionRequest
@@ -113,10 +122,35 @@ class ChatApi {
         // 幂等关闭 channel：AtomicBoolean 保证 safeClose 只执行一次；
         // Channel.close() 本身亦幂等，已关闭时调用为 no-op。
         val closed = java.util.concurrent.atomic.AtomicBoolean(false)
+        // 消费者主动取消标记：awaitClose 置位后再 cancel，onFailure 据此区分
+        // 「用户停止」与「真实网络错误」，避免停止生成被误报为错误。
+        val cancelledByConsumer = java.util.concurrent.atomic.AtomicBoolean(false)
 
         fun safeClose(cause: Throwable? = null) {
             if (!closed.compareAndSet(false, true)) return
             channel.close(cause)
+        }
+
+        /**
+         * 带背压的内容下发：消费者慢时阻塞 SSE 回调线程（自然形成 TCP 背压），
+         * 保证任何内容片段都不会被静默丢弃；channel 已关闭时静默忽略。
+         */
+        fun emitContent(text: String) {
+            runCatching {
+                kotlinx.coroutines.runBlocking { channel.send(StreamEvent.Content(text)) }
+            }
+        }
+
+        fun emitReasoning(text: String) {
+            runCatching {
+                kotlinx.coroutines.runBlocking { channel.send(StreamEvent.Reasoning(text)) }
+            }
+        }
+
+        fun emitToolCalls(calls: List<ChatStreamParser.AggregatedToolCall>) {
+            runCatching {
+                kotlinx.coroutines.runBlocking { channel.send(StreamEvent.ToolCalls(calls)) }
+            }
         }
 
         val eventSourceListener = object : EventSourceListener() {
@@ -125,25 +159,32 @@ class ChatApi {
                 val parsed = parser.acceptChunk(data)
                 if (parsed == null) {
                     // [DONE] —— 结束流：先下发聚合完成的工具调用
-                    trySend(StreamEvent.ToolCalls(parser.takeToolCalls()))
+                    emitToolCalls(parser.takeToolCalls())
                     safeClose()
                     return
                 }
                 val content = parsed.content
                 if (!content.isNullOrEmpty()) {
-                    // trySend 在 channel 满时返回失败；SSE 是高吞吐流，
-                    // 消费者慢时丢弃部分片段是可接受的（不等同丢消息）。
-                    trySend(StreamEvent.Content(content))
+                    emitContent(content)
+                } else {
+                    parsed.reasoning?.let { reasoning ->
+                        if (reasoning.isNotEmpty()) emitReasoning(reasoning)
+                    }
                 }
             }
 
             override fun onClosed(eventSource: EventSource) {
                 // 服务端未发 [DONE] 直接关闭：仍把已聚合的工具调用下发，避免丢失
-                trySend(StreamEvent.ToolCalls(parser.takeToolCalls()))
+                emitToolCalls(parser.takeToolCalls())
                 safeClose()
             }
 
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
+                // 消费者主动取消（用户停止生成 / 页面销毁）：不是错误，静默结束
+                if (cancelledByConsumer.get()) {
+                    safeClose()
+                    return
+                }
                 val msg = t?.message ?: response?.let { "HTTP ${it.code}: ${it.message}" } ?: "未知错误"
                 // 尝试读取错误响应体（多数 API 返回 JSON 错误描述），包装进异常
                 val errorBody = runCatching { response?.peekBody(2 * 1024)?.string().orEmpty() }
@@ -162,6 +203,123 @@ class ChatApi {
 
         awaitClose {
             closed.set(true)
+            cancelledByConsumer.set(true)
+            es.cancel()
+        }
+    }.flowOn(Dispatchers.IO)
+
+    /**
+     * 发起 DeepSeek 官方 Responses API 流式请求（服务端联网搜索路径）。
+     *
+     * - 流式事件为语义化 SSE（response.output_text.delta 等），没有 `[DONE]`；
+     *   最后一条事件 response.completed / response.incomplete / response.failed 由
+     *   [ResponsesStreamParser] 判定为流结束。
+     * - response.failed 时以 [ChatException] 关闭流，携带服务端 error.message。
+     * - 服务端联网搜索（web_search 工具）由 DeepSeek 服务端直接执行，客户端无需第三方搜索。
+     *
+     * @param apiUrl 完整 /responses URL
+     * @param apiKey 明文 API Key
+     * @param request Responses API 请求体
+     * @return [Flow] of [StreamEvent]；Flow 完成表示流结束
+     */
+    open fun streamResponses(
+        apiUrl: String,
+        apiKey: String,
+        request: DeepSeekResponsesRequest
+    ): Flow<StreamEvent> = callbackFlow {
+        val parser = ResponsesStreamParser()
+        val body = json.encodeToString(DeepSeekResponsesRequest.serializer(), request)
+            .toRequestBody(mediaType)
+
+        val requestBuilder = Request.Builder()
+            .url(apiUrl)
+            .post(body)
+            .header("Accept", "text/event-stream")
+            .header("Cache-Control", "no-cache")
+
+        if (apiKey.isNotEmpty()) {
+            requestBuilder.header("Authorization", "Bearer $apiKey")
+        }
+
+        val closed = java.util.concurrent.atomic.AtomicBoolean(false)
+        val cancelledByConsumer = java.util.concurrent.atomic.AtomicBoolean(false)
+
+        fun safeClose(cause: Throwable? = null) {
+            if (!closed.compareAndSet(false, true)) return
+            channel.close(cause)
+        }
+
+        fun emitContent(text: String) {
+            runCatching {
+                kotlinx.coroutines.runBlocking { channel.send(StreamEvent.Content(text)) }
+            }
+        }
+
+        fun emitReasoning(text: String) {
+            runCatching {
+                kotlinx.coroutines.runBlocking { channel.send(StreamEvent.Reasoning(text)) }
+            }
+        }
+
+        fun emitToolCalls(calls: List<ChatStreamParser.AggregatedToolCall>) {
+            runCatching {
+                kotlinx.coroutines.runBlocking { channel.send(StreamEvent.ToolCalls(calls)) }
+            }
+        }
+
+        val eventSourceListener = object : EventSourceListener() {
+            override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
+                if (closed.get()) return
+                val parsed = parser.acceptEvent(type, data)
+                if (parsed == null) {
+                    // 终态事件（completed/incomplete/failed）：下发聚合完成的函数调用后结束
+                    emitToolCalls(parser.takeToolCalls())
+                    val error = parser.terminalError
+                    if (error != null) {
+                        safeClose(ChatException(error))
+                    } else {
+                        safeClose()
+                    }
+                    return
+                }
+                val content = parsed.content
+                if (!content.isNullOrEmpty()) {
+                    emitContent(content)
+                } else {
+                    parsed.reasoning?.let { reasoning ->
+                        if (reasoning.isNotEmpty()) emitReasoning(reasoning)
+                    }
+                }
+            }
+
+            override fun onClosed(eventSource: EventSource) {
+                emitToolCalls(parser.takeToolCalls())
+                safeClose()
+            }
+
+            override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
+                if (cancelledByConsumer.get()) {
+                    safeClose()
+                    return
+                }
+                val msg = t?.message ?: response?.let { "HTTP ${it.code}: ${it.message}" } ?: "未知错误"
+                val errorBody = runCatching { response?.peekBody(2 * 1024)?.string().orEmpty() }
+                    .getOrDefault("")
+                val cause = if (errorBody.isNotBlank()) {
+                    ChatException("$msg — $errorBody", t)
+                } else {
+                    ChatException(msg, t)
+                }
+                safeClose(cause)
+            }
+        }
+
+        val factory = EventSources.createFactory(client)
+        val es = factory.newEventSource(requestBuilder.build(), eventSourceListener)
+
+        awaitClose {
+            closed.set(true)
+            cancelledByConsumer.set(true)
             es.cancel()
         }
     }.flowOn(Dispatchers.IO)
@@ -191,7 +349,16 @@ class ChatApi {
                 if (!resp.isSuccessful) {
                     throw ChatException("HTTP ${resp.code}: ${resp.message}")
                 }
-                resp.body?.string() ?: ""
+                // 只返回模型回复内容（截断），避免把整个响应 JSON 展示给用户
+                val raw = resp.body?.string().orEmpty()
+                val content = runCatching {
+                    val obj = json.parseToJsonElement(raw) as? JsonObject ?: return@runCatching null
+                    val choices = obj["choices"] as? JsonArray ?: return@runCatching null
+                    val first = choices.firstOrNull() as? JsonObject ?: return@runCatching null
+                    val message = first["message"] as? JsonObject ?: return@runCatching null
+                    message["content"] as? JsonPrimitive
+                }.getOrNull()
+                content?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }?.take(80) ?: "连接成功"
             }
         }
     }
@@ -213,7 +380,7 @@ class ChatApi {
      * @param temperature 采样温度（精调偏高鼓励表达，压缩偏低保证忠实）
      * @param emptyError 返回空内容时的错误提示文案
      */
-    suspend fun completeNonStreaming(
+    open suspend fun completeNonStreaming(
         apiUrl: String,
         apiKey: String,
         model: String,

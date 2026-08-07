@@ -74,6 +74,92 @@ class MessageStreamCoordinatorTest {
     }
 
     @Test
+    fun `action bracket followed by speech keeps both messages`() {
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("（把脸埋在你胸口，声音闷闷的）")
+        coord.accept("我真的好想你。")
+        val contents = coord.snapshot().map { it.content }
+        assertEquals(
+            listOf("（把脸埋在你胸口，声音闷闷的）", "我真的好想你。"),
+            contents,
+            "动作+台词连续流不应丢字：$contents"
+        )
+    }
+
+    @Test
+    fun `trailing action bracket merges into previous speech message`() {
+        // 根因回归：流以"动作括号"收尾时，不得留下只有动作没有下文的悬空气泡
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("我好想你。")
+        coord.accept("（轻轻抱住你）")
+        val finalizeSignals = coord.finalize()
+        val updates = finalizeSignals.filterIsInstance<StreamCoordinator.Signal.Update>()
+        assertEquals(1, updates.size, "收尾应通过 Update 把动作合并进上一条消息")
+        assertEquals(
+            "我好想你。（轻轻抱住你）",
+            updates[0].message.content,
+            "动作括号应拼接到上一条台词之后"
+        )
+        assertEquals(
+            listOf("我好想你。（轻轻抱住你）"),
+            coord.snapshot().map { it.content },
+            "快照中不应再有独立的悬空动作消息"
+        )
+    }
+
+    @Test
+    fun `bracket only reply becomes single final message`() {
+        // 整条回复只有动作（没有台词）：作为一条完整回复输出，而不是悬空片段
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("（把脸埋在你胸口，声音闷闷的）")
+        coord.finalize()
+        val snap = coord.snapshot()
+        assertEquals(1, snap.size, "整条回复只有动作时应为单条消息")
+        assertEquals("（把脸埋在你胸口，声音闷闷的）", snap[0].content)
+        assertEquals(false, snap[0].isStreaming, "finalize 后应为完成状态")
+    }
+
+    @Test
+    fun `partial bracket then close then end updates streaming message without duplicate`() {
+        // 回归：括号分两段到达（先流式半截，再闭合）后流直接结束。
+        // 旧实现会新建一条完整消息，却把半截流式消息留在界面上 → 内容重复污染。
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("（把脸埋在你胸口，声")
+        val streamingBefore = coord.snapshot().last()
+        assertTrue(streamingBefore.isStreaming, "半截括号应先以流式消息存在")
+        coord.accept("音闷闷的）")
+        val signals = coord.finalize()
+        val snap = coord.snapshot()
+        assertEquals(
+            listOf("（把脸埋在你胸口，声音闷闷的）"),
+            snap.map { it.content },
+            "最终只能有一条完整消息，不得残留半截 + 重复"
+        )
+        assertTrue(snap.all { !it.isStreaming }, "finalize 后不得残留流式状态")
+        assertTrue(
+            signals.any { it is StreamCoordinator.Signal.Update },
+            "半截流式消息应通过 Update 被补全"
+        )
+    }
+
+    @Test
+    fun `pending bracket visible in snapshot before following content`() {
+        // 括号已闭合但后续内容未到时，快照应包含该括号段（不丢字、不悬空）
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("（点头）")
+        assertEquals(
+            listOf("（点头）"),
+            coord.snapshot().map { it.content },
+            "未触发 flush 的括号段也应出现在快照中"
+        )
+        coord.accept("你好。")
+        assertEquals(
+            listOf("（点头）", "你好。"),
+            coord.snapshot().map { it.content }
+        )
+    }
+
+    @Test
     fun `single chinese period splits into one completed message`() {
         val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
         val signals = coord.accept("你好。")
@@ -200,6 +286,72 @@ class MessageStreamCoordinatorTest {
             snap.map { it.content },
             "括号前的文本应作为前一条消息"
         )
+    }
+
+    @Test
+    fun `speaker label before bracket merges into bracket message`() {
+        // 群聊根因：模型输出「小A：（轻笑）你好呀。」时，
+        // 「小A：」不得被拆成独立消息（剥离前缀后会变成空白消息），应并入括号段
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("小A：（轻笑）你好呀。")
+        val snap = coord.snapshot()
+        assertEquals(
+            listOf("小A：（轻笑）", "你好呀。"),
+            snap.map { it.content },
+            "说话人标记应并入括号段，不得产生孤立前缀消息：${snap.map { it.content }}"
+        )
+    }
+
+    @Test
+    fun `streamed speaker label before bracket does not produce blank message`() {
+        // 跨 delta：前缀先到、括号后到；半截前缀流式消息应被同索引 Update 补全，无空白残留
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("小A：")
+        coord.accept("（轻笑）你好呀。")
+        coord.finalize()
+        val snap = coord.snapshot()
+        assertEquals(
+            listOf("小A：（轻笑）", "你好呀。"),
+            snap.map { it.content },
+            "跨 delta 的说话人标记 + 括号应合并为一条，不得出现「小A：」空白消息"
+        )
+        assertTrue(snap.all { it.content.isNotBlank() }, "任何消息内容都不得为空白")
+    }
+
+    @Test
+    fun `speaker label newline bracket merges into bracket message`() {
+        // 前缀与括号之间带换行（「小A：\n（轻笑）」）同样并入括号段
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("小A：\n（轻笑）你好。")
+        val snap = coord.snapshot()
+        assertEquals(
+            listOf("小A：（轻笑）", "你好。"),
+            snap.map { it.content },
+            "带换行的说话人标记也应并入括号段"
+        )
+    }
+
+    @Test
+    fun `whitespace only delta after split produces no message`() {
+        // 群聊/私聊通用根因：切分后到达的纯空白 delta 不得产生空白消息
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("你好。")
+        coord.accept("\n")
+        coord.finalize()
+        val snap = coord.snapshot()
+        assertEquals(
+            listOf("你好。"),
+            snap.map { it.content },
+            "纯空白 delta 不应产生消息：${snap.map { it.content }}"
+        )
+    }
+
+    @Test
+    fun `whitespace only stream produces no message`() {
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("  \n\t")
+        coord.finalize()
+        assertEquals(0, coord.snapshot().size, "全空白流不应产生任何消息")
     }
 
     @Test
@@ -563,5 +715,56 @@ class MessageStreamCoordinatorTest {
             coord.snapshot().all { it.senderId == null },
             "私聊消息 senderId 默认应为 null（兼容旧数据）"
         )
+    }
+
+    @Test
+    fun `reasoning becomes its own thinking message before content`() {
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.acceptReasoning("用户想要一段代码，")
+        coord.acceptReasoning("先分析需求。")
+        coord.accept("好的，代码是：")
+        coord.accept("println 1。")
+        coord.finalize()
+        val snap = coord.snapshot()
+        assertEquals(2, snap.size, "思考与回复应各占一条消息")
+        val thinking = snap.first()
+        assertTrue(thinking.isThinking, "第一条应为思考消息")
+        assertEquals("用户想要一段代码，先分析需求。", thinking.content)
+        assertTrue(snap[1].isThinking.not(), "第二条为普通回复")
+        assertEquals("好的，代码是：println 1。", snap[1].content)
+    }
+
+    @Test
+    fun `reasoning finalized on stream end when no content`() {
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.acceptReasoning("只思考没有回复。")
+        val signals = coord.finalize()
+        val snap = coord.snapshot()
+        assertEquals(1, snap.size)
+        assertTrue(snap.first().isThinking)
+        assertTrue(snap.first().isStreaming.not(), "finalize 后思考消息应为完成态")
+        assertTrue(signals.any { it is StreamCoordinator.Signal.Complete })
+    }
+
+    @Test
+    fun `thinking message ids never collide with content ids`() {
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.acceptReasoning("思考内容。")
+        coord.accept("回复内容。")
+        coord.finalize()
+        val ids = coord.snapshot().map { it.id }
+        assertEquals(ids.size, ids.toSet().size, "思考与回复消息 id 必须互不冲突")
+    }
+
+    @Test
+    fun `reasoning after content started is ignored`() {
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("正常回复。")
+        coord.acceptReasoning("迟到的思考被忽略。")
+        coord.finalize()
+        val snap = coord.snapshot()
+        assertEquals(1, snap.size)
+        assertEquals("正常回复。", snap.first().content)
+        assertTrue(snap.first().isThinking.not())
     }
 }

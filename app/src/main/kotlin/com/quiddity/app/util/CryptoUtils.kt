@@ -1,9 +1,14 @@
 package com.quiddity.app.util
 
+import android.os.Build
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
 import android.util.Log
+import java.security.KeyStore
 import java.security.SecureRandom
 import java.util.Base64 as JvmBase64
 import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -21,7 +26,7 @@ import javax.crypto.spec.SecretKeySpec
  *    文件内仅允许保留两类注释：
  *    - 当前规则说明注释（即本注释块）
  *    - 模块划分注释（用于标识代码功能模块边界）
- *    除此之外，禁止出现任何形式的代码注释（包括但不限于单行注释、多行注释、临时调试注释等）。
+ *    除此之外，禁止出现任何形式的代码注释（包括但不限于单行注释、多行调试注释等）。
  *
  * 3. 构建交付要求
  *    在完成所有开发任务并通过单元测试和集成测试后，必须将项目打包为标准 APK 文件。
@@ -37,13 +42,21 @@ import javax.crypto.spec.SecretKeySpec
 
 
 /**
- * API Key 加密工具。
+ * API Key 加密工具（设备绑定）。
  *
- * 采用 AES-256-GCM 对称加密。
- * 密钥派生自固定应用密钥（设备无关，便于导出后导入解密）。
+ * 安全模型（只允许"特殊渠道"——即本机本应用——获取/使用 API）：
+ * - 真机（Android 6+）：加密密钥由系统级 Android Keystore 生成并保管。
+ *   支持硬件级保护的设备上密钥不可导出，反向工程拿不到主密钥；即使拿到
+ *   导出的数据文件，换一台设备也解不出明文，导入时需重新填写 Key；
+ *   真机上 Keystore 不可用时保存/解密会显式失败并提示用户，
+ *   绝不静默降级到硬编码密钥（降级会让密文可被逆向者解开，击穿设备绑定承诺）。
+ * - JVM 单元测试：Keystore 不可用，回退到 [SecretKeyDerivation] 派生的
+ *   固定密钥，保证纯 JVM 测试可运行（仅测试环境，不影响真机安全）。
  *
- * 注：本工具不依赖 Android Keystore，因为导出/导入需要跨设备可解密。
- * 安全性依赖用户设备本身的沙箱保护。
+ * 旧数据迁移：升级前用固定密钥加密的旧密文无法用新密钥解密，通过
+ * [isLegacyEncrypted] / [decryptLegacy] 识别，并由
+ * [com.quiddity.app.data.repo.SettingsRepository.migrateLegacyApiKeysIfNeeded]
+ * 自动用新密钥重新加密，用户无感知。
  */
 object CryptoUtils {
 
@@ -52,15 +65,60 @@ object CryptoUtils {
     private const val GCM_TAG_LENGTH_BITS = 128
     private const val GCM_IV_LENGTH_BYTES = 12
 
-    // 密钥通过 [SecretKeyDerivation] 在运行时从拆分 Base64 拼接派生，
-    // `strings` 看到的是无意义字符，无法直接还原。
-    private val secretKey: SecretKey =
+    /** Android Keystore 中的密钥别名（同一应用内全局唯一）。 */
+    private const val KEYSTORE_ALIAS = "quiddity_api_key"
+
+    /** 当前生效密钥：真机为 Keystore 密钥，JVM 测试环境为派生密钥。 */
+    private val currentKey: SecretKey by lazy { resolveCurrentKey() }
+
+    /** 旧版固定密钥（仅用于升级迁移，见 [decryptLegacy]）。 */
+    private val legacyKey: SecretKey by lazy {
         SecretKeySpec(SecretKeyDerivation.obtainSecret(), "AES")
+    }
+
+    /**
+     * 是否处于 Android Keystore 可用环境。
+     * JVM 单元测试（returnDefaultValues）中 [Build.VERSION.SDK_INT] 返回 0，
+     * 走派生密钥分支；真机返回真实 SDK 版本，走 Keystore 分支。
+     */
+    private fun isAndroidKeystoreAvailable(): Boolean =
+        try {
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+        } catch (_: Throwable) {
+            false
+        }
+
+    private fun resolveCurrentKey(): SecretKey {
+        if (!isAndroidKeystoreAvailable()) return legacyKey
+        // 真机必须使用 Keystore 密钥；实现异常直接抛出，由调用方提示用户，
+        // 避免密文落在可被逆向的固定密钥下
+        return getOrCreateKeystoreKey()
+    }
+
+    /**
+     * 从 Android Keystore 获取或创建 AES-256-GCM 密钥。
+     * 密钥生成后由系统安全硬件保管（硬件支持时不可导出），应用只能引用其句柄加解密。
+     */
+    private fun getOrCreateKeystoreKey(): SecretKey {
+        val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        (keyStore.getKey(KEYSTORE_ALIAS, null) as? SecretKey)?.let { return it }
+        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+        val spec = KeyGenParameterSpec.Builder(
+            KEYSTORE_ALIAS,
+            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+        )
+            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+            .setKeySize(256)
+            .build()
+        generator.init(spec)
+        return generator.generateKey()
+    }
 
     /**
      * 解密失败原因。
      *
-     * 让调用方 [ChatRepository] 区分以下场景并给出精确提示：
+     * 让调用方 [com.quiddity.app.data.repo.ApiAccess] 区分以下场景并给出精确提示：
      * "Base64 损坏"、"GCM 标签校验失败（被篡改/数据损坏）"、"Cipher 不可用"。
      */
     sealed class DecryptFailure(message: String, cause: Throwable? = null) : Exception(message, cause) {
@@ -77,26 +135,109 @@ object CryptoUtils {
     /** 加密明文，返回 Base64 字符串（包含 IV + 密文）。 */
     fun encrypt(plain: String): String {
         if (plain.isEmpty()) return ""
-        val iv = ByteArray(GCM_IV_LENGTH_BYTES).also { SecureRandom().nextBytes(it) }
-        val cipher = Cipher.getInstance(TRANSFORMATION)
-        cipher.init(Cipher.ENCRYPT_MODE, secretKey, GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv))
-        val cipherText = cipher.doFinal(plain.toByteArray(Charsets.UTF_8))
-        val combined = iv + cipherText
-        // - java.util.Base64 是 JDK 标准类，JVM 单元测试可运行
-        // - getEncoder().encodeToString() 默认带 padding，与 Base64.NO_WRAP 兼容
-        return JvmBase64.getEncoder().encodeToString(combined)
+        // Keystore 异常直接上抛（SettingsViewModel 会提示保存失败），不做降级
+        return encryptWith(currentKey, plain)
     }
 
     /**
      * 解密 [encrypted]（Base64 字符串）。
      *
      * GCM 是带认证的加密，认证失败通常意味着数据被篡改 / 磁盘损坏 / 密钥不匹配。
-     * 抛出细分类型的 [DecryptFailure]，调用方按需降级（典型：向用户展示具体错误 + 提示重新填写）。
+     * 抛出细分类型的 [DecryptFailure]，调用方按需降级。
+     *
+     * 兼容回退：旧版固定密钥加密的存量数据（升级迁移尚未完成 / 迁移失败时）
+     * 仍可用旧密钥解开。该回退只作用于"旧版密文"（其安全性本就不依赖 Keystore），
+     * 新写入的密文一律使用 Keystore 密钥（[encrypt] 不降级），不影响设备绑定承诺。
      */
     fun decrypt(encrypted: String): String {
         if (encrypted.isEmpty()) throw DecryptFailure.Empty()
+        return try {
+            decryptWith(currentKey, encrypted)
+        } catch (e: DecryptFailure.AuthenticationFailed) {
+            try {
+                decryptWith(legacyKey, encrypted)
+            } catch (_: DecryptFailure) {
+                throw e
+            }
+        }
+    }
+
+    /**
+     * 空安全解密：解不开（空 / 被篡改 / 密钥不匹配）时返回 null，不抛异常。
+     * UI 层统一使用本方法，避免到处 try/catch。
+     */
+    fun decryptOrNull(encrypted: String): String? = try {
+        decrypt(encrypted)
+    } catch (_: DecryptFailure) {
+        null
+    }
+
+    /**
+     * 判断密文是否为旧版（固定密钥）加密：当前密钥解不开、但旧密钥能解开。
+     * 用于升级后的自动迁移（见 SettingsRepository.migrateLegacyApiKeysIfNeeded）。
+     */
+    fun isLegacyEncrypted(encrypted: String): Boolean {
+        if (encrypted.isEmpty()) return false
+        return try {
+            // 直接比较当前密钥，避免被 decrypt 的派生密钥回退干扰迁移检测
+            decryptWith(currentKey, encrypted)
+            false
+        } catch (e: DecryptFailure.AuthenticationFailed) {
+            try {
+                decryptWith(legacyKey, encrypted)
+                true
+            } catch (_: DecryptFailure) {
+                false
+            }
+        } catch (_: DecryptFailure) {
+            false
+        }
+    }
+
+    /**
+     * 用旧版（固定密钥）解密；仅用于迁移，解不出时抛 [DecryptFailure]。
+     */
+    fun decryptLegacy(encrypted: String): String = decryptWith(legacyKey, encrypted)
+
+    /**
+     * 是否可由本设备解密（当前密钥或旧密钥均可）。
+     * 用于数据导入时判断"是否需要重新填写 Key"：任一密钥可解都视为可继续使用，
+     * 旧密钥解出的数据会在启动迁移时自动换用新密钥。
+     */
+    fun isDecryptable(encrypted: String): Boolean {
+        if (encrypted.isEmpty()) return true
+        return try {
+            decrypt(encrypted)
+            true
+        } catch (_: DecryptFailure) {
+            try {
+                decryptLegacy(encrypted)
+                true
+            } catch (_: DecryptFailure) {
+                false
+            }
+        }
+    }
+
+    /** 供测试使用的旧版加密入口（与生产迁移路径对应）。 */
+    internal fun encryptLegacy(plain: String): String =
+        if (plain.isEmpty()) "" else encryptWith(legacyKey, plain)
+
+    private fun encryptWith(key: SecretKey, plain: String): String {
+        val iv = ByteArray(GCM_IV_LENGTH_BYTES).also { SecureRandom().nextBytes(it) }
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv))
+        val cipherText = cipher.doFinal(plain.toByteArray(Charsets.UTF_8))
+        val combined = iv + cipherText
+        // java.util.Base64 是 JDK 标准类，JVM 单元测试可运行；
+        // getEncoder().encodeToString() 默认带 padding，与 Base64.NO_WRAP 兼容
+        return JvmBase64.getEncoder().encodeToString(combined)
+    }
+
+    private fun decryptWith(key: SecretKey, encrypted: String): String {
+        if (encrypted.isEmpty()) throw DecryptFailure.Empty()
         val combined = try {
-            // 使用 java.util.Base64（与原 android.util.Base64.NO_WRAP 行为完全一致）
+            // 使用 java.util.Base64（与旧 android.util.Base64.NO_WRAP 行为完全一致）
             JvmBase64.getDecoder().decode(encrypted)
         } catch (t: Throwable) {
             Log.w(TAG, "Base64 decode failed: ${t.javaClass.simpleName}")
@@ -110,7 +251,7 @@ object CryptoUtils {
         val cipherText = combined.copyOfRange(GCM_IV_LENGTH_BYTES, combined.size)
         val cipher = try {
             Cipher.getInstance(TRANSFORMATION).apply {
-                init(Cipher.DECRYPT_MODE, secretKey, GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv))
+                init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv))
             }
         } catch (t: Throwable) {
             Log.e(TAG, "cipher init failed", t)

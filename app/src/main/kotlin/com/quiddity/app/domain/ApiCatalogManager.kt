@@ -1,6 +1,8 @@
 package com.quiddity.app.domain
 
 import com.quiddity.app.data.model.ApiCatalogEntry
+import com.quiddity.app.data.model.AppSettings
+import com.quiddity.app.data.model.Conversation
 import com.quiddity.app.data.remote.ChatApi
 import com.quiddity.app.util.CryptoUtils
 import com.quiddity.app.util.IdGenerator
@@ -63,7 +65,12 @@ class ApiCatalogManager(
         val name: String,
         val defaultUrl: String,
         val keyUrl: String,
-        val models: List<String>
+        val models: List<String>,
+        /**
+         * 该服务商官方支持的 Responses API 端点（服务端 web_search）。
+         * null = 该服务商无服务端搜索能力。
+         */
+        val responsesUrl: String? = null
     )
 
     /**
@@ -155,6 +162,16 @@ class ApiCatalogManager(
     )
 
     /**
+     * 支持服务端联网搜索（Responses API web_search）的模型清单。
+     *
+     * 官方文档：Responses API 目前仅支持 deepseek-v4-flash，暂不支持 deepseek-v4-pro。
+     * 随官方开放范围维护，新增模型时在此追加。
+     */
+    private val RESPONSES_SUPPORTED_MODELS: Set<String> = setOf(
+        QuiddityConstants.DEEPSEEK_RESPONSES_MODEL
+    )
+
+    /**
      * 查询模型所属分级。
      *
      * - 自定义服务商（[providerId] == "custom"）自动归为完整级。
@@ -164,6 +181,31 @@ class ApiCatalogManager(
         if (providerId == "custom") return ModelTier.FULL
         return MODEL_TIER_MAP[apiModel] ?: ModelTier.FULL
     }
+
+    /**
+     * 解析会话实际使用的 catalog 条目（与会话级覆盖 → 全局激活 → 第一条的顺序一致）。
+     */
+    fun resolveEntry(settings: AppSettings, conv: Conversation): ApiCatalogEntry? =
+        settings.catalog
+            .firstOrNull { it.id == conv.apiCatalogId }
+            ?: settings.catalog.firstOrNull { it.id == settings.activeCatalogId }
+            ?: settings.catalog.firstOrNull()
+
+    /**
+     * 该条目所属服务商官方提供的 Responses API 端点；不支持时返回 null。
+     */
+    fun responsesApiUrl(entry: ApiCatalogEntry): String? =
+        findProvider(entry.providerId).responsesUrl
+
+    /**
+     * 该条目是否支持 DeepSeek 官方服务端联网搜索（Responses API web_search）。
+     *
+     * 要求官方服务商（providerId=deepseek）+ 官方支持的模型（[RESPONSES_SUPPORTED_MODELS]）。
+     */
+    fun supportsServerWebSearch(entry: ApiCatalogEntry): Boolean =
+        entry.providerId == QuiddityConstants.DEEPSEEK_PROVIDER_ID &&
+            entry.apiModel in RESPONSES_SUPPORTED_MODELS &&
+            responsesApiUrl(entry) != null
 
     /**
      * 查询指定分级对应的默认上下文轮数。
@@ -282,7 +324,8 @@ class ApiCatalogManager(
             "deepseek", "深度求索\nDeepSeek",
             "https://api.deepseek.com/v1/chat/completions",
             "https://platform.deepseek.com",
-            listOf(
+            responsesUrl = QuiddityConstants.DEEPSEEK_RESPONSES_URL,
+            models = listOf(
                 "deepseek-v4-flash",
                 "deepseek-v4-pro"
             )
@@ -370,13 +413,14 @@ class ApiCatalogManager(
     /**
      * 解密 API Key。
      *
-     * 空字符串快捷路径：[apiKeyEnc] 为空时直接返回空串，不抛 [DecryptFailure.Empty]。
-     * 调用方无需自行判空。
+     * 空安全：密文为空或解不开（更换设备 / 重装 / 数据被篡改）时返回 null。
+     * UI 层据此显示"已保存密钥"或"密钥不可用需重新输入"，不再抛异常。
      */
-    fun decryptKey(entry: ApiCatalogEntry): String {
-        if (entry.apiKeyEnc.isEmpty()) return ""
-        return CryptoUtils.decrypt(entry.apiKeyEnc)
-    }
+    fun decryptKey(entry: ApiCatalogEntry): String? =
+        CryptoUtils.decryptOrNull(entry.apiKeyEnc)
+
+    /** 该条目是否存有密钥（用于编辑时提示"已保存，可留空保持不变"）。 */
+    fun hasStoredKey(entry: ApiCatalogEntry): Boolean = entry.apiKeyEnc.isNotEmpty()
 
     // ==================== 连接测试 ====================
 
@@ -405,7 +449,9 @@ class ApiCatalogManager(
         apiModel: String,
         apiKey: String
     ): ApiCatalogEntry = ApiCatalogEntry(
-        id = id ?: generateId(),
+        // 关键修复：表单新增时 id 传空字符串 ""（ApiCatalogEditFormState 语义：空 = 新增）。
+        // 空串不能当真实 id 用，否则多个新条目 id 相同会互相覆盖（"密钥不保存"根因）
+        id = id?.takeIf { it.isNotBlank() } ?: generateId(),
         name = name,
         providerId = providerId,
         apiUrl = apiUrl,

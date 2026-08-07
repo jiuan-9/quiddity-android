@@ -192,8 +192,8 @@ class PromptBuilderTest {
             history = history,
             senderLabels = mapOf("conv_a" to "小A", "conv_b" to "小B")
         )
-        assertEquals("[小A] 早上好", labeled[0].content)
-        assertEquals("[小B] 你好呀", labeled[1].content)
+        assertEquals("小A：早上好", labeled[0].content)
+        assertEquals("小B：你好呀", labeled[1].content)
     }
 
     @Test
@@ -217,7 +217,7 @@ class PromptBuilderTest {
             lastN = 2,
             senderNames = mapOf("conv_a" to "小A", "conv_b" to "小B")
         )
-        assertEquals("[小B] 第二句\n[小A] 第三句", transcript)
+        assertEquals("小B：第二句\n小A：第三句", transcript)
     }
 
     @Test
@@ -235,4 +235,286 @@ class PromptBuilderTest {
         assertTrue(tool.function.parameters.containsKey("properties"), "工具应带 query 参数定义")
         assertTrue(tool.function.parameters.containsKey("required"), "工具应声明必填参数")
     }
+
+    @Test
+    fun `group system prompt contains member persona and group rules`() {
+        val member = conv().copy(
+            persona = com.quiddity.app.data.model.Persona(
+                name = "小A",
+                persona = "群聊测试成员"
+            ),
+            userPersona = com.quiddity.app.data.model.UserPersona(
+                name = "小明",
+                identity = "程序员"
+            )
+        )
+        val prompt = PromptBuilder.buildGroupSystemPrompt(member, PromptBuilder.GROUP_RULES)
+        assertTrue(prompt.contains("小A"), "成员人设名应进入 system 提示词")
+        assertTrue(prompt.contains("小明"), "该成员私聊里的用户人设名字应注入 system 提示词")
+        assertTrue(prompt.contains("程序员"), "该成员私聊里的用户人设应注入 system 提示词")
+        assertTrue(prompt.contains("群聊规则"), "应包含群聊规则节")
+        assertTrue(prompt.contains("不替其他成员或用户发言"), "应包含群聊规则内容")
+    }
+
+    @Test
+    fun `group decision prompt contains transcript and output constraint`() {
+        val member = conv().copy(
+            persona = com.quiddity.app.data.model.Persona(name = "小A")
+        )
+        val transcript = PromptBuilder.buildGroupTranscript(
+            listOf(
+                msg("m1", content = "你好", senderId = "conv_user"),
+                msg("m2", content = "你们好呀", senderId = "conv_b")
+            ),
+            lastN = 10,
+            senderNames = mapOf("conv_user" to "我", "conv_b" to "小B")
+        )
+        val prompt = PromptBuilder.buildGroupDecisionPrompt(member, transcript)
+        assertTrue(prompt.contains("群聊转述"), "决策提示词应包含群聊转述节")
+        assertTrue(prompt.contains("我：你好"), "转述应使用名字：内容格式")
+        assertTrue(prompt.contains("严格只输出数字 0"), "应包含输出约束")
+    }
+
+    @Test
+    fun `group memory summary prompt contains transcript`() {
+        val transcript = PromptBuilder.buildGroupTranscript(
+            listOf(msg("m1", content = "第一句", senderId = "conv_a")),
+            lastN = 0,
+            senderNames = mapOf("conv_a" to "小A")
+        )
+        val prompt = PromptBuilder.buildGroupMemorySummaryPrompt(transcript)
+        assertTrue(prompt.contains("本次需要压缩的群聊对话"), "应包含压缩指令")
+        assertTrue(prompt.contains("小A：第一句"), "应包含群聊转述")
+    }
+
+    @Test
+    fun `group transcript uses member user persona name for user messages`() {
+        val messages = listOf(
+            msg("m1", content = "你好", senderId = null),
+            msg("m2", content = "你们好呀", senderId = "conv_b")
+        )
+        val transcript = PromptBuilder.buildGroupTranscript(
+            messages = messages,
+            lastN = 10,
+            senderNames = mapOf("conv_b" to "小B"),
+            userName = "小明"
+        )
+        assertEquals("小明：你好\n小B：你们好呀", transcript)
+    }
+
+    @Test
+    fun `toApiMessages prefixes user messages with member user persona name`() {
+        val history = listOf(
+            msg("m1", Role.USER, "早上好", senderId = null),
+            msg("m2", Role.ASSISTANT, "你好呀", senderId = "conv_b")
+        )
+        val labeled = PromptBuilder.toApiMessages(
+            systemPrompt = "",
+            history = history,
+            senderLabels = mapOf("conv_b" to "小B"),
+            userName = "小明"
+        )
+        assertEquals("小明：早上好（对全体成员说）", labeled[0].content)
+        assertEquals("小B：你好呀", labeled[1].content)
+    }
+
+    @Test
+    fun `toApiMessages annotates at-mention target in group mode`() {
+        val history = listOf(
+            msg("m1", Role.ASSISTANT, "@小B 在吗", senderId = "conv_a"),
+            msg("m2", Role.ASSISTANT, "@小明 宝宝", senderId = "conv_b")
+        )
+        val labeled = PromptBuilder.toApiMessages(
+            systemPrompt = "",
+            history = history,
+            senderLabels = mapOf("conv_a" to "小A", "conv_b" to "小B"),
+            userName = "小明"
+        )
+        assertEquals("小A：@小B 在吗（点名@小B）", labeled[0].content)
+        assertEquals("小B：@小明 宝宝（点名@小明）", labeled[1].content)
+    }
+
+    @Test
+    fun `toApiMessages leaves member messages without mention unannotated`() {
+        val history = listOf(
+            msg("m1", Role.ASSISTANT, "宝宝", senderId = "conv_a")
+        )
+        val labeled = PromptBuilder.toApiMessages(
+            systemPrompt = "",
+            history = history,
+            senderLabels = mapOf("conv_a" to "小A"),
+            userName = "小明"
+        )
+        assertEquals("小A：宝宝", labeled[0].content)
+    }
+
+    // ============================================================
+    // 对话纪律（回复认知 + 台词完整性）
+    // ============================================================
+
+    @Test
+    fun `system prompt follows generic template with clean sections`() {
+        val system = PromptBuilder.buildSystemPrompt(
+            conv().copy(
+                persona = com.quiddity.app.data.model.Persona(
+                    name = "林晚",
+                    persona = "咖啡店店长",
+                    worldBackground = "都市世界，现代都市",
+                    desired = "温柔耐心"
+                ),
+                userPersona = com.quiddity.app.data.model.UserPersona(name = "小明"),
+                scene = "傍晚的咖啡店",
+                memory = "小明喜欢拿铁",
+                compressedMemory = "他们经常在咖啡店见面"
+            )
+        )
+        // 通用模板：身份认知在最前，各节职责单一，无补丁式堆叠
+        assertTrue(system.startsWith("【角色与对话双方】"), system.take(40))
+        listOf("【角色与对话双方】", "【AI 人设】", "【用户信息】", "【世界与场景】", "【对话方式】").forEach { section ->
+            assertEquals(1, section.toRegex().findAll(system).count(), "每节应恰好出现一次：$section")
+        }
+        assertTrue(system.contains("【历史对话摘要】"), "记忆节应携带压缩摘要")
+        assertTrue(system.contains("世界背景：都市世界，现代都市"), "世界背景应常驻")
+        assertTrue(system.contains("当前场景：傍晚的咖啡店"), "场景应在首轮注入")
+        assertFalse(system.contains("【回复纪律"), "不应再有补丁式回复纪律块")
+        // 身份认知：谁是谁 + 只说自己角色的发言
+        assertTrue(system.contains("【角色与对话双方】"))
+        assertTrue(system.contains("你扮演的角色：林晚"))
+        assertTrue(system.contains("对话伙伴：小明"))
+        assertTrue(system.contains("只以「林晚」身份发言"))
+        assertTrue(system.contains("不替对方说话"))
+    }
+
+    @Test
+    fun `system prompt marks regenerate request with previous reply`() {
+        val system = PromptBuilder.buildSystemPrompt(
+            conv().copy(persona = com.quiddity.app.data.model.Persona(name = "林晚")),
+            regeneratePreviousReply = "早上好呀，今天想聊点什么？"
+        )
+        assertTrue(system.contains("「重说」请求"), "重说应在对话方式节给出语义信号")
+        assertTrue(system.contains("换一种表达方式"), "重说应要求换一种表达")
+        assertTrue(system.contains("早上好呀，今天想聊点什么？"), "上一版回复应注入供对照")
+        assertTrue(system.contains("禁止复述"), "应明确禁止复述上一版")
+    }
+
+    @Test
+    fun `system prompt without regenerate flag stays generic`() {
+        val system = PromptBuilder.buildSystemPrompt(
+            conv().copy(persona = com.quiddity.app.data.model.Persona(name = "林晚"))
+        )
+        assertFalse(system.contains("重说"), "普通回复不应携带重说指令")
+    }
+
+    @Test
+    fun `group rules are generic and minimal`() {
+        assertTrue(PromptBuilder.GROUP_RULES.contains("不替其他成员或用户发言"))
+        assertFalse(PromptBuilder.GROUP_RULES.contains("必须包含"), "不再强制台词硬规则（由切分器根因修复兜底）")
+        assertFalse(PromptBuilder.GROUP_RULES.contains("名字前缀"), "前缀规则已迁入【对话方式】节")
+        assertFalse(PromptBuilder.GROUP_RULES.contains("括号"), "括号规则已迁入【对话方式】节")
+    }
+
+    @Test
+    fun `group system prompt carries dialogue discipline section`() {
+        val member = conv().copy(
+            persona = com.quiddity.app.data.model.Persona(name = "小A", character = "温柔"),
+            userPersona = com.quiddity.app.data.model.UserPersona(name = "小明")
+        )
+        val prompt = PromptBuilder.buildGroupSystemPrompt(member, PromptBuilder.GROUP_RULES)
+        assertTrue(prompt.contains("【对话方式】"), "群聊提示词应包含对话方式节")
+        assertTrue(prompt.contains("动作/神态用括号括起，如（轻笑）。"), "括号动作规则应带示例：$prompt")
+        assertTrue(prompt.contains("不加「名字：」前缀或解释"), "前缀规则应在对话方式节：$prompt")
+        assertTrue(prompt.contains("被用户「@」点名时优先回应"), "@点名规则应在对话方式节：$prompt")
+        assertTrue(prompt.contains("不提及自己是 AI 或模型"), "AI 身份纪律应在对话方式节：$prompt")
+    }
+
+    @Test
+    fun `group system prompt includes identity mapping`() {
+        val member = conv().copy(
+            persona = com.quiddity.app.data.model.Persona(name = "小A"),
+            userPersona = com.quiddity.app.data.model.UserPersona(name = "小明")
+        )
+        val prompt = PromptBuilder.buildGroupSystemPrompt(member, PromptBuilder.GROUP_RULES)
+        assertTrue(prompt.contains("你扮演的角色：小A"))
+        assertTrue(prompt.contains("对话伙伴：小明"))
+        assertTrue(prompt.contains("不替对方说话"))
+    }
+
+    @Test
+    fun `group system prompt carries address judgement rule`() {
+        val member = conv().copy(
+            persona = com.quiddity.app.data.model.Persona(name = "小A"),
+            userPersona = com.quiddity.app.data.model.UserPersona(name = "小明")
+        )
+        val prompt = PromptBuilder.buildGroupSystemPrompt(member, PromptBuilder.GROUP_RULES)
+        assertTrue(prompt.contains("判断说话对象"), "群聊提示词应包含接话判断规则")
+        assertTrue(prompt.contains("不要当成在叫你"), "昵称默认指向用户，不应被其他成员当成在叫自己")
+    }
+
+    @Test
+    fun `group system prompt marks regenerate request with previous reply`() {
+        val member = conv().copy(persona = com.quiddity.app.data.model.Persona(name = "小A"))
+        val prompt = PromptBuilder.buildGroupSystemPrompt(
+            member,
+            PromptBuilder.GROUP_RULES,
+            regeneratePreviousReply = "嗯？怎么了"
+        )
+        assertTrue(prompt.contains("「重说」请求"), "群聊重说应给出语义信号")
+        assertTrue(prompt.contains("嗯？怎么了"), "上一版回复应注入供对照")
+    }
+
+    @Test
+    fun `group system prompt injects group background`() {
+        val member = conv().copy(persona = com.quiddity.app.data.model.Persona(name = "小A"))
+        val prompt = PromptBuilder.buildGroupSystemPrompt(
+            member,
+            PromptBuilder.GROUP_RULES,
+            groupBackground = "这是大学同学群，关系很熟，说话随意。"
+        )
+        assertTrue(prompt.contains("【群聊背景】"), "群聊背景应作为独立节注入")
+        assertTrue(prompt.contains("这是大学同学群，关系很熟，说话随意。"), "群聊背景内容应原样注入")
+    }
+
+    @Test
+    fun `group system prompt injects group scene`() {
+        val member = conv().copy(persona = com.quiddity.app.data.model.Persona(name = "小A"))
+        val prompt = PromptBuilder.buildGroupSystemPrompt(
+            member,
+            PromptBuilder.GROUP_RULES,
+            groupBackground = "你们几个朋友正在一场篝火晚会上，夜空晴朗。",
+            groupBackgroundMode = QuiddityConstants.GROUP_BACKGROUND_MODE_SCENE
+        )
+        assertTrue(prompt.contains("【群聊场景】"), "群聊场景应作为独立节注入")
+        assertTrue(prompt.contains("你们几个朋友正在一场篝火晚会上，夜空晴朗。"), "群聊场景内容应原样注入")
+    }
+
+    @Test
+    fun `group system prompt without background omits both sections`() {
+        val member = conv().copy(persona = com.quiddity.app.data.model.Persona(name = "小A"))
+        val prompt = PromptBuilder.buildGroupSystemPrompt(member, PromptBuilder.GROUP_RULES)
+        assertFalse(prompt.contains("【群聊背景】"), "未设置背景时不应注入该节")
+        assertFalse(prompt.contains("【群聊场景】"), "未设置场景时不应注入该节")
+    }
+
+    @Test
+    fun `group system prompt section title follows background mode`() {
+        val member = conv().copy(persona = com.quiddity.app.data.model.Persona(name = "小A"))
+        val scenePrompt = PromptBuilder.buildGroupSystemPrompt(
+            member,
+            PromptBuilder.GROUP_RULES,
+            groupBackground = "篝火晚会",
+            groupBackgroundMode = QuiddityConstants.GROUP_BACKGROUND_MODE_SCENE
+        )
+        assertTrue(scenePrompt.contains("【群聊场景】"), "场景模式应注入为【群聊场景】节")
+        assertFalse(scenePrompt.contains("【群聊背景】"), "场景模式不应出现【群聊背景】节")
+
+        val backgroundPrompt = PromptBuilder.buildGroupSystemPrompt(
+            member,
+            PromptBuilder.GROUP_RULES,
+            groupBackground = "大学同学群",
+            groupBackgroundMode = QuiddityConstants.GROUP_BACKGROUND_MODE_BACKGROUND
+        )
+        assertTrue(backgroundPrompt.contains("【群聊背景】"), "背景模式应注入为【群聊背景】节")
+        assertFalse(backgroundPrompt.contains("【群聊场景】"), "背景模式不应出现【群聊场景】节")
+    }
+
 }

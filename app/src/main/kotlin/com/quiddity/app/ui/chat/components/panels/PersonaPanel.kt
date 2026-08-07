@@ -310,7 +310,7 @@ fun PersonaPanel(
                             .fillMaxWidth()
                             .heightIn(max = 360.dp),
                         shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.surfaceContainerLow
+                        color = com.quiddity.app.ui.components.glassCardColor()
                     ) {
                         Column(
                             modifier = Modifier
@@ -443,7 +443,7 @@ fun PersonaPanel(
                 modifier = Modifier
                     .size(64.dp)
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                    .background(com.quiddity.app.ui.components.glassCardColor())
                     .clickable {
                         avatarLauncher.launch(
                             androidx.activity.result.PickVisualMediaRequest(
@@ -564,7 +564,7 @@ fun PersonaPanel(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(12.dp))
-                .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                .background(com.quiddity.app.ui.components.glassCardColor())
                 .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween

@@ -273,7 +273,7 @@ private fun LegalDocNavChips(
                 color = if (selected) {
                     MaterialTheme.colorScheme.primaryContainer
                 } else {
-                    MaterialTheme.colorScheme.surfaceContainerLow
+                    com.quiddity.app.ui.components.glassCardColor()
                 },
                 shape = RoundedCornerShape(20.dp)
             ) {
@@ -340,7 +340,7 @@ private fun LegalDocPage(
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerLow
+            color = com.quiddity.app.ui.components.glassCardColor()
         ) {
             Text(
                 text = document.body,
@@ -393,7 +393,7 @@ private fun LawReferenceCard(
                 onClick = { onCopyUrl(law.officialUrl) }
             ),
         shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        color = com.quiddity.app.ui.components.glassCardColor(),
         tonalElevation = 0.dp
     ) {
         Column(modifier = Modifier.padding(16.dp)) {

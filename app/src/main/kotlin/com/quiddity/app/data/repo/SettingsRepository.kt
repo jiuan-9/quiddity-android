@@ -3,6 +3,8 @@ package com.quiddity.app.data.repo
 import com.quiddity.app.data.local.SettingsStore
 import com.quiddity.app.data.model.AppSettings
 import com.quiddity.app.data.model.ApiCatalogEntry
+import com.quiddity.app.util.CryptoUtils
+import com.quiddity.app.util.QuiddityConstants
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -87,9 +89,46 @@ class SettingsRepository(private val store: SettingsStore) {
         }
     }
 
-    suspend fun update(block: (AppSettings) -> AppSettings) {
+    /**
+     * 升级迁移：把旧版（固定密钥）加密的 API Key 自动改用设备 Keystore 密钥重新加密。
+     *
+     * 触发条件：密文无法用当前密钥解密、但旧密钥可以解开（见
+     * [com.quiddity.app.util.CryptoUtils.isLegacyEncrypted]）。
+     * 迁移成功后旧密文被替换，用户无感知；解不开的条目保持原样，
+     * 由数据导入流程（needsKeyRefill）或 API 使用时报错提示重新填写。
+     */
+    suspend fun migrateLegacyApiKeysIfNeeded() {
         ensureInitialized()
-        store.update(block)
+        val current = _snapshot.value
+        val pending = current.catalog.filter { entry ->
+            entry.apiKeyEnc.isNotEmpty() && CryptoUtils.isLegacyEncrypted(entry.apiKeyEnc)
+        }
+        if (pending.isEmpty()) return
+        val reEncrypted = pending.mapNotNull { entry ->
+            runCatching { CryptoUtils.decryptLegacy(entry.apiKeyEnc) }
+                .getOrNull()
+                ?.let { plain ->
+                    runCatching { CryptoUtils.encrypt(plain) }
+                        .getOrNull()
+                        ?.let { reEncryptedKey -> entry.copy(apiKeyEnc = reEncryptedKey) }
+                }
+        }
+        if (reEncrypted.isEmpty()) return
+        val byId = reEncrypted.associateBy { it.id }
+        store.update { settings ->
+            settings.copy(catalog = settings.catalog.map { byId[it.id] ?: it })
+        }
+    }
+
+    /** 写入设置，返回是否成功（失败不抛异常，避免 App 闪退）。 */
+    suspend fun update(block: (AppSettings) -> AppSettings): Boolean {
+        return try {
+            ensureInitialized()
+            store.update(block)
+        } catch (t: Throwable) {
+            android.util.Log.e("SettingsRepository", "写入设置失败", t)
+            false
+        }
     }
 
     suspend fun setDarkMode(enabled: Boolean) = update { it.copy(darkMode = enabled) }
@@ -98,11 +137,21 @@ class SettingsRepository(private val store: SettingsStore) {
     suspend fun setEnterToSend(enabled: Boolean) = update { it.copy(enterToSend = enabled) }
     suspend fun setMaxTokens(value: Int) = update { it.copy(globalMaxTokens = value) }
     suspend fun setSingleMessageTokens(value: Int) = update { it.copy(globalSingleMessageTokens = value) }
+    suspend fun setGlobalTemperature(value: Double) = update {
+        it.copy(
+            globalTemperature = value.coerceIn(
+                QuiddityConstants.MIN_TEMPERATURE,
+                QuiddityConstants.MAX_TEMPERATURE
+            )
+        )
+    }
     suspend fun setContextLimit(value: Int) = update { it.copy(globalContextLimit = value) }
     /**
      * 与其他 setter 保持一致：仅走 update {} 流程（DataStore.edit 原子事务）。
      */
     suspend fun setBracketGrayEnabled(enabled: Boolean) = update { it.copy(bracketGrayEnabled = enabled) }
+
+    suspend fun setMarkdownEnabled(enabled: Boolean) = update { it.copy(markdownEnabled = enabled) }
 
     /**
      *
@@ -166,18 +215,36 @@ class SettingsRepository(private val store: SettingsStore) {
         it.copy(proactiveMessageLastResetDate = date)
     }
 
-    suspend fun upsertCatalog(entry: ApiCatalogEntry) = update { s ->
+    suspend fun setGroupTutorialSeen(seen: Boolean) = update {
+        it.copy(groupTutorialSeen = seen)
+    }
+
+    /** 下一个私聊默认名（新会话 N），计数器递增、删除不补号。 */
+    suspend fun nextSoloTitle(): String {
+        val n = currentSnapshot().soloChatCounter + 1
+        update { it.copy(soloChatCounter = n) }
+        return QuiddityConstants.SOLO_DEFAULT_TITLE_PREFIX + " " + n
+    }
+
+    /** 下一个群聊默认名（新群聊 N），计数器递增、删除不补号。 */
+    suspend fun nextGroupTitle(): String {
+        val n = currentSnapshot().groupChatCounter + 1
+        update { it.copy(groupChatCounter = n) }
+        return QuiddityConstants.GROUP_DEFAULT_TITLE_PREFIX + " " + n
+    }
+
+    suspend fun upsertCatalog(entry: ApiCatalogEntry): Boolean = update { s ->
         val list = s.catalog.filterNot { it.id == entry.id } + entry
         s.copy(catalog = list, activeCatalogId = s.activeCatalogId ?: entry.id)
     }
 
-    suspend fun removeCatalog(entryId: String) = update { s ->
+    suspend fun removeCatalog(entryId: String): Boolean = update { s ->
         val list = s.catalog.filterNot { it.id == entryId }
         val active = if (s.activeCatalogId == entryId) list.firstOrNull()?.id else s.activeCatalogId
         s.copy(catalog = list, activeCatalogId = active)
     }
 
-    suspend fun setActiveCatalog(id: String?) = update { it.copy(activeCatalogId = id) }
+    suspend fun setActiveCatalog(id: String?): Boolean = update { it.copy(activeCatalogId = id) }
 
     fun getCatalogEntry(id: String?): ApiCatalogEntry? {
         if (id == null) return null

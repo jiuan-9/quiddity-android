@@ -72,4 +72,18 @@ class QuiddityConstantsTest {
         assertTrue(QuiddityConstants.READ_TIMEOUT_SECONDS > 0)
         assertTrue(QuiddityConstants.WRITE_TIMEOUT_SECONDS > 0)
     }
+
+    @Test
+    fun `group chat constants follow the 1_5_0 plan`() {
+        assertEquals(50, QuiddityConstants.GROUP_DEFAULT_CONTEXT_LIMIT)
+        assertEquals(1, QuiddityConstants.GROUP_MIN_CONTEXT_LIMIT)
+        assertEquals(200, QuiddityConstants.GROUP_MAX_CONTEXT_LIMIT)
+        assertEquals(3, QuiddityConstants.GROUP_MAX_MEMBERS)
+        assertEquals(5, QuiddityConstants.GROUP_RETRY_COUNT)
+        assertEquals("B", QuiddityConstants.GROUP_DEFAULT_STOP_MODE)
+        assertTrue(QuiddityConstants.GROUP_DEFAULT_STOP_MODE in
+            listOf(QuiddityConstants.GROUP_STOP_MODE_A, QuiddityConstants.GROUP_STOP_MODE_B))
+        assertTrue(QuiddityConstants.GROUP_DEFAULT_CONTEXT_LIMIT in
+            QuiddityConstants.GROUP_MIN_CONTEXT_LIMIT..QuiddityConstants.GROUP_MAX_CONTEXT_LIMIT)
+    }
 }

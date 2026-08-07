@@ -8,6 +8,7 @@ import com.quiddity.app.data.model.ImportMode
 import com.quiddity.app.data.model.Message
 import com.quiddity.app.data.model.Persona
 import com.quiddity.app.domain.ApiCatalogManager
+import com.quiddity.app.domain.GroupChatRules
 import com.quiddity.app.util.IdGenerator
 import com.quiddity.app.util.QuiddityConstants
 import kotlinx.coroutines.flow.Flow
@@ -86,9 +87,10 @@ class ConversationRepository(
      */
     suspend fun createConversation(): Conversation {
         val now = System.currentTimeMillis()
+        val title = settingsRepository?.nextSoloTitle() ?: QuiddityConstants.DEFAULT_CONVERSATION_TITLE
         val conv = Conversation(
             id = IdGenerator.newId(IdGenerator.Prefix.CONVERSATION),
-            title = QuiddityConstants.DEFAULT_CONVERSATION_TITLE,
+            title = title,
             createdAt = now,
             updatedAt = now,
             // AI 人设：所有字段全部留空，输入框显示灰色占位提示引导用户设定。
@@ -119,6 +121,64 @@ class ConversationRepository(
     }
 
     /**
+     * 创建群聊会话（方案二.6）。
+     *
+     * @param memberIds 成员私聊会话 id（1～3 个，调用方已校验）
+     * @param title 群名；空串时自动编号「新群聊 N」
+     */
+    suspend fun createGroupConversation(
+        memberIds: List<String>,
+        title: String? = null
+    ): Conversation {
+        val now = System.currentTimeMillis()
+        val resolvedTitle = title?.takeIf { it.isNotBlank() }
+            ?: settingsRepository?.nextGroupTitle()
+            ?: QuiddityConstants.GROUP_DEFAULT_TITLE_PREFIX
+        val conv = GroupChatRules.buildGroupConversation(
+            id = IdGenerator.newId(IdGenerator.Prefix.CONVERSATION),
+            title = resolvedTitle,
+            memberIds = memberIds,
+            createdAt = now,
+            updatedAt = now
+        )
+        store.createConversation(conv)
+        return conv
+    }
+
+    /** 被 [memberId] 引用的群聊列表（私聊删除保护用，方案十.6）。 */
+    fun groupsReferencing(memberId: String): List<Conversation> =
+        GroupChatRules.groupsReferencing(store.conversations.value, memberId)
+
+    /** 从所有群聊中移除成员（私聊删除后调用；历史消息气泡保留，方案十.4）。 */
+    suspend fun removeMemberFromGroups(memberId: String) {
+        GroupChatRules.groupsWithoutMember(store.conversations.value, memberId)
+            .filter { it.type == ConversationType.GROUP }
+            .forEach { group ->
+                updateConversation(group)
+            }
+    }
+
+    /**
+     * 成员入群校验（方案七.4：用户名、AI 名、API 测试通过）。
+     *
+     * @return 成功返回消息文本；失败返回异常（含失败原因）
+     */
+    suspend fun validateGroupMember(member: Conversation): Result<String> {
+        GroupChatRules.validationFailureReason(member)?.let { reason ->
+            return Result.failure(IllegalStateException(reason))
+        }
+        val settings = settingsRepository?.currentSnapshot()
+            ?: return Result.failure(IllegalStateException("设置未加载"))
+        val manager = apiCatalogManager
+            ?: return Result.failure(IllegalStateException("API 名册未加载"))
+        val access = ApiAccess.resolve(settings, member)
+        return when (access) {
+            is ApiAccess.Failure -> Result.failure(access.toChatException())
+            is ApiAccess.Resolved -> manager.testConnection(access.apiUrl, access.apiKey, access.model)
+        }
+    }
+
+    /**
      * 解析当前激活模型分级对应的默认上下文记忆轮数。
      *
      * 解析链路：settingsRepository → activeCatalogId → catalog 条目 → apiModel + providerId
@@ -140,11 +200,12 @@ class ConversationRepository(
         return catalogManager.defaultContextLimitForTier(tier)
     }
 
-    suspend fun updateConversation(conv: Conversation) {
+    /** @return 是否写盘成功（失败仅记录日志，调用方按需提示） */
+    suspend fun updateConversation(conv: Conversation): Boolean =
         store.updateConversation(conv.copy(updatedAt = System.currentTimeMillis()))
-    }
 
-    suspend fun deleteConversation(convId: String) = store.deleteConversation(convId)
+    /** @return 是否写盘成功 */
+    suspend fun deleteConversation(convId: String): Boolean = store.deleteConversation(convId)
 
     /**
      * 批量删除多个会话（多选用）。
@@ -154,9 +215,10 @@ class ConversationRepository(
      *
      * @param convIds 要删除的会话 ID 列表
      */
-    suspend fun deleteConversations(convIds: List<String>) {
-        if (convIds.isEmpty()) return
-        store.deleteConversations(convIds)
+    /** @return 是否写盘成功 */
+    suspend fun deleteConversations(convIds: List<String>): Boolean {
+        if (convIds.isEmpty()) return true
+        return store.deleteConversations(convIds)
     }
 
     suspend fun appendMessage(message: Message): Boolean = store.appendMessage(message)
@@ -186,16 +248,18 @@ class ConversationRepository(
 
     suspend fun exportAllMessages(): Map<String, List<Message>> = store.exportAll()
 
+    /** @return 是否全部写盘成功 */
     suspend fun importAll(
         conversations: List<Conversation>,
         messages: Map<String, List<Message>>
-    ) = store.importAll(conversations, messages)
+    ): Boolean = store.importAll(conversations, messages)
 
     /**
      * 替换式导入：删除全部现有会话与消息，写入导入数据。
      *
      * 与 [importAll]（合并模式）互补：用户选择"替换现有数据"时调用。
      */
+    /** 替换式导入；写盘失败时回滚并抛异常，调用方负责提示。 */
     suspend fun replaceAll(
         conversations: List<Conversation>,
         messages: Map<String, List<Message>>
@@ -205,13 +269,14 @@ class ConversationRepository(
      * v2 快照导入（4.1：replaceAll 扩展支持角色库，或新增 importV2Snapshot）。
      *
      * 写盘顺序（3.4）：角色库 → 会话 → 消息；群聊（[groupChats]）1.3.0 不导入，
-     * 由 DataPorter 在解析阶段计入跳过清单。
+     * 1.5.0 起随调用方传入的 conversations/messages 一并恢复（方案十七.2）。
      *
      * @param characters 角色库主档
      * @param conversations 私聊会话
      * @param messages 会话消息
      * @param mode 导入模式（替换 / 合并 / 仅导入角色库）
      */
+    /** 按模式导入 v2 快照；失败（写盘失败 / 回滚）时抛异常。 */
     suspend fun importV2Snapshot(
         characters: List<Character>,
         conversations: List<Conversation>,
@@ -225,7 +290,9 @@ class ConversationRepository(
             }
             ImportMode.MERGE -> {
                 characterRepository?.mergeCharacters(characters)
-                store.importAll(conversations, messages)
+                if (!store.importAll(conversations, messages)) {
+                    throw IllegalStateException("合并导入写盘失败")
+                }
             }
             ImportMode.CHARACTERS_ONLY -> {
                 // 只登记 characters，其余不动（3.1）

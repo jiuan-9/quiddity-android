@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.quiddity.app.data.model.Conversation
+import com.quiddity.app.data.model.ConversationType
 import com.quiddity.app.data.model.Message
 import com.quiddity.app.data.model.Persona
 import com.quiddity.app.data.model.PersonaCard
@@ -16,6 +17,7 @@ import com.quiddity.app.data.repo.TimeLibraryRepository.GenerationOutcome
 import com.quiddity.app.di.ServiceLocator
 import com.quiddity.app.domain.ApiCatalogManager
 import com.quiddity.app.domain.ChatError
+import com.quiddity.app.domain.GroupReplyQueue
 import com.quiddity.app.domain.TimeLibraryEngine
 import com.quiddity.app.util.IdGenerator
 import com.quiddity.app.util.QuiddityConstants
@@ -157,6 +159,213 @@ class ChatViewModel(
     private var streamJob: Job? = null
 
     /**
+     * 1.5.0 延迟输出：加载动画时长 = 回复字数 × 每字毫秒数。
+     * [replyRunStart] 当前回复运行开始时间；[replyRunChars] 累计字数（含切分消息）。
+     */
+    private var replyRunStart = 0L
+    private var replyRunChars = 0
+
+    /**
+     * 全量会话的成员名字 / 头像映射（预计算一次，消息气泡直接查表，
+     * 避免每条消息渲染时重复扫描仓库并在组合中订阅 conversations 状态）。
+     */
+    val senderNameMap: StateFlow<Map<String, String>> = conversationRepository.conversations
+        .map { list -> list.associate { it.id to it.persona.name } }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
+
+    val senderAvatarMap: StateFlow<Map<String, String?>> = conversationRepository.conversations
+        .map { list -> list.associate { it.id to it.persona.aiAvatarUri } }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
+
+    // ===== 群聊点名回复队列（方案四：1 个回复 + 2 个排队） =====
+    private val groupQueueEngine = GroupReplyQueue()
+    private val _groupQueue = MutableStateFlow<List<GroupReplyQueue.Item>>(emptyList())
+    val groupQueue: StateFlow<List<GroupReplyQueue.Item>> = _groupQueue.asStateFlow()
+    private var groupStreamJob: Job? = null
+
+    fun isGroup(): Boolean = conversation.value?.type == ConversationType.GROUP
+
+    /** 群聊成员会话列表（按加入顺序）。 */
+    fun groupMembers(): List<Conversation> =
+        conversation.value?.memberConversationIds.orEmpty()
+            .mapNotNull { conversationRepository.getConversation(it) }
+
+    /** 成员 AI 名字（消息气泡显示用）。 */
+    fun memberName(convId: String): String =
+        conversationRepository.getConversation(convId)?.persona?.name.orEmpty()
+
+    /** 成员 AI 头像（消息气泡显示用）。 */
+    fun memberAvatar(convId: String): String? =
+        conversationRepository.getConversation(convId)?.persona?.aiAvatarUri
+
+    /**
+     * 群聊成员点名回复（方案三：头像点击发送；方案四.8 上下文在点击那一刻定格）。
+     */
+    fun enqueueGroupMember(memberId: String) {
+        if (!isGroup()) return
+        val group = conversation.value ?: return
+        if (memberId !in group.memberConversationIds) return
+        if (groupStreamJob?.isActive == true && groupQueueEngine.isFull) return
+        if (groupQueueEngine.contains(memberId)) return
+        // 上下文定格（方案四.8）：只冻结已完成的群聊消息，流式中的半截消息不入上下文
+        val frozen = _messages.value.filterNot { it.isNotice || it.isThinking || it.isStreaming }
+        enqueueGroupMemberWithFrozen(memberId, frozen)
+    }
+
+    /**
+     * 入队指定成员（使用调用方提供的冻结快照）。
+     *
+     * @param frozen 该成员回复时的上下文快照（方案四.8：点击/发送那一刻定格）
+     */
+    private fun enqueueGroupMemberWithFrozen(memberId: String, frozen: List<Message>) {
+        if (!isGroup()) return
+        val group = conversation.value ?: return
+        if (memberId !in group.memberConversationIds) return
+        if (groupStreamJob?.isActive == true && groupQueueEngine.isFull) return
+        if (groupQueueEngine.contains(memberId)) return
+        if (!groupQueueEngine.enqueue(memberId, frozen)) return
+        syncGroupQueue()
+        if (groupStreamJob?.isActive != true) startGroupQueueProcessor()
+    }
+
+    private fun syncGroupQueue() {
+        _groupQueue.value = groupQueueEngine.snapshot()
+    }
+
+    /** 队列中某成员的排队序号（0=正在回复，1/2=排队）；不在队返回 -1。 */
+    fun queuePosition(memberId: String): Int = groupQueueEngine.positionOf(memberId)
+
+    fun isQueueFull(): Boolean = groupQueueEngine.isFull
+
+    /**
+     * 群聊队列处理器：串行消费队列，每个成员失败重试 5 次并逐次通知；
+     * 任一成员 5 次失败后整个队列取消、所有头像恢复（方案十三）。
+     */
+    private fun startGroupQueueProcessor() {
+        groupStreamJob = viewModelScope.launch {
+            val selfJob = kotlin.coroutines.coroutineContext[kotlinx.coroutines.Job]
+            _isGenerating.value = true
+            try {
+                while (groupQueueEngine.isNotEmpty) {
+                    val item = groupQueueEngine.snapshot().firstOrNull()
+                        ?: break
+                    val ok = runGroupMemberReplyWithRetry(item)
+                    groupQueueEngine.dequeue()
+                    syncGroupQueue()
+                    if (!ok) {
+                        groupQueueEngine.clear()
+                        syncGroupQueue()
+                        _errorEvent.value = "群聊回复失败，队列已取消"
+                        break
+                    }
+                }
+            } catch (t: Throwable) {
+                if (t is kotlinx.coroutines.CancellationException) throw t
+                // 群聊队列异常兜底：清空队列、恢复头像，不让未捕获异常崩掉应用
+                groupQueueEngine.clear()
+                syncGroupQueue()
+                _errorEvent.value = "群聊回复出错：${t.message ?: "未知错误"}，队列已取消"
+            } finally {
+                // 仅当本 job 仍是当前处理器时才复位生成标志，
+                // 避免被 stop/重说取消的旧处理器在新建 job 启动后把它误置 false
+                if (groupStreamJob === selfJob) {
+                    _isGenerating.value = false
+                }
+                settleInterruptedStreams()
+                notifyIdleIfNoWork()
+            }
+            awaitGroupMemoryCompressionIfNeeded()
+            notifyIdleIfNoWork()
+        }
+    }
+
+    /**
+     * 单成员回复（含 5 次重试）。返回是否最终成功。
+     */
+    private suspend fun runGroupMemberReplyWithRetry(item: GroupReplyQueue.Item): Boolean {
+        val group = conversation.value ?: return false
+        val member = conversationRepository.getConversation(item.memberId) ?: return false
+        var attempt = 0
+        while (attempt < QuiddityConstants.GROUP_RETRY_COUNT) {
+            attempt++
+            var failed = false
+            // 重试起点快照：本次尝试追加的该成员回复 id，失败时回滚，
+            // 避免半截流式内容在重试间累积、以及 5 次失败后残留"打字中"气泡
+            // 直接从 store 的 StateFlow 读取（同步更新），不依赖 UI 收集协程的调度
+            val beforeMemberMsgIds = conversationRepository.observeMessages(conversationId).value
+                .filter { it.role == Role.ASSISTANT && it.senderId == item.memberId }
+                .map { it.id }
+                .toSet()
+            replyRunStart = System.currentTimeMillis()
+            replyRunChars = 0
+            try {
+                chatRepository.streamGroupMemberReply(
+                    member = member,
+                    group = group,
+                    transcript = item.frozenMessages,
+                    senderId = item.memberId
+                ) { event ->
+                    when (event) {
+                        is ChatRepository.Event.Error -> {
+                            failed = true
+                            if (attempt < QuiddityConstants.GROUP_RETRY_COUNT) {
+                                _errorEvent.value =
+                                    "网络错误，重试中 $attempt/${QuiddityConstants.GROUP_RETRY_COUNT}"
+                            } else {
+                                _errorEvent.value =
+                                    "成员 ${member.persona.name.ifBlank { "AI" }} 回复失败"
+                            }
+                        }
+                        else -> handleStreamEvent(event)
+                    }
+                }
+            } catch (c: kotlinx.coroutines.CancellationException) {
+                throw c
+            } catch (t: Throwable) {
+                if (t is kotlinx.coroutines.CancellationException) throw t
+                failed = true
+                _errorEvent.value = "成员回复出错：${t.message ?: "未知错误"}"
+            }
+            if (failed) {
+                rollbackFailedGroupAttempt(item.memberId, beforeMemberMsgIds)
+            } else {
+                return true
+            }
+        }
+        return false
+    }
+
+    /**
+     * 群聊成员回复失败时回滚本次尝试追加的该成员消息（保留用户消息与既有内容）。
+     */
+    private suspend fun rollbackFailedGroupAttempt(memberId: String, beforeIds: Set<String>) {
+        val current = conversationRepository.observeMessages(conversationId).value
+        val kept = current.filterNot { msg ->
+            msg.role == Role.ASSISTANT && msg.senderId == memberId && msg.id !in beforeIds
+        }
+        if (kept.size != current.size) {
+            conversationRepository.replaceMessages(conversationId, kept)
+        }
+    }
+
+    /**
+     * 群聊小本本（方案六.2/十六.3）：队列全部回完后，若群聊消息数达到阈值
+     * 则压缩群聊记录写入 groupMemory；失败静默不打断用户。
+     */
+    private suspend fun awaitGroupMemoryCompressionIfNeeded() {
+        val group = conversation.value ?: return
+        if (!isGroup()) return
+        val messages = _messages.value.filterNot { it.isNotice || it.isThinking }
+        if (messages.size < QuiddityConstants.GROUP_MEMORY_THRESHOLD) return
+        val summary = runCatching {
+            chatRepository.compressGroupMemory(group, messages)
+        }.getOrElse { group.groupMemory }
+        if (summary.isNotBlank() && summary != group.groupMemory) {
+            conversationRepository.updateConversation(group.copy(groupMemory = summary))
+        }
+    }
+
+    /**
      * 发送用户消息并触发 AI 流式回复。
      *
      * 用户消息 ID 使用 [IdGenerator]，避免 `System.currentTimeMillis()` 在毫秒级连发时产出重复 ID。
@@ -168,9 +377,21 @@ class ChatViewModel(
      */
     fun sendMessage(text: String) {
         if (text.isBlank()) return
+        val conv = conversation.value ?: return
+        // 群聊：只追加用户消息，不自动触发回复（回复靠点头像点名）；
+        // 队列进行中仍可发送新消息（方案四.8），新消息不影响正在进行的回复
+        if (isGroup()) {
+            if (_compressionState.value is CompressionState.Compressing) return
+            sendGroupUserMessage(text, conv)
+            return
+        }
         // 仅在 API 调用 / 压缩期间阻止发送；发送延迟期间允许继续发送
         if (_isGenerating.value || _compressionState.value is CompressionState.Compressing) return
-        val conv = conversation.value ?: return
+        // 方案九.4/6：私聊必须设置用户名才能发送消息
+        if (conv.userPersona.name.isBlank()) {
+            _errorEvent.value = "请先设置用户名"
+            return
+        }
 
         // 取消已 pending 的发送延迟（用户在延迟期间又发了一条消息 → 重置计时器）
         sendDelayJob?.cancel()
@@ -192,20 +413,56 @@ class ChatViewModel(
                 conversationRepository.appendMessage(userMsg)
             }
 
-            // 发送延迟——等待用户停止输入后再发出 API 请求
+            // 发送延迟——等待用户停止输入后再发出 API 请求（编辑感知防抖；0 秒 = 关闭）
             val settings = settingsRepository.currentSnapshot()
-            if (settings.sendDelayEnabled) {
+            if (settings.sendDelayEnabled && settings.sendDelaySeconds > 0) {
                 val delayMs = settings.sendDelaySeconds * 1000L
-                kotlinx.coroutines.delay(delayMs)
-                // 等待输入框为空（用户停止输入）
-                // 如果用户在等待期间继续输入并发送，sendDelayJob 会被外层 cancel 并重启
-                while (_inputBarText.value.isNotBlank()) {
-                    kotlinx.coroutines.delay(500)
+                while (true) {
+                    if (com.quiddity.app.domain.SendDelayGate.shouldFire(
+                            _inputBarText.value,
+                            lastInputEditAt,
+                            System.currentTimeMillis(),
+                            delayMs
+                        )
+                    ) {
+                        break
+                    }
+                    kotlinx.coroutines.delay(250)
                 }
             }
 
             // 延迟结束（或未启用延迟）→ 发起 API 请求
             startApiStream()
+        }
+    }
+
+    /**
+     * 群聊用户消息：直接追加进群聊记录（方案三.1/四.8），不触发自动回复。
+     * 消息中带「@名字」点名时，被点名的成员自动入队回复（受队列容量限制）。
+     */
+    private fun sendGroupUserMessage(text: String, conv: Conversation) {
+        sendDelayJob?.cancel()
+        sendDelayJob = viewModelScope.launch {
+            withContext(NonCancellable) {
+                val now = System.currentTimeMillis()
+                val userMsg = Message(
+                    id = IdGenerator.newId(IdGenerator.Prefix.USER_MESSAGE),
+                    conversationId = conv.id,
+                    role = Role.USER,
+                    content = text,
+                    timestamp = now
+                )
+                conversationRepository.appendMessage(userMsg)
+                // @ 点名：冻结快照必须包含本条刚发送的消息（_messages 异步更新，不能依赖）
+                val frozen = (_messages.value.filterNot { it.id == userMsg.id } + userMsg)
+                    .filterNot { it.isNotice || it.isThinking || it.isStreaming }
+                val members = conversation.value?.memberConversationIds.orEmpty()
+                    .mapNotNull { conversationRepository.getConversation(it) }
+                com.quiddity.app.domain.GroupChatRules.mentionedMemberIds(text, members)
+                    .forEach { memberId ->
+                        enqueueGroupMemberWithFrozen(memberId, frozen)
+                    }
+            }
         }
     }
 
@@ -229,9 +486,12 @@ class ChatViewModel(
         streamJob = viewModelScope.launch {
             // ===== 流式阶段 =====
             var streamError: Throwable? = null
+            val selfJob = kotlin.coroutines.coroutineContext[kotlinx.coroutines.Job]
             cleanupStaleStreamingMessages()
             _isGenerating.value = true
             try {
+                replyRunStart = System.currentTimeMillis()
+                replyRunChars = 0
                 val history = _messages.value
                 chatRepository.streamAssistantReply(
                     conv,
@@ -249,12 +509,18 @@ class ChatViewModel(
                         }
                     }
                 }
+            } catch (c: kotlinx.coroutines.CancellationException) {
+                // 用户停止 / 页面销毁：不当作错误，收尾交给 finally
+                throw c
             } catch (t: Throwable) {
                 streamError = t
                 _errorEvent.value = t.message ?: "未知错误"
                 _chatError.value = chatRepository.classify(t)
             } finally {
-                _isGenerating.value = false
+                if (streamJob === selfJob) {
+                    _isGenerating.value = false
+                }
+                settleInterruptedStreams()
                 notifyIdleIfNoWork()
             }
             // ===== 压缩阶段：仅当流式正常结束时触发 =====
@@ -269,7 +535,8 @@ class ChatViewModel(
     fun hasActiveWork(): Boolean =
         _isGenerating.value ||
             _compressionState.value is CompressionState.Compressing ||
-            (sendDelayJob?.isActive == true)
+            (sendDelayJob?.isActive == true) ||
+            (groupStreamJob?.isActive == true)
 
     /** 无未完结任务时通知宿主（仅当宿主已请求释放才生效）。 */
     private fun notifyIdleIfNoWork() {
@@ -334,6 +601,7 @@ class ChatViewModel(
 
     /** 让 AI 主动发消息（空对话开场）。 */
     fun letAiStart() {
+        if (isGroup()) return
         if (_isGenerating.value) return
         cancelPendingSend() // 取消 pending 的发送延迟
         val conv = conversation.value ?: return
@@ -367,6 +635,7 @@ class ChatViewModel(
      * - 最后一条是 USER 时忽略（无 AI 回复可重说）。
      */
     fun regenerate() {
+        if (isGroup()) return
         if (_isGenerating.value) return
         cancelPendingSend() // 取消 pending 的发送延迟
         val conv = conversation.value ?: return
@@ -381,25 +650,48 @@ class ChatViewModel(
 
         // 定位最后一条 USER 消息：保留 0..lastUserIndex（含 USER），删除其后的所有 AI 消息。
         val lastUserIndex = current.indexOfLast { it.role == Role.USER }
-        val newHistory = if (lastUserIndex >= 0) {
-            current.subList(0, lastUserIndex + 1).toList()
+        // 上一版回复原文（重说提示词对照用）：常规轮次 = USER 之后的所有 AI 消息；
+        // AI 开场轮 = 全部消息。让模型知道上一版说了什么，才能有意识地换一种表达。
+        val previousReplies = (if (lastUserIndex >= 0) {
+            current.subList(lastUserIndex + 1, current.size)
         } else {
-            // 无 USER 消息（如 letAiStart 开场）：退化为仅删除最后一条 AI
-            current.dropLast(1)
-        }
-
-        runStream {
-            // 1. 移除当前轮次的所有 AI 消息（原子替换整张表）
-            conversationRepository.replaceMessages(conversationId, newHistory)
-            // 2. 用删除后的 history 重新触发 AI 回复
-            chatRepository.streamAssistantReply(
-                conv,
-                newHistory,
-                effectiveMemoryStrategy(conv)
-            ) { event ->
-                handleStreamEvent(event)
-                if (event is ChatRepository.Event.CompleteMessage) {
-                    markSceneInjectedIfUnchanged(sceneAtStart)
+            current
+        }).filterNot { it.isNotice || it.isThinking }
+            .mapNotNull { it.content.takeIf { c -> c.isNotBlank() } }
+            .joinToString("\n")
+            .takeIf { it.isNotBlank() }
+        if (lastUserIndex >= 0) {
+            // 常规轮次：删除最后一条 USER 之后的所有 AI 消息，再重新生成整轮回复
+            val newHistory = current.subList(0, lastUserIndex + 1).toList()
+            runStream {
+                conversationRepository.replaceMessages(conversationId, newHistory)
+                chatRepository.streamAssistantReply(
+                    conv,
+                    newHistory,
+                    effectiveMemoryStrategy(conv),
+                    previousReplies
+                ) { event ->
+                    handleStreamEvent(event)
+                    if (event is ChatRepository.Event.CompleteMessage) {
+                        markSceneInjectedIfUnchanged(sceneAtStart)
+                    }
+                }
+            }
+        } else {
+            // AI 开场轮（"让 AI 先说"，无 USER 消息）：整轮全部重说。
+            // 修复：旧实现只删最后一条并把 assistant 结尾历史直接续写，
+            // 导致只重生成最后一句、前面句子全部残留。
+            runStream {
+                conversationRepository.replaceMessages(conversationId, emptyList())
+                chatRepository.letAiStart(
+                    conv,
+                    effectiveMemoryStrategy(conv),
+                    previousReplies
+                ) { event ->
+                    handleStreamEvent(event)
+                    if (event is ChatRepository.Event.CompleteMessage) {
+                        markSceneInjectedIfUnchanged(sceneAtStart)
+                    }
                 }
             }
         }
@@ -420,6 +712,7 @@ class ChatViewModel(
      * - 历史为空时忽略（无上下文可继续）。
      */
     fun continueGeneration() {
+        if (isGroup()) return
         if (_isGenerating.value) return
         cancelPendingSend() // 取消 pending 的发送延迟
         val conv = conversation.value ?: return
@@ -449,6 +742,59 @@ class ChatViewModel(
     }
 
     /**
+     * 群聊单条成员消息重新生成（方案十二.5-6：操作只作用于该条消息，不打断当前队列）。
+     *
+     * 语义：定位该成员消息，删除它及其后的所有消息，再用删除后的群聊历史
+     * 以该成员身份重新流式生成一条回复。
+     */
+    fun regenerateGroupMemberMessage(messageId: String) {
+        if (!isGroup()) return
+        if (_isGenerating.value) return
+        val group = conversation.value ?: return
+        val current = _messages.value
+        val targetIndex = current.indexOfFirst { it.id == messageId }
+        if (targetIndex < 0) return
+        val senderId = current[targetIndex].senderId ?: return
+        val member = conversationRepository.getConversation(senderId) ?: return
+        val newHistory = current.subList(0, targetIndex).toList()
+        // 上一版回复原文（含目标消息及之后的消息）：供重说提示词对照，要求换一种表达。
+        val previousReplies = current.subList(targetIndex, current.size)
+            .filterNot { it.isNotice || it.isThinking }
+            .mapNotNull { it.content.takeIf { c -> c.isNotBlank() } }
+            .joinToString("\n")
+            .takeIf { it.isNotBlank() }
+        groupStreamJob?.cancel()
+        groupStreamJob = viewModelScope.launch {
+            val selfJob = kotlin.coroutines.coroutineContext[kotlinx.coroutines.Job]
+            _isGenerating.value = true
+            try {
+                conversationRepository.replaceMessages(conversationId, newHistory)
+                chatRepository.streamGroupMemberReply(
+                    member = member,
+                    group = group,
+                    transcript = newHistory,
+                    senderId = senderId,
+                    regeneratePreviousReply = previousReplies
+                ) { event ->
+                    handleStreamEvent(event)
+                }
+            } catch (c: kotlinx.coroutines.CancellationException) {
+                throw c
+            } catch (t: Throwable) {
+                if (t is kotlinx.coroutines.CancellationException) throw t
+                _errorEvent.value = "重说失败：${t.message ?: "未知错误"}"
+            } finally {
+                if (groupStreamJob === selfJob) {
+                    _isGenerating.value = false
+                }
+                settleInterruptedStreams()
+                notifyIdleIfNoWork()
+            }
+            notifyIdleIfNoWork()
+        }
+    }
+
+    /**
      * 启动一次流式会话。集中管理 isGenerating、错误处理、streamJob 生命周期。
      * 入参 block 内部的事件回调（[handleStreamEvent]）在 runStream 协程中
      * 按到达顺序串行执行——天然避免并行写入。
@@ -457,18 +803,27 @@ class ChatViewModel(
         // 取消上一轮（如果仍在进行）
         streamJob?.cancel()
         _isGenerating.value = true
+        replyRunStart = System.currentTimeMillis()
+        replyRunChars = 0
         streamJob = viewModelScope.launch {
+            val selfJob = kotlin.coroutines.coroutineContext[kotlinx.coroutines.Job]
             // 防御性：清理可能残留的 streaming 状态
             // 用户停止生成 / 异常退出后，最后一条消息可能仍是 streaming=true，
             // 这种状态会卡住 UI（光标不消失），且与新 run 的消息产生视觉混乱
             cleanupStaleStreamingMessages()
             try {
                 block()
+            } catch (c: kotlinx.coroutines.CancellationException) {
+                // 用户停止 / 页面销毁：不当作错误，收尾交给 finally
+                throw c
             } catch (t: Throwable) {
                 _errorEvent.value = t.message ?: "未知错误"
                 _chatError.value = chatRepository.classify(t)
             } finally {
-                _isGenerating.value = false
+                if (streamJob === selfJob) {
+                    _isGenerating.value = false
+                }
+                settleInterruptedStreams()
                 notifyIdleIfNoWork()
             }
         }
@@ -492,6 +847,27 @@ class ChatViewModel(
     }
 
     /**
+     * 收尾残留的流式消息：把 isStreaming=true 的消息落盘为完成态（保留内容），
+     * 避免停止生成 / 异常退出后气泡光标永远不消失。
+     * 在 NonCancellable 上下文中执行，确保取消过程中也能完成落盘。
+     */
+    private fun settleInterruptedStreams() {
+        viewModelScope.launch {
+            withContext(NonCancellable) {
+                // 直接读 store 的 StateFlow（同步更新），不依赖 UI 收集协程的调度
+                val current = conversationRepository.observeMessages(conversationId).value
+                if (current.none { it.isStreaming }) return@withContext
+                conversationRepository.replaceMessages(
+                    conversationId,
+                    current.map { msg ->
+                        if (msg.isStreaming) msg.copy(isStreaming = false) else msg
+                    }
+                )
+            }
+        }
+    }
+
+    /**
      * 串行处理流式事件：每个事件依次 await 持久化完成后再处理下一个，
      * 避免 updateMessage 抢在 appendMessage 之前执行。
      */
@@ -504,11 +880,39 @@ class ChatViewModel(
                 if (!conversationRepository.updateMessage(event.message)) raiseStorageError()
             }
             is ChatRepository.Event.CompleteMessage -> {
+                // 1.5.0 延迟输出：加载动画时长 = 累计回复字数 × 每字毫秒数。
+                // 流式文字自然显示（MessageBubble 不再逐字停顿），消息保持
+                // streaming 状态直到该时长结束（气泡光标 / 群聊头像三点不提前停止）。
+                // 思考消息不计入打字延迟（思考单独一条消息，不应拖慢回复动画）
+                if (!event.message.isThinking) {
+                    replyRunChars += event.message.content.length
+                }
+                val settings = settingsRepository.currentSnapshot()
+                if (settings.typingDelayEnabled && settings.typingDelayMsPerChar > 0 &&
+                    replyRunStart > 0 && event.message.content.isNotEmpty()
+                ) {
+                    val targetDuration = replyRunChars.toLong() * settings.typingDelayMsPerChar
+                    val elapsed = System.currentTimeMillis() - replyRunStart
+                    val remainder = targetDuration - elapsed
+                    if (remainder > 0) {
+                        try {
+                            kotlinx.coroutines.delay(remainder)
+                        } catch (c: kotlinx.coroutines.CancellationException) {
+                            // 停止生成：先把消息落盘为完成态，避免加载光标卡住，再继续取消
+                            if (!conversationRepository.updateMessage(event.message)) raiseStorageError()
+                            throw c
+                        }
+                    }
+                }
                 if (!conversationRepository.updateMessage(event.message)) raiseStorageError()
                 // AI 消息完成时累加 token 用量
                 accumulateTokenUsage(event.message.tokenCount)
             }
             is ChatRepository.Event.Done -> Unit
+            is ChatRepository.Event.Notice -> {
+                // 信息性提示（非错误）：如思考降级 / 未返回思考内容
+                _errorEvent.value = event.text
+            }
             is ChatRepository.Event.Error -> {
                 _errorEvent.value = event.throwable.message ?: "未知错误"
                 _chatError.value = chatRepository.classify(event.throwable)
@@ -541,10 +945,31 @@ class ChatViewModel(
 
     /** 停止当前生成（取消协程）。 */
     fun stopGeneration() {
+        // 群聊停止：模式 A 只停当前成员，排队的顺位递补；模式 B 清空整个队列（方案四.7）
+        if (isGroup()) {
+            groupStreamJob?.cancel()
+            groupStreamJob = null
+            val mode = conversation.value?.stopMode ?: QuiddityConstants.GROUP_DEFAULT_STOP_MODE
+            if (mode == QuiddityConstants.GROUP_STOP_MODE_B) {
+                groupQueueEngine.clear()
+            } else {
+                groupQueueEngine.removeReplying()
+                // 模式 A：只停当前成员，排队的照常顺位递补（方案四.7）
+                if (groupQueueEngine.isNotEmpty) {
+                    startGroupQueueProcessor()
+                }
+            }
+            syncGroupQueue()
+            _isGenerating.value = false
+            settleInterruptedStreams()
+            notifyIdleIfNoWork()
+            return
+        }
         streamJob?.cancel()
         streamJob = null
         cancelPendingSend() // 同时取消 pending 的发送延迟
         _isGenerating.value = false
+        settleInterruptedStreams()
         notifyIdleIfNoWork()
     }
 
@@ -577,8 +1002,9 @@ class ChatViewModel(
      * @param compileEnabled 是否启用精调（来自 PersonaPanel 开关）
      */
     fun updatePersona(persona: Persona, compileEnabled: Boolean) {
-        val conv = conversation.value ?: return
         viewModelScope.launch {
+            // 协程内重读会话，避免与并发的其他设置操作互相覆盖（丢失更新竞态）
+            val conv = conversation.value ?: return@launch
             // 头部名字框同步规则：标题跟随人设名，除非用户已手动重命名过。
             // - 标题仍是默认"新会话" → 同步为新名
             // - 标题当前等于旧人设名（之前自动同步过）→ 跟随更新为新名
@@ -629,12 +1055,20 @@ class ChatViewModel(
     ): String {
         // 新名为空：保持原标题（不因清空名字而清空标题）
         if (newPersonaName.isBlank()) return currentTitle
-        return when (currentTitle) {
-            QuiddityConstants.DEFAULT_CONVERSATION_TITLE -> newPersonaName
-            oldPersonaName -> newPersonaName
+        return when {
+            // 旧默认「新会话」或 1.5.0 带编号默认名（新会话 1、2、3…）都可被 AI 名字覆盖
+            isDefaultSoloTitle(currentTitle) -> newPersonaName
+            currentTitle == oldPersonaName -> newPersonaName
             else -> currentTitle
         }
     }
+
+    /**
+     * 1.5.0 私聊默认名判定（方案二.4）：旧默认「新会话」或带编号的「新会话 N」。
+     */
+    private fun isDefaultSoloTitle(title: String): Boolean =
+        title == QuiddityConstants.DEFAULT_CONVERSATION_TITLE ||
+            title.startsWith(QuiddityConstants.SOLO_DEFAULT_TITLE_PREFIX + " ")
 
     /**
      * 判断用户可编辑的人设字段是否发生变化（用于 [updatePersona] 决定是否清空编译缓存）。
@@ -690,15 +1124,15 @@ class ChatViewModel(
     }
 
     fun updateUserPersona(userPersona: UserPersona) {
-        val conv = conversation.value ?: return
         viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
             conversationRepository.updateConversation(conv.copy(userPersona = userPersona))
         }
     }
 
     fun updateScene(scene: String) {
-        val conv = conversation.value ?: return
         viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
             // 场景修改后重置 sceneInjected=false，下次对话将新场景注入系统提示词
             conversationRepository.updateConversation(
                 conv.copy(scene = scene, sceneInjected = false)
@@ -707,8 +1141,8 @@ class ChatViewModel(
     }
 
     fun updateMemory(memory: String) {
-        val conv = conversation.value ?: return
         viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
             conversationRepository.updateConversation(conv.copy(memory = memory))
         }
     }
@@ -740,9 +1174,9 @@ class ChatViewModel(
      * @return 编译后的系统提示词文本
      */
     suspend fun compilePersona(persona: Persona, maxOutputTokens: Int): String {
-        val conv = conversation.value ?: throw IllegalStateException("会话不存在")
         _isCompiling.value = true
         try {
+            val conv = conversation.value ?: throw IllegalStateException("会话不存在")
             // 先把最新 persona 写入会话，确保 repository 读到的是最新字段
             val newTitle = syncTitleWithPersonaName(
                 currentTitle = conv.title,
@@ -788,26 +1222,23 @@ class ChatViewModel(
      * - 性别字段为空时回退为「暂不设置」；
      * - 直接覆盖现有 persona / userPersona / scene / memory（由 UI 在调用前确认）；
      * - 场景被覆盖后重置 sceneInjected=false，下次对话把新场景注入系统提示词；
-     * - 写入后在会话内插入一条居中灰色提示气泡（isNotice=true），展示当前场景与世界类型，
-     *   让用户直观了解快速设定生效后的场景状态。提示气泡不发给 LLM、不参与压缩、不导出。
+     * - 场景 / 世界类型提示由 ChatScreen 根据会话数据实时派生渲染（不落库为消息，
+     *   不发给 LLM、不参与压缩、不导出），用户直观看到快速设定生效后的场景状态。
      */
     fun applyQuickSetupResult(
         rawText: String,
         tier: com.quiddity.app.domain.QuickSetupTier
     ) {
-        val conv = conversation.value ?: return
-        val result = com.quiddity.app.domain.QuickSetupPrompt
-            .parseQuickSetupResult(rawText, tier)
-        val newTitle = syncTitleWithPersonaName(
-            currentTitle = conv.title,
-            oldPersonaName = conv.persona.name,
-            newPersonaName = result.persona.name
-        )
-        // 构造提示气泡内容：世界类型（世界背景前4个字）+ 当前场景
-        val worldType = result.persona.worldBackground.take(4)
-        val noticeContent = buildNoticeContent(worldType, result.scene)
         viewModelScope.launch {
             withContext(NonCancellable) {
+                val conv = conversation.value ?: return@withContext
+                val result = com.quiddity.app.domain.QuickSetupPrompt
+                    .parseQuickSetupResult(rawText, tier)
+                val newTitle = syncTitleWithPersonaName(
+                    currentTitle = conv.title,
+                    oldPersonaName = conv.persona.name,
+                    newPersonaName = result.persona.name
+                )
                 conversationRepository.updateConversation(
                     conv.copy(
                         persona = result.persona,
@@ -818,35 +1249,31 @@ class ChatViewModel(
                         sceneInjected = false
                     )
                 )
-                if (noticeContent.isNotBlank()) {
-                    val noticeMsg = Message(
-                        id = IdGenerator.newId(IdGenerator.Prefix.USER_MESSAGE),
-                        conversationId = conv.id,
-                        role = Role.SYSTEM,
-                        content = noticeContent,
-                        timestamp = System.currentTimeMillis(),
-                        isNotice = true
-                    )
-                    conversationRepository.appendMessage(noticeMsg)
-                }
             }
         }
     }
 
+    // ===== 快速设定草稿 =====
+    private var quickSetupDraftJob: Job? = null
+
     /**
-     * 构造快速设定提示气泡内容：世界类型 + 场景。
-     * - 世界类型为世界背景前4个汉字（LLM 按规则在 [世界背景] 字段首写4字世界类型）；
-     * - 场景为 [当前场景] 内容；
-     * - 两者皆有 → "世界类型 · 场景"；仅一项 → 该项；皆空 → 返回空串（不插气泡）。
+     * 更新快速设定描述草稿：500ms 防抖落盘，供面板关闭后回看/重新生成。
      */
-    private fun buildNoticeContent(worldType: String, scene: String): String {
-        val wt = worldType.trim()
-        val sc = scene.trim()
-        return when {
-            wt.isNotBlank() && sc.isNotBlank() -> "$wt · $sc"
-            wt.isNotBlank() -> wt
-            sc.isNotBlank() -> sc
-            else -> ""
+    fun updateQuickSetupDraft(draft: String) {
+        quickSetupDraftJob?.cancel()
+        quickSetupDraftJob = viewModelScope.launch {
+            kotlinx.coroutines.delay(500)
+            persistQuickSetupDraft(draft)
+        }
+    }
+
+    private fun persistQuickSetupDraft(draft: String) {
+        viewModelScope.launch {
+            withContext(NonCancellable) {
+                val conv = conversation.value ?: return@withContext
+                if (conv.quickSetupDraft == draft) return@withContext
+                conversationRepository.updateConversation(conv.copy(quickSetupDraft = draft))
+            }
         }
     }
 
@@ -912,8 +1339,8 @@ class ChatViewModel(
 
     /** 清空当前会话的人设、用户、场景、记忆设置（保留会话与消息记录）。 */
     fun clearConversationSettings() {
-        val conv = conversation.value ?: return
         viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
             conversationRepository.updateConversation(
                 conv.copy(
                     persona = Persona.Empty,
@@ -939,16 +1366,38 @@ class ChatViewModel(
      */
     fun clearConversationMessages() {
         if (_isGenerating.value) return
-        val conv = conversation.value ?: return
         viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
+            val isGroupConv = conv.type == ConversationType.GROUP
             conversationRepository.replaceMessages(conversationId, emptyList())
             conversationRepository.updateConversation(
-                conv.copy(
-                    compressedMemory = "",
-                    memoryIndex = "",
-                    lastCompressedAtRound = 0
-                )
+                if (isGroupConv) {
+                    // 群聊：清除聊天记录并重置群聊小本本
+                    conv.copy(groupMemory = "")
+                } else {
+                    conv.copy(
+                        compressedMemory = "",
+                        memoryIndex = "",
+                        lastCompressedAtRound = 0
+                    )
+                }
             )
+        }
+    }
+
+    /** 删除当前会话（含全部消息与设置），供群聊菜单「删除该会话」使用。 */
+    fun deleteCurrentConversation() {
+        val id = conversationId
+        groupStreamJob?.cancel()
+        groupStreamJob = null
+        streamJob?.cancel()
+        streamJob = null
+        cancelPendingSend()
+        viewModelScope.launch {
+            // NonCancellable：页面即将返回销毁 ViewModel，删除必须完整落盘后再释放
+            withContext(NonCancellable) {
+                conversationRepository.deleteConversation(id)
+            }
         }
     }
 
@@ -967,8 +1416,8 @@ class ChatViewModel(
 
     /** 导入人设卡到当前会话。 */
     fun importPersonaCard(card: PersonaCard) {
-        val conv = conversation.value ?: return
         viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
             // 场景可能随人设卡变更，重置 sceneInjected 让下次对话重新注入
             conversationRepository.updateConversation(
                 conv.copy(
@@ -984,8 +1433,8 @@ class ChatViewModel(
 
     /** 设置 AI 头像（会话级）。 */
     fun setAiAvatarUri(uri: String?) {
-        val conv = conversation.value ?: return
         viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
             conversationRepository.updateConversation(
                 conv.copy(persona = conv.persona.copy(aiAvatarUri = uri))
             )
@@ -1003,8 +1452,8 @@ class ChatViewModel(
      * Coil 能直接重新加载。
      */
     fun setWallpaperUri(uri: String?) {
-        val conv = conversation.value ?: return
         viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
             conversationRepository.updateConversation(conv.copy(wallpaperUri = uri))
         }
     }
@@ -1014,12 +1463,12 @@ class ChatViewModel(
      * 数值越大壁纸越暗，文字可读性越好但壁纸本身被遮挡。
      */
     fun setWallpaperDarken(value: Float) {
-        val conv = conversation.value ?: return
-        val clamped = value.coerceIn(
-            QuiddityConstants.MIN_WALLPAPER_DARKEN,
-            QuiddityConstants.MAX_WALLPAPER_DARKEN
-        )
         viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
+            val clamped = value.coerceIn(
+                QuiddityConstants.MIN_WALLPAPER_DARKEN,
+                QuiddityConstants.MAX_WALLPAPER_DARKEN
+            )
             conversationRepository.updateConversation(conv.copy(wallpaperDarken = clamped))
         }
     }
@@ -1041,17 +1490,16 @@ class ChatViewModel(
      * @return Result.success(Unit) 或 Result.failure(Throwable)
      */
     fun importConversationFromText(text: String): Result<Unit> {
-        val conv = conversation.value ?: return Result.failure(
-            IllegalStateException("会话未加载")
-        )
         return runCatching {
             val result = com.quiddity.app.util.ConversationCodec.importConversation(
                 content = text,
-                targetConversationId = conv.id
+                targetConversationId = conversationId
             )
             viewModelScope.launch {
+                // 协程内重读会话，避免覆盖并发修改（丢失更新竞态）
+                val conv = conversation.value ?: return@launch
                 // 1. 替换消息列表（覆盖式导入）
-                conversationRepository.replaceMessages(conv.id, result.messages)
+                conversationRepository.replaceMessages(conversationId, result.messages)
 
                 // 2. 更新人设卡信息（仅在解析到非空内容时更新对应字段）
                 val updatedPersona = if (
@@ -1088,7 +1536,7 @@ class ChatViewModel(
 
                 // 3. 标题更新：仅当当前是默认标题且解析到非默认标题时
                 val updatedTitle = if (
-                    conv.title == QuiddityConstants.DEFAULT_CONVERSATION_TITLE &&
+                    isDefaultSoloTitle(conv.title) &&
                     result.title.isNotBlank() &&
                     result.title != QuiddityConstants.DEFAULT_CONVERSATION_TITLE
                 ) {
@@ -1177,12 +1625,12 @@ class ChatViewModel(
      * 仍会再次同步。
      */
     fun updateContextLimit(limit: Int) {
-        val conv = conversation.value ?: return
-        val clamped = limit.coerceIn(
-            QuiddityConstants.MIN_CONTEXT_LIMIT,
-            QuiddityConstants.MAX_CONTEXT_LIMIT
-        )
         viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
+            val clamped = limit.coerceIn(
+                QuiddityConstants.MIN_CONTEXT_LIMIT,
+                QuiddityConstants.MAX_CONTEXT_LIMIT
+            )
             val newConv = if (conv.memoryBankEnabled) {
                 // 同步压缩轮数：跟随上下文记忆轮数，但限制在合法范围内
                 val syncRounds = clamped.coerceIn(
@@ -1197,16 +1645,175 @@ class ChatViewModel(
         }
     }
 
+    // ===== 会话级采样温度 / 官方联网搜索（模型配置） =====
+
+    /**
+     * 设置当前会话的采样温度覆盖（0～2；null = 跟随全局默认）。
+     * 官方文档：DeepSeek 思考模式下 temperature 不生效。
+     */
+    fun updateTemperature(value: Double?) {
+        viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
+            val clamped = value?.coerceIn(
+                QuiddityConstants.MIN_TEMPERATURE,
+                QuiddityConstants.MAX_TEMPERATURE
+            )
+            conversationRepository.updateConversation(conv.copy(temperature = clamped))
+        }
+    }
+
+    /**
+     * 设置当前会话的 DeepSeek 官方服务端联网搜索开关。
+     * 开启仅代表用户意愿；实际路由由 ChatRepository 按当前 API 配置能力判定。
+     */
+    fun updateWebSearchEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
+            conversationRepository.updateConversation(conv.copy(webSearchEnabled = enabled))
+        }
+    }
+
+    /** 设置当前会话的 DeepSeek 思考开关。 */
+    fun updateThinkingEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
+            conversationRepository.updateConversation(conv.copy(thinkingEnabled = enabled))
+        }
+    }
+
+    /** 设置当前会话的思考深度（浅 / 深）。 */
+    fun updateThinkingDepth(depth: String) {
+        val safe = when (depth) {
+            QuiddityConstants.THINKING_DEPTH_DEEP -> depth
+            else -> QuiddityConstants.THINKING_DEPTH_SHALLOW
+        }
+        viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
+            if (conv.thinkingDepth == safe) return@launch
+            conversationRepository.updateConversation(conv.copy(thinkingDepth = safe))
+        }
+    }
+
+    // ===== 群聊设置（方案十：群名称 / 上下文条数 N / 成员管理 / 停止模式） =====
+
+    /** 设置群聊上下文条数 N（范围 1～200）。 */
+    fun updateGroupContextLimit(limit: Int) {
+        viewModelScope.launch {
+            val group = conversation.value ?: return@launch
+            if (group.type != ConversationType.GROUP) return@launch
+            val clamped = limit.coerceIn(
+                QuiddityConstants.GROUP_MIN_CONTEXT_LIMIT,
+                QuiddityConstants.GROUP_MAX_CONTEXT_LIMIT
+            )
+            conversationRepository.updateConversation(group.copy(groupContextLimit = clamped))
+        }
+    }
+
+    /** 切换群聊停止模式（A=只停当前 / B=清空队列）。 */
+    fun updateGroupStopMode(mode: String) {
+        viewModelScope.launch {
+            val group = conversation.value ?: return@launch
+            if (group.type != ConversationType.GROUP) return@launch
+            conversationRepository.updateConversation(group.copy(stopMode = mode))
+        }
+    }
+
+    /**
+     * 设置群聊背景 / 场景（合并设置，注入所有成员的回复提示词）。
+     *
+     * @param mode [com.quiddity.app.util.QuiddityConstants.GROUP_BACKGROUND_MODE_*] 之一，
+     *   决定文本注入为【群聊背景】还是【群聊场景】节。
+     */
+    fun updateGroupBackground(text: String, mode: String) {
+        viewModelScope.launch {
+            val group = conversation.value ?: return@launch
+            if (group.type != ConversationType.GROUP) return@launch
+            conversationRepository.updateConversation(
+                group.copy(groupBackground = text.trim(), groupBackgroundMode = mode)
+            )
+        }
+    }
+
+    /**
+     * 添加群聊成员（方案十.5 + 需求）：逐个校验（用户名 / AI 名 / API 测试），
+     * 通过的角色加入（头像栏/成员列表显示），未通过的返回 (成员id, 原因) 列表，
+     * 供弹窗按成员重试或配置 API；最多 3 个。
+     */
+    fun addGroupMembers(ids: List<String>, onDone: (Result<Unit>, List<Pair<String, String>>) -> Unit) {
+        viewModelScope.launch {
+            val group = conversation.value ?: return@launch
+            if (group.type != ConversationType.GROUP) return@launch
+            val current = group.memberConversationIds
+            val newIds = ids.filter { it !in current }
+            val failures = mutableListOf<Pair<String, String>>()
+            val passed = mutableListOf<String>()
+            for (id in newIds) {
+                val member = conversationRepository.getConversation(id) ?: continue
+                val result = conversationRepository.validateGroupMember(member)
+                if (result.isFailure) {
+                    val name = member.persona.name.ifBlank { member.title }
+                    failures += id to "${result.exceptionOrNull()?.message ?: "校验失败"}（$name）"
+                } else {
+                    passed += id
+                }
+            }
+            if (passed.isEmpty()) {
+                onDone(
+                    Result.failure(IllegalStateException(
+                        failures.joinToString("\n") { (_, reason) -> reason }
+                    )),
+                    failures
+                )
+                return@launch
+            }
+            val target = (current + passed).distinct()
+            if (target.size > QuiddityConstants.GROUP_MAX_MEMBERS) {
+                onDone(
+                    Result.failure(IllegalStateException("群聊成员最多 ${QuiddityConstants.GROUP_MAX_MEMBERS} 个")),
+                    failures
+                )
+                return@launch
+            }
+            conversationRepository.updateConversation(group.copy(memberConversationIds = target))
+            onDone(Result.success(Unit), failures)
+        }
+    }
+
+    /**
+     * 为群聊成员（私聊会话）设置模型配置条目（null = 使用全局激活配置）。
+     */
+    fun setMemberApi(memberId: String, catalogId: String?) {
+        viewModelScope.launch {
+            val member = conversationRepository.getConversation(memberId) ?: return@launch
+            conversationRepository.updateConversation(member.copy(apiCatalogId = catalogId))
+        }
+    }
+
+    /** 移除群聊成员（踢出，方案十.4：最少 1 个；历史消息气泡保留）。 */
+    fun removeGroupMember(memberId: String) {
+        viewModelScope.launch {
+            val group = conversation.value ?: return@launch
+            if (group.type != ConversationType.GROUP) return@launch
+            if (group.memberConversationIds.size <= 1) {
+                _errorEvent.value = "群聊至少保留 1 个成员"
+                return@launch
+            }
+            conversationRepository.updateConversation(
+                group.copy(memberConversationIds = group.memberConversationIds - memberId)
+            )
+        }
+    }
+
     /**
      * 重置上下文记忆轮数为当前模型分级的默认值。
      *
      * 当 memoryBankEnabled 时，压缩轮数同步跟随重置后的上下文记忆轮数。
      */
     fun resetContextLimitToTierDefault() {
-        val conv = conversation.value ?: return
-        val tier = resolveCurrentTier()
-        val defaultLimit = apiCatalogManager.defaultContextLimitForTier(tier)
         viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
+            val tier = resolveCurrentTier()
+            val defaultLimit = apiCatalogManager.defaultContextLimitForTier(tier)
             val newConv = if (conv.memoryBankEnabled) {
                 val syncRounds = defaultLimit.coerceIn(
                     QuiddityConstants.MIN_MEMORY_BANK_ROUNDS,
@@ -1229,8 +1836,8 @@ class ChatViewModel(
      * 关闭时保留原值，便于下次开启时恢复用户偏好。
      */
     fun updateMemoryBankEnabled(enabled: Boolean) {
-        val conv = conversation.value ?: return
         viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
             val newConv = if (enabled) {
                 val syncRounds = conv.contextLimit.coerceIn(
                     QuiddityConstants.MIN_MEMORY_BANK_ROUNDS,
@@ -1248,12 +1855,12 @@ class ChatViewModel(
      * 设置记忆库压缩触发轮数（会话级设置）。
      */
     fun updateMemoryBankRounds(rounds: Int) {
-        val conv = conversation.value ?: return
-        val clamped = rounds.coerceIn(
-            QuiddityConstants.MIN_MEMORY_BANK_ROUNDS,
-            QuiddityConstants.MAX_MEMORY_BANK_ROUNDS
-        )
         viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
+            val clamped = rounds.coerceIn(
+                QuiddityConstants.MIN_MEMORY_BANK_ROUNDS,
+                QuiddityConstants.MAX_MEMORY_BANK_ROUNDS
+            )
             conversationRepository.updateConversation(conv.copy(memoryBankRounds = clamped))
         }
     }
@@ -1267,12 +1874,17 @@ class ChatViewModel(
     /** 发送延迟计时器。 */
     private var sendDelayJob: Job? = null
 
+    /** 输入框最后一次编辑时间（含退格，用于发送延迟防抖重计时）。 */
+    private var lastInputEditAt = 0L
+
     /**
      * 更新输入框文本状态（由 ChatInputBar 调用）。
-     * 用于发送延迟检测：当输入框为空时才真正发出 API 请求。
+     * 用于发送延迟检测：记录每次编辑（含退格），防抖重计时。
      */
     fun updateInputText(text: String) {
+        if (_inputBarText.value == text) return
         _inputBarText.value = text
+        lastInputEditAt = System.currentTimeMillis()
     }
 
     /**
@@ -1312,10 +1924,10 @@ class ChatViewModel(
      * 切换 API 时自动重置上下文记忆轮数为新模型分级的默认值。
      */
     fun setConversationApi(catalogId: String) {
-        val conv = conversation.value ?: return
-        val settings = settingsRepository.currentSnapshot()
-        val entry = settings.catalog.firstOrNull { it.id == catalogId } ?: return
         viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
+            val settings = settingsRepository.currentSnapshot()
+            val entry = settings.catalog.firstOrNull { it.id == catalogId } ?: return@launch
             applyEntrySelection(conv, entry, explicit = true)
         }
     }
@@ -1351,6 +1963,12 @@ class ChatViewModel(
         } else {
             conv.memoryBankRounds
         }
+        // 切换到不支持服务端搜索的模型时自动关闭官方联网搜索，避免开关状态与实际能力不一致
+        val newWebSearch = if (conv.webSearchEnabled) {
+            apiCatalogManager.supportsServerWebSearch(entry)
+        } else {
+            false
+        }
         conversationRepository.updateConversation(
             conv.copy(
                 apiCatalogId = if (explicit) entry.id else conv.apiCatalogId,
@@ -1358,7 +1976,8 @@ class ChatViewModel(
                 tokenCountApiId = entry.id,
                 lastUsedModel = entry.apiModel,
                 contextLimit = newContextLimit,
-                memoryBankRounds = syncRounds
+                memoryBankRounds = syncRounds,
+                webSearchEnabled = newWebSearch
             )
         )
     }
@@ -1371,11 +1990,11 @@ class ChatViewModel(
      * - 关闭：注销该会话所有定时闹钟
      */
     fun setActiveMessageEnabled(enabled: Boolean) {
-        val conv = conversation.value ?: return
         if (enabled) {
             _timeLibraryHint.value = "正在生成今日时间库…"
         }
         viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
             val outcome = ServiceLocator.timeLibraryRepository.setConversationEnabled(conv, enabled)
             if (enabled) {
                 val times = conversation.value?.timeLibrary.orEmpty()
@@ -1398,8 +2017,8 @@ class ChatViewModel(
 
     /** 用户成功输入时间库查看密码后调用：记住已解锁，之后输密码弹窗直接显示密码。 */
     fun markTimeLibraryUnlocked() {
-        val conv = conversation.value ?: return
         viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
             if (!conv.timeLibraryPasswordUnlocked) {
                 conversationRepository.updateConversation(conv.copy(timeLibraryPasswordUnlocked = true))
             }
@@ -1419,12 +2038,12 @@ class ChatViewModel(
      * 再委托协调器生成时间库并注册闹钟。当天已生成 / 开关未开启时静默返回。
      */
     fun ensureTimeLibraryGenerated() {
-        val conv = conversation.value ?: return
-        if (!conv.activeMessageEnabled) return
-        val today = java.time.LocalDate.now().toString()
-        if (!TimeLibraryEngine.shouldGenerate(true, conv.timeLibraryGeneratedDate, today)) return
-        _timeLibraryHint.value = "正在整理前一天的记忆！"
         viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
+            if (!conv.activeMessageEnabled) return@launch
+            val today = java.time.LocalDate.now().toString()
+            if (!TimeLibraryEngine.shouldGenerate(true, conv.timeLibraryGeneratedDate, today)) return@launch
+            _timeLibraryHint.value = "正在整理前一天的记忆！"
             val outcome = ServiceLocator.timeLibraryRepository.ensureLibraryGeneratedToday(conv.id)
             val times = conversation.value?.timeLibrary.orEmpty()
             _timeLibraryHint.value = when (outcome) {

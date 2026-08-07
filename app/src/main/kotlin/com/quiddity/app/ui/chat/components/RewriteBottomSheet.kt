@@ -50,7 +50,9 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import com.quiddity.app.ui.theme.Motion
 import kotlinx.coroutines.delay
@@ -108,8 +110,10 @@ fun RewriteBottomSheet(
     val screenHeight = configuration.screenHeightDp.dp
     val sheetHeight = screenHeight * 0.1f
 
-    // 改写文本状态（rememberSaveable 保证旋转屏不丢失）
-    var text by rememberSaveable { mutableStateOf(initialText) }
+    // 改写文本状态（rememberSaveable 保证旋转屏不丢失；selection 初始化为末尾，修复光标在开头的问题）
+    var textFieldValue by rememberSaveable(stateSaver = TextFieldValue.Saver) {
+        mutableStateOf(TextFieldValue(initialText, selection = TextRange(initialText.length)))
+    }
     var visible by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
@@ -194,8 +198,8 @@ fun RewriteBottomSheet(
                 ) {
                     // 圆角矩形输入框（与对话输入栏圆角一致：24dp）
                     TextField(
-                        value = text,
-                        onValueChange = { text = it },
+                        value = textFieldValue,
+                        onValueChange = { textFieldValue = it },
                         modifier = Modifier
                             .weight(1f)
                             .heightIn(min = 48.dp, max = 140.dp)
@@ -228,21 +232,21 @@ fun RewriteBottomSheet(
 
                     Spacer(modifier = Modifier.size(8.dp))
 
-                    val canSave = text.isNotBlank() && text != initialText
+                    val canSave = textFieldValue.text.isNotBlank() && textFieldValue.text != initialText
                     Box(
                         modifier = Modifier
                             .size(40.dp)
                             .clip(CircleShape)
                             .background(
-                                if (text.isNotBlank()) MaterialTheme.colorScheme.primary
+                                if (textFieldValue.text.isNotBlank()) MaterialTheme.colorScheme.primary
                                 else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
                             )
                             .clickable(
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null
                             ) {
-                                if (text.isNotBlank()) {
-                                    val saved = text
+                                if (textFieldValue.text.isNotBlank()) {
+                                    val saved = textFieldValue.text
                                     closeWithAction { onSave(saved) }
                                 }
                             },
@@ -251,7 +255,7 @@ fun RewriteBottomSheet(
                         Icon(
                             imageVector = Icons.Filled.Check,
                             contentDescription = "保存改写",
-                            tint = if (text.isNotBlank()) MaterialTheme.colorScheme.onPrimary
+                            tint = if (textFieldValue.text.isNotBlank()) MaterialTheme.colorScheme.onPrimary
                             else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                             modifier = Modifier.size(20.dp)
                         )

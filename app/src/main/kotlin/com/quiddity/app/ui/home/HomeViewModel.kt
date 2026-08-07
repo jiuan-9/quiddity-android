@@ -3,11 +3,16 @@ package com.quiddity.app.ui.home
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.quiddity.app.data.model.Conversation
+import com.quiddity.app.data.model.ConversationType
+import com.quiddity.app.data.model.Message
 import com.quiddity.app.data.repo.ConversationRepository
+import com.quiddity.app.domain.GlobalChatSearch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -64,6 +69,19 @@ class HomeViewModel(
                 initialValue = conversationRepository.conversations.value
             )
 
+    // ===== 私聊 / 群聊分节（方案十四：双列表各自独立） =====
+    val soloConversations: StateFlow<List<Conversation>> = conversations
+        .map { list -> list.filter { it.type != ConversationType.GROUP } }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    val groupConversations: StateFlow<List<Conversation>> = conversations
+        .map { list -> list.filter { it.type == ConversationType.GROUP } }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /** 群聊成员会话解析（id → Conversation），供列表头像拼合与成员校验。 */
+    fun memberConversations(ids: List<String>): List<Conversation> =
+        ids.mapNotNull { id -> conversationRepository.getConversation(id) }
+
     fun createConversation() {
         viewModelScope.launch {
             conversationRepository.createConversation()
@@ -71,12 +89,46 @@ class HomeViewModel(
     }
 
     /**
+     * 创建群聊（需求：与创建私聊一致，只创建列表项，不直接进入；
+     * 成员随后在会话设置-成员管理中添加）。
+     */
+    fun createGroupConversation() {
+        viewModelScope.launch {
+            conversationRepository.createGroupConversation(emptyList(), null)
+        }
+    }
+
+    /**
      * 批量删除多个会话（多选模式触发）。
      *
      * - 删除时同时清理 messages_<id>.json 文件 + 内存缓存 + Flow（store 内部实现）。
+     * - 私聊删除保护（方案十.6）：被群聊引用的私聊先回调确认，确认后走
+     *   [confirmDeleteReferencedConversations] 从群聊中移除成员。
      */
-    fun deleteConversations(convIds: List<String>) {
+    fun deleteConversations(
+        convIds: List<String>,
+        onReferencedByGroups: (List<String>) -> Unit = {}
+    ) {
         if (convIds.isEmpty()) return
+        val referenced = convIds.filter {
+            conversationRepository.groupsReferencing(it).isNotEmpty()
+        }
+        if (referenced.isNotEmpty()) {
+            onReferencedByGroups(referenced)
+            return
+        }
+        performDelete(convIds)
+    }
+
+    /** 用户确认后删除被群聊引用的私聊，并把这些成员从群聊中移除（历史保留）。 */
+    fun confirmDeleteReferencedConversations(convIds: List<String>) {
+        viewModelScope.launch {
+            conversationRepository.deleteConversations(convIds)
+            convIds.forEach { conversationRepository.removeMemberFromGroups(it) }
+        }
+    }
+
+    private fun performDelete(convIds: List<String>) {
         viewModelScope.launch {
             conversationRepository.deleteConversations(convIds)
         }
@@ -86,6 +138,40 @@ class HomeViewModel(
         viewModelScope.launch {
             conversationRepository.renameConversation(convId, newTitle)
         }
+    }
+
+    // ===== 全局消息搜索 =====
+    // 首次搜索时懒加载全量消息索引并缓存；会话列表任何变化（新增/删除/消息导致
+    // updatedAt 变化）都会把索引标记为过期，下次搜索自动重建，保证新消息可搜。
+    private val _messageIndex = MutableStateFlow<Map<String, List<Message>>>(emptyMap())
+    private var messageIndexLoaded = false
+    private var indexDirty = true
+
+    init {
+        viewModelScope.launch {
+            conversationRepository.conversations.collect {
+                indexDirty = true
+            }
+        }
+    }
+
+    /** 确保消息索引已加载（首次搜索时触发，只加载一次）。 */
+    suspend fun ensureMessageIndexLoaded() {
+        if (messageIndexLoaded && !indexDirty) return
+        _messageIndex.value = conversationRepository.exportAllMessages()
+        messageIndexLoaded = true
+        indexDirty = false
+    }
+
+    /**
+     * 按 [query] 跨会话搜索消息，返回按时间倒序的命中列表。
+     * 调用前需先 [ensureMessageIndexLoaded]。
+     */
+    fun searchMessages(query: String): List<GlobalChatSearch.Hit> {
+        val index = _messageIndex.value
+        if (query.isBlank() || index.isEmpty()) return emptyList()
+        val titles = conversations.value.associate { it.id to it.title }
+        return GlobalChatSearch.searchAll(index, titles, query)
     }
 }
 

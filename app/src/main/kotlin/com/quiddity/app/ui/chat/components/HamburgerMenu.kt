@@ -16,18 +16,23 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
@@ -43,11 +48,14 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Compress
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -68,15 +76,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
+import com.quiddity.app.data.model.ConversationType
 import com.quiddity.app.data.model.Role
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.quiddity.app.data.model.Conversation
@@ -95,11 +107,15 @@ import com.quiddity.app.ui.chat.components.panels.TokenStatsPanel
 import com.quiddity.app.ui.chat.components.panels.UserPersonaPanel
 import com.quiddity.app.ui.chat.components.panels.WallpaperPanel
 import com.quiddity.app.ui.components.ActiveMessagePermissionCard
+import com.quiddity.app.ui.components.AiAvatar
+import com.quiddity.app.ui.components.ApiEditBottomSheet
 import com.quiddity.app.ui.components.ApiCatalogEditFormState
 import com.quiddity.app.ui.components.ConfirmDialog
 import com.quiddity.app.util.DateUtils
 import com.quiddity.app.ui.components.ExpandableText
 import com.quiddity.app.ui.components.QuiddityToggleSwitch
+import com.quiddity.app.ui.components.TemperatureSlider
+import com.quiddity.app.util.QuiddityConstants
 import com.quiddity.app.ui.settings.SettingsViewModel
 import com.quiddity.app.ui.theme.Motion
 import com.quiddity.app.util.ConversationCodec
@@ -148,6 +164,8 @@ fun HamburgerMenu(
     viewModel: ChatViewModel,
     settingsViewModel: SettingsViewModel,
     onDismiss: () -> Unit,
+    // 群聊菜单「删除该会话」确认后回调（由 ChatScreen 执行删除并返回首页）
+    onDeleteConversation: () -> Unit = {},
     onJumpToMessage: ((String) -> Unit)? = null
 ) {
     val context = LocalContext.current
@@ -157,6 +175,17 @@ fun HamburgerMenu(
     val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
     val apiCatalogManager = remember { ServiceLocator.apiCatalogManager }
     val currentTier = remember(conversation) { viewModel.resolveCurrentTier() }
+    val webSearchSupported = remember(conversation, settings) {
+        val conv = conversation ?: return@remember false
+        val entry = apiCatalogManager.resolveEntry(settings, conv) ?: return@remember false
+        apiCatalogManager.supportsServerWebSearch(entry)
+    }
+    val currentModelId = remember(conversation, settings) {
+        settings.catalog
+            .firstOrNull { it.id == (conversation?.apiCatalogId ?: settings.activeCatalogId) }
+            ?.apiModel
+            ?: "未选择"
+    }
 
     // Android 13+ 需要通知权限：开启主动消息时一并请求，保证到点能弹通知
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
@@ -167,6 +196,7 @@ fun HamburgerMenu(
     var currentPanel by remember { mutableStateOf<HamburgerPanel?>(null) }
     var pendingClearSettings by remember { mutableStateOf(false) }
     var pendingClearMessages by remember { mutableStateOf(false) }
+    var pendingDeleteConversation by remember { mutableStateOf(false) }
     var toastMsg by remember { mutableStateOf<String?>(null) }
     // JSON 全量导入时暂存 payload，已有数据则弹窗让用户抉择替换/合并/取消
     var pendingImportPayload by remember { mutableStateOf<ExportPayload?>(null) }
@@ -412,7 +442,8 @@ fun HamburgerMenu(
                         alpha = menuAlphaState.floatValue
                     },
                 color = if (hasWallpaper) {
-                    MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
+                    // 毛玻璃半透明面板：透出壁纸，保留文字可读
+                    MaterialTheme.colorScheme.surface.copy(alpha = 0.82f)
                 } else {
                     MaterialTheme.colorScheme.surface
                 },
@@ -436,64 +467,110 @@ fun HamburgerMenu(
                     modifier = Modifier
                         .fillMaxSize()
                         .windowInsetsPadding(WindowInsets.statusBars)
+                        .imePadding()
                 ) { panel ->
                     when (panel) {
-                        null -> MainMenuContent(
-                            conversation = conversation,
-                            messages = messages,
-                            currentTier = currentTier,
-                            settings = settings,
-                            hasWallpaper = hasWallpaper,
-                            onPanelSelected = { currentPanel = it },
-                            onDismiss = onDismiss,
-                            darkMode = settings.darkMode,
-                            onDarkModeChange = { settingsViewModel.setDarkMode(it) },
-                            onClearSettings = { pendingClearSettings = true },
-                            onExportPersona = { personaExportLauncher.launch("quiddity-persona-${IdGenerator.newUuid()}.json") },
-                            onImportPersona = { personaImportLauncher.launch(arrayOf("application/json")) },
-                            onExportConversation = { pendingExportFormat = ExportFormatPicker() },
-                            onImportConversation = {
-                                conversationImportLauncher.launch(
-                                    arrayOf(
-                                        "application/json",
-                                        "text/markdown",
-                                        "text/plain",
-                                        "application/octet-stream"
-                                    )
+                        null -> {
+                            if (conversation?.type == ConversationType.GROUP) {
+                                GroupMenuContent(
+                                    conversation = conversation,
+                                    onDismiss = onDismiss,
+                                    onRename = {
+                                        currentPanel = HamburgerPanel.GroupName
+                                    },
+                                    onContextLimit = {
+                                        currentPanel = HamburgerPanel.GroupContextLimit
+                                    },
+                                    onStopModeChange = { mode ->
+                                        viewModel.updateGroupStopMode(mode)
+                                    },
+                                    onGroupBackground = {
+                                        currentPanel = HamburgerPanel.GroupBackground
+                                    },
+                                    onWallpaper = {
+                                        currentPanel = HamburgerPanel.Wallpaper
+                                    },
+                                    onManageMembers = {
+                                        currentPanel = HamburgerPanel.GroupMembers
+                                    },
+                                    onSearchChat = { currentPanel = HamburgerPanel.SearchChat },
+                                    onClearMessages = { pendingClearMessages = true },
+                                    onDeleteConversation = { pendingDeleteConversation = true },
+                                    darkMode = settings.darkMode,
+                                    onDarkModeChange = { dark -> settingsViewModel.setDarkMode(dark) }
                                 )
-                            },
-                            onContextLimitChange = { limit ->
-                                viewModel.updateContextLimit(limit)
-                            },
-                            onResetContextLimit = {
-                                viewModel.resetContextLimitToTierDefault()
-                            },
-                            onMemoryBankEnabledChange = { enabled ->
-                                viewModel.updateMemoryBankEnabled(enabled)
-                            },
-                            onMemoryBankRoundsChange = { rounds ->
-                                viewModel.updateMemoryBankRounds(rounds)
-                            },
-                            onCompressionClick = { currentPanel = HamburgerPanel.Compression },
-                            onClearMessages = { pendingClearMessages = true },
-                            onActiveMessageChange = { enabled ->
-                                if (enabled &&
-                                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                                    ContextCompat.checkSelfPermission(
-                                        context,
-                                        Manifest.permission.POST_NOTIFICATIONS
-                                    ) != PackageManager.PERMISSION_GRANTED
-                                ) {
-                                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                                }
-                                viewModel.setActiveMessageEnabled(enabled)
-                            },
-                            onViewTimeLibrary = {
-                                timeLibraryViewStep =
-                                    if (conversation?.timeLibraryPasswordUnlocked == true) 2 else 1
-                            },
-                            onOpenSearchChat = { currentPanel = HamburgerPanel.SearchChat }
-                        )
+                            } else {
+                                MainMenuContent(
+                                    conversation = conversation,
+                                    messages = messages,
+                                    currentTier = currentTier,
+                                    settings = settings,
+                                    onPanelSelected = { currentPanel = it },
+                                    onDismiss = onDismiss,
+                                    darkMode = settings.darkMode,
+                                    onDarkModeChange = { settingsViewModel.setDarkMode(it) },
+                                    onClearSettings = { pendingClearSettings = true },
+                                    onExportPersona = { personaExportLauncher.launch("quiddity-persona-${IdGenerator.newUuid()}.json") },
+                                    onImportPersona = { personaImportLauncher.launch(arrayOf("application/json")) },
+                                    onExportConversation = { pendingExportFormat = ExportFormatPicker() },
+                                    onImportConversation = {
+                                        conversationImportLauncher.launch(
+                                            arrayOf(
+                                                "application/json",
+                                                "text/markdown",
+                                                "text/plain",
+                                                "application/octet-stream"
+                                            )
+                                        )
+                                    },
+                                    onContextLimitChange = { limit ->
+                                        viewModel.updateContextLimit(limit)
+                                    },
+                                    onResetContextLimit = {
+                                        viewModel.resetContextLimitToTierDefault()
+                                    },
+                                    onMemoryBankEnabledChange = { enabled ->
+                                        viewModel.updateMemoryBankEnabled(enabled)
+                                    },
+                                    onMemoryBankRoundsChange = { rounds ->
+                                        viewModel.updateMemoryBankRounds(rounds)
+                                    },
+                                    onCompressionClick = { currentPanel = HamburgerPanel.Compression },
+                                    onClearMessages = { pendingClearMessages = true },
+                                    onActiveMessageChange = { enabled ->
+                                        if (enabled &&
+                                            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                                            ContextCompat.checkSelfPermission(
+                                                context,
+                                                Manifest.permission.POST_NOTIFICATIONS
+                                            ) != PackageManager.PERMISSION_GRANTED
+                                        ) {
+                                            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                        }
+                                        viewModel.setActiveMessageEnabled(enabled)
+                                    },
+                                    onViewTimeLibrary = {
+                                        timeLibraryViewStep =
+                                            if (conversation?.timeLibraryPasswordUnlocked == true) 2 else 1
+                                    },
+                                    onOpenSearchChat = { currentPanel = HamburgerPanel.SearchChat },
+                                    webSearchSupported = webSearchSupported,
+                                    currentModelId = currentModelId,
+                                    onTemperatureChange = { value ->
+                                        viewModel.updateTemperature(value)
+                                    },
+                                    onThinkingEnabledChange = { enabled ->
+                                        viewModel.updateThinkingEnabled(enabled)
+                                    },
+                                    onThinkingDepthChange = { depth ->
+                                        viewModel.updateThinkingDepth(depth)
+                                    },
+                                    onWebSearchChange = { enabled ->
+                                        viewModel.updateWebSearchEnabled(enabled)
+                                    }
+                                )
+                            }
+                        }
                         HamburgerPanel.QuickSetup -> {
                             conversation?.let { conv ->
                                 val tier = viewModel.resolveCurrentTier()
@@ -513,11 +590,23 @@ fun HamburgerMenu(
                                 QuickSetupPanel(
                                     currentTier = tier,
                                     hasExistingContent = hasExisting,
+                                    hasMessages = messages.any { !it.isNotice },
+                                    initialDraft = conv.quickSetupDraft,
+                                    onDraftChange = { draft ->
+                                        viewModel.updateQuickSetupDraft(draft)
+                                    },
                                     onGenerate = { description, selectedTier ->
                                         viewModel.quickSetupGenerate(description, selectedTier)
                                     },
                                     onApply = { rawText, selectedTier ->
                                         viewModel.applyQuickSetupResult(rawText, selectedTier)
+                                    },
+                                    onFinished = {
+                                        currentPanel = null
+                                        onDismiss()
+                                    },
+                                    onClearMessages = {
+                                        viewModel.clearConversationMessages()
                                     },
                                     onBack = { currentPanel = null }
                                 )
@@ -668,6 +757,53 @@ fun HamburgerMenu(
                                 }
                             )
                         }
+                        HamburgerPanel.GroupName -> {
+                            conversation?.let { conv ->
+                                GroupNamePanel(
+                                    currentName = conv.title,
+                                    onBack = { currentPanel = null },
+                                    onSave = { name ->
+                                        viewModel.renameConversation(name)
+                                        currentPanel = null
+                                    }
+                                )
+                            }
+                        }
+                        HamburgerPanel.GroupContextLimit -> {
+                            conversation?.let { conv ->
+                                GroupContextLimitPanel(
+                                    currentLimit = conv.groupContextLimit,
+                                    onBack = { currentPanel = null },
+                                    onSave = { limit ->
+                                        viewModel.updateGroupContextLimit(limit)
+                                        currentPanel = null
+                                    }
+                                )
+                            }
+                        }
+                        HamburgerPanel.GroupMembers -> {
+                            conversation?.let { conv ->
+                                GroupMemberManagePanel(
+                                    group = conv,
+                                    viewModel = viewModel,
+                                    settings = settings,
+                                    onBack = { currentPanel = null }
+                                )
+                            }
+                        }
+                        HamburgerPanel.GroupBackground -> {
+                            conversation?.let { conv ->
+                                GroupBackgroundPanel(
+                                    currentText = conv.groupBackground,
+                                    currentMode = conv.groupBackgroundMode,
+                                    onBack = { currentPanel = null },
+                                    onSave = { text, mode ->
+                                        viewModel.updateGroupBackground(text, mode)
+                                        currentPanel = null
+                                    }
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -690,9 +826,14 @@ fun HamburgerMenu(
     }
 
     if (pendingClearMessages) {
+        val isGroupConv = conversation?.type == ConversationType.GROUP
         ConfirmDialog(
-            title = "清空会话记录（含压缩对话）",
-            message = "将删除当前会话的所有消息，并重置压缩记忆（compressedMemory / lastCompressedAtRound）。AI 人设 / 用户 / 场景 / 记忆 / 壁纸保留。此操作不可撤销。",
+            title = if (isGroupConv) "清除群聊记录" else "清空会话记录（含压缩对话）",
+            message = if (isGroupConv) {
+                "将删除本群聊的所有消息，并重置群聊小本本（groupMemory）。群聊设置与成员保持不变。此操作不可撤销。"
+            } else {
+                "将删除当前会话的所有消息，并重置压缩记忆（compressedMemory / lastCompressedAtRound）。AI 人设 / 用户 / 场景 / 记忆 / 壁纸保留。此操作不可撤销。"
+            },
             confirmText = "清空",
             onConfirm = {
                 viewModel.clearConversationMessages()
@@ -700,6 +841,19 @@ fun HamburgerMenu(
                 toastMsg = "会话记录已清空"
             },
             onDismiss = { pendingClearMessages = false }
+        )
+    }
+
+    if (pendingDeleteConversation) {
+        ConfirmDialog(
+            title = "删除该会话",
+            message = "将删除当前群聊及其全部消息记录，成员私聊不受影响。此操作不可撤销。",
+            confirmText = "删除",
+            onConfirm = {
+                pendingDeleteConversation = false
+                onDeleteConversation()
+            },
+            onDismiss = { pendingDeleteConversation = false }
         )
     }
 
@@ -812,7 +966,7 @@ fun HamburgerMenu(
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.surfaceContainerLow
+                        color = com.quiddity.app.ui.components.glassCardColor()
                     ) {
                         Text(
                             text = "提示：你也可以在此菜单中单独导入人设卡或对话记录",
@@ -918,7 +1072,7 @@ private fun ExportFormatPickerDialog(
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null
                             ) { onSelect(format) },
-                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                        color = com.quiddity.app.ui.components.glassCardColor(),
                         tonalElevation = 0.dp
                     ) {
                         Row(
@@ -1093,6 +1247,7 @@ private fun SearchChatPanel(
                         ChatSearchResultRow(
                             message = message,
                             conversation = conversation,
+                            query = query,
                             onClick = { onOpenMessage(message.id) }
                         )
                     }
@@ -1106,6 +1261,7 @@ private fun SearchChatPanel(
 private fun ChatSearchResultRow(
     message: com.quiddity.app.data.model.Message,
     conversation: Conversation?,
+    query: String,
     onClick: () -> Unit
 ) {
     val isUser = message.role == Role.USER
@@ -1115,6 +1271,31 @@ private fun ChatSearchResultRow(
         conversation?.persona?.name?.ifBlank { conversation.title } ?: "AI"
     }
     val avatarUri = if (isUser) null else conversation?.persona?.aiAvatarUri
+    val colorScheme = MaterialTheme.colorScheme
+    val excerpt = remember(message.content, query) {
+        com.quiddity.app.domain.ChatRecordSearch.buildExcerpt(message.content, query)
+    }
+    val displayText = remember(excerpt, message.content, name, colorScheme) {
+        val fallback = message.content.replace("\n", " ").trim()
+            .let { if (it.length > 80) it.take(80) + "…" else it }
+        val prefix = "$name："
+        buildAnnotatedString {
+            append(prefix)
+            append(excerpt?.text ?: fallback)
+            if (excerpt != null) {
+                excerpt.highlights.forEach { range ->
+                    addStyle(
+                        SpanStyle(
+                            background = colorScheme.primary.copy(alpha = 0.15f),
+                            fontWeight = FontWeight.SemiBold
+                        ),
+                        start = prefix.length + range.first,
+                        end = prefix.length + range.last + 1
+                    )
+                }
+            }
+        }
+    }
 
     Surface(
         modifier = Modifier
@@ -1125,7 +1306,7 @@ private fun ChatSearchResultRow(
                 indication = null,
                 onClick = onClick
             ),
-        color = MaterialTheme.colorScheme.surfaceContainerLow
+        color = com.quiddity.app.ui.components.glassCardColor()
     ) {
         Row(
             modifier = Modifier.padding(12.dp),
@@ -1175,9 +1356,7 @@ private fun ChatSearchResultRow(
                 }
                 Spacer(modifier = Modifier.size(4.dp))
                 Text(
-                    text = message.content.replace("\n", " ").trim().let {
-                        if (it.length > 80) it.take(80) + "…" else it
-                    },
+                    text = displayText,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 2,
@@ -1310,7 +1489,8 @@ private fun TimeLibraryDetailDialog(
 
 internal enum class HamburgerPanel {
     QuickSetup, Persona, UserPersona, Scene, ApiSelector, ApiEditor,
-    Wallpaper, Compression, SearchChat
+    Wallpaper, Compression, SearchChat,
+    GroupName, GroupContextLimit, GroupMembers, GroupBackground
 }
 
 // ==================== 主菜单 ====================
@@ -1321,7 +1501,6 @@ private fun MainMenuContent(
     messages: List<com.quiddity.app.data.model.Message>,
     currentTier: com.quiddity.app.domain.ApiCatalogManager.ModelTier,
     settings: com.quiddity.app.data.model.AppSettings,
-    hasWallpaper: Boolean,
     onPanelSelected: (HamburgerPanel) -> Unit,
     onDismiss: () -> Unit,
     darkMode: Boolean,
@@ -1339,8 +1518,16 @@ private fun MainMenuContent(
     onClearMessages: () -> Unit,
     onActiveMessageChange: (Boolean) -> Unit,
     onViewTimeLibrary: () -> Unit,
-    onOpenSearchChat: () -> Unit
+    onOpenSearchChat: () -> Unit,
+    webSearchSupported: Boolean,
+    currentModelId: String,
+    onTemperatureChange: (Double?) -> Unit,
+    onThinkingEnabledChange: (Boolean) -> Unit,
+    onThinkingDepthChange: (String) -> Unit,
+    onWebSearchChange: (Boolean) -> Unit
 ) {
+    var showTemperatureEditor by remember { mutableStateOf(false) }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1384,7 +1571,7 @@ private fun MainMenuContent(
             verticalArrangement = Arrangement.spacedBy(2.dp)
         ) {
             // 外观
-            SectionHeader("外观")
+            MenuSectionCard(title = "外观") {
             // 会话内的"外观"只是全局主题的一个快捷入口，状态直接来自 settings.darkMode，
             // 切换时调用 SettingsViewModel.setDarkMode，与设置面板中的总开关保持一致。
             ToggleMenuRow(
@@ -1392,7 +1579,6 @@ private fun MainMenuContent(
                 subtitle = if (darkMode) "当前：暗色" else "当前：亮色",
                 checked = darkMode,
                 onCheckedChange = onDarkModeChange,
-                hasWallpaper = hasWallpaper
             )
             // - 仅对当前会话生效，不影响其他会话
             // - 持久化到 conversation.wallpaperUri
@@ -1400,16 +1586,15 @@ private fun MainMenuContent(
                 title = "会话壁纸",
                 subtitle = if (conversation?.wallpaperUri != null) "已设置" else "未设置",
                 onClick = { onPanelSelected(HamburgerPanel.Wallpaper) },
-                hasWallpaper = hasWallpaper
             )
 
             // 人设
-            SectionHeader("人设")
+            }
+            MenuSectionCard(title = "人设") {
             MenuRow(
                 title = "快速设定",
                 subtitle = "描述你想要的人设，AI 一次性生成并填入",
                 onClick = { onPanelSelected(HamburgerPanel.QuickSetup) },
-                hasWallpaper = hasWallpaper,
                 expandableSubtitle = true
             )
             val aiPersonaName = conversation?.persona?.name
@@ -1418,7 +1603,6 @@ private fun MainMenuContent(
                 title = "AI 人设",
                 subtitle = if (aiPersonaSet) "AI: $aiPersonaName" else "未设置",
                 onClick = { onPanelSelected(HamburgerPanel.Persona) },
-                hasWallpaper = hasWallpaper,
                 expandableSubtitle = true,
                 subtitleColor = if (aiPersonaSet) {
                     MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
@@ -1431,7 +1615,6 @@ private fun MainMenuContent(
                 subtitle = if (conversation?.userPersona?.name?.isNotBlank() == true)
                     "用户: ${conversation.userPersona.name}" else "未设置",
                 onClick = { onPanelSelected(HamburgerPanel.UserPersona) },
-                hasWallpaper = hasWallpaper,
                 expandableSubtitle = true
             )
             MenuRow(
@@ -1439,29 +1622,71 @@ private fun MainMenuContent(
                 subtitle = if (conversation?.scene?.isNotBlank() == true)
                     conversation.scene.trim() else "未设置",
                 onClick = { onPanelSelected(HamburgerPanel.Scene) },
-                hasWallpaper = hasWallpaper,
                 expandableSubtitle = true
             )
-
             // 模型配置
-            SectionHeader("模型配置")
+            }
+            MenuSectionCard(title = "模型配置") {
             MenuRow(
                 title = "选择模型配置",
                 subtitle = settings.catalog
                     .firstOrNull { it.id == (conversation?.apiCatalogId ?: settings.activeCatalogId) }
                     ?.let { "当前：${it.name} · ${it.apiModel}" } ?: "未选择",
                 onClick = { onPanelSelected(HamburgerPanel.ApiSelector) },
-                hasWallpaper = hasWallpaper,
                 expandableSubtitle = true
             )
             MenuRow(
                 title = "管理模型配置",
                 subtitle = "添加、编辑或删除模型配置",
                 onClick = { onPanelSelected(HamburgerPanel.ApiEditor) },
-                hasWallpaper = hasWallpaper
             )
+            Spacer(modifier = Modifier.size(4.dp))
+            // 内部思考：提示词引导模型输出【思考】/【回答】，任意模型可用
+            ThinkingMenuRow(
+                enabled = conversation?.thinkingEnabled == true,
+                supported = true,
+                depth = conversation?.thinkingDepth ?: QuiddityConstants.THINKING_DEPTH_SHALLOW,
+                onThinkingChange = onThinkingEnabledChange,
+                onDepthChange = onThinkingDepthChange
+            )
+            }
 
-            SectionHeader("统计")
+            // DeepSeek 专属：温度 / 官方联网搜索（其他模型暂未支持）
+            MenuSectionCard(title = "DeepSeek 专属") {
+            val temperatureSubtitle = if (conversation?.temperature != null) {
+                "本会话 " + String.format(java.util.Locale.US, "%.1f", conversation.temperature) +
+                    " · 默认 " + String.format(java.util.Locale.US, "%.1f", settings.globalTemperature)
+            } else {
+                "跟随默认（" + String.format(java.util.Locale.US, "%.1f", settings.globalTemperature) + "）"
+            }
+            MenuRow(
+                title = "温度",
+                subtitle = temperatureSubtitle,
+                onClick = { showTemperatureEditor = !showTemperatureEditor }
+            )
+            if (showTemperatureEditor) {
+                TemperatureEditorPanel(
+                    current = conversation?.temperature,
+                    globalDefault = settings.globalTemperature,
+                    onTemperatureChange = onTemperatureChange
+                )
+            }
+            Spacer(modifier = Modifier.size(4.dp))
+            WebSearchMenuRow(
+                enabled = conversation?.webSearchEnabled == true,
+                supported = webSearchSupported,
+                currentModelId = currentModelId,
+                onWebSearchChange = onWebSearchChange
+            )
+            Text(
+                text = "DeepSeek 模型可用功能（其他模型暂未支持）",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+            )
+            }
+
+            MenuSectionCard(title = "统计") {
             TokenStatsPanel(
                 conversation = conversation,
                 messages = messages,
@@ -1470,7 +1695,8 @@ private fun MainMenuContent(
             )
 
             // 主动消息（对应算法文档 2.2 会话级开启）
-            SectionHeader("主动消息")
+            }
+            MenuSectionCard(title = "主动消息") {
             ToggleMenuRow(
                 title = "主动消息",
                 subtitle = if (conversation?.activeMessageEnabled == true) {
@@ -1480,7 +1706,6 @@ private fun MainMenuContent(
                 },
                 checked = conversation?.activeMessageEnabled == true,
                 onCheckedChange = onActiveMessageChange,
-                hasWallpaper = hasWallpaper
             )
             // 系统条件引导：会话级开启后展示精确闹钟 / 电池优化状态与一键跳转
             if (conversation?.activeMessageEnabled == true) {
@@ -1493,12 +1718,12 @@ private fun MainMenuContent(
                     title = "查看时间库",
                     subtitle = "查看本会话今日时间库（按 AI 设定可能需要密码）",
                     onClick = onViewTimeLibrary,
-                    hasWallpaper = hasWallpaper
                 )
             }
 
             // 数据
-            SectionHeader("数据")
+            }
+            MenuSectionCard(title = "数据") {
             MenuRow(
                 title = "会话压缩",
                 subtitle = if (conversation?.memoryBankEnabled == true) {
@@ -1507,7 +1732,6 @@ private fun MainMenuContent(
                     "未启用（点击进入配置）"
                 },
                 onClick = onCompressionClick,
-                hasWallpaper = hasWallpaper,
                 trailingIcon = Icons.Filled.Compress,
                 trailingTint = MaterialTheme.colorScheme.primary
             )
@@ -1517,7 +1741,6 @@ private fun MainMenuContent(
                 subtitle = "导出或导入当前会话的人设卡",
                 onExport = onExportPersona,
                 onImport = onImportPersona,
-                hasWallpaper = hasWallpaper
             )
             Spacer(modifier = Modifier.size(4.dp))
             ExportImportCard(
@@ -1525,24 +1748,22 @@ private fun MainMenuContent(
                 subtitle = "导出或导入当前会话的全部数据",
                 onExport = onExportConversation,
                 onImport = onImportConversation,
-                hasWallpaper = hasWallpaper
             )
             Spacer(modifier = Modifier.size(4.dp))
             MenuRow(
                 title = "查找聊天记录",
                 subtitle = "按关键词搜索本会话的历史消息",
                 onClick = onOpenSearchChat,
-                hasWallpaper = hasWallpaper
             )
 
             // 危险操作：清空设置放在最底部并加感叹号，以示区别
             Spacer(modifier = Modifier.size(16.dp))
-            SectionHeader("危险操作")
+            }
+            MenuSectionCard(title = "危险操作") {
             MenuRow(
                 title = "清空会话记录",
                 subtitle = "删除全部消息并重置压缩对话（仅影响当前会话，保留人设/场景/记忆/壁纸）",
                 onClick = onClearMessages,
-                hasWallpaper = hasWallpaper,
                 trailingIcon = Icons.Filled.DeleteSweep,
                 trailingTint = MaterialTheme.colorScheme.error
             )
@@ -1551,23 +1772,59 @@ private fun MainMenuContent(
                 title = "清空会话设置",
                 subtitle = "重置当前会话的人设/用户/场景/记忆（不影响消息记录）",
                 onClick = onClearSettings,
-                hasWallpaper = hasWallpaper,
                 trailingIcon = Icons.Filled.Warning,
                 trailingTint = MaterialTheme.colorScheme.error
             )
+            }
         }
     }
+
 }
 
 @Composable
-private fun SectionHeader(title: String) {
-    Text(
-        text = title,
-        style = MaterialTheme.typography.labelLarge,
-        fontWeight = FontWeight.SemiBold,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(start = 12.dp, top = 16.dp, bottom = 6.dp)
-    )
+private fun MenuSectionCard(
+    title: String,
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 10.dp, vertical = 6.dp)
+            .clip(RoundedCornerShape(18.dp))
+            // 毛玻璃半透明卡片：透出壁纸背景
+            .background(com.quiddity.app.ui.components.glassCardColor())
+            .border(
+                width = 1.dp,
+                color = com.quiddity.app.ui.components.glassCardBorderColor(),
+                shape = RoundedCornerShape(18.dp)
+            )
+            .padding(horizontal = 2.dp, vertical = 6.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(4.dp)
+                    .height(16.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(MaterialTheme.colorScheme.primary)
+            )
+            Spacer(modifier = Modifier.size(10.dp))
+            Text(
+                text = title,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+        content()
+        Spacer(modifier = Modifier.height(4.dp))
+    }
 }
 
 @Composable
@@ -1575,10 +1832,10 @@ private fun MenuRow(
     title: String,
     subtitle: String = "",
     onClick: () -> Unit,
-    hasWallpaper: Boolean = false,
     expandableSubtitle: Boolean = false,
     trailingIcon: ImageVector? = null,
     trailingTint: androidx.compose.ui.graphics.Color? = null,
+    titleColor: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.onSurface,
     subtitleColor: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
 ) {
     // Box 替代 Surface：行内无 elevation 需求，Box+background+clip 跳过 Surface 的 CompositionLocalProvider 开销
@@ -1587,9 +1844,7 @@ private fun MenuRow(
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(
-                // 玻璃层级区分：壁纸存在时卡片用更低透明度，与主面板形成层次
-                if (hasWallpaper) MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.5f)
-                else MaterialTheme.colorScheme.surface
+                com.quiddity.app.ui.components.glassCardColor()
             )
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
@@ -1608,7 +1863,7 @@ private fun MenuRow(
                     title,
                     style = MaterialTheme.typography.bodyLarge,
                     fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = titleColor
                 )
                 if (subtitle.isNotEmpty()) {
                     if (expandableSubtitle) {
@@ -1636,6 +1891,1015 @@ private fun MenuRow(
     }
 }
 
+// ============================================================
+// 群聊 1.5.0：群设置（群名称 / 上下文条数 N / 成员管理 / 停止模式）
+// ============================================================
+
+/**
+ * 群聊主菜单（方案十：群名称、上下文条数 N、成员管理、停止模式 A/B；
+ * 不含共享用户人设与时间库入口）。
+ */
+@Composable
+private fun GroupMenuContent(
+    conversation: Conversation?,
+    onDismiss: () -> Unit,
+    onRename: () -> Unit,
+    onContextLimit: () -> Unit,
+    onStopModeChange: (String) -> Unit,
+    onGroupBackground: () -> Unit,
+    onWallpaper: () -> Unit,
+    onManageMembers: () -> Unit,
+    onSearchChat: () -> Unit,
+    onClearMessages: () -> Unit,
+    onDeleteConversation: () -> Unit,
+    darkMode: Boolean,
+    onDarkModeChange: (Boolean) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "群聊设置",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { onDismiss() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Filled.Close, "关闭",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+        Spacer(modifier = Modifier.size(16.dp))
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            MenuSectionCard(title = "群聊") {
+                MenuRow(
+                    title = "查找聊天记录",
+                    subtitle = "搜索本群历史消息",
+                    onClick = onSearchChat,
+                    trailingIcon = Icons.Filled.ChevronRight
+                )
+                MenuRow(
+                    title = "群聊背景 / 场景",
+                    subtitle = conversation?.let { conv ->
+                        if (conv.groupBackground.isNotBlank()) {
+                            val label = if (conv.groupBackgroundMode == QuiddityConstants.GROUP_BACKGROUND_MODE_SCENE)
+                                "场景" else "背景"
+                            "$label：${conv.groupBackground.trim()}"
+                        } else {
+                            "未设置（可选）"
+                        }
+                    } ?: "未设置（可选）",
+                    onClick = onGroupBackground,
+                    expandableSubtitle = true
+                )
+                MenuRow(
+                    title = "群名称",
+                    subtitle = conversation?.title?.ifBlank { "新群聊" } ?: "新群聊",
+                    onClick = onRename
+                )
+                MenuRow(
+                    title = "上下文条数 N",
+                    subtitle = "最近 ${conversation?.groupContextLimit ?: QuiddityConstants.GROUP_DEFAULT_CONTEXT_LIMIT} 条",
+                    onClick = onContextLimit
+                )
+                val stopMode = conversation?.stopMode ?: QuiddityConstants.GROUP_DEFAULT_STOP_MODE
+                ToggleMenuRow(
+                    title = "停止模式",
+                    subtitle = if (stopMode == QuiddityConstants.GROUP_STOP_MODE_A)
+                        "A：只停止当前成员，排队的递补" else "B：停止时清空整个队列（默认）",
+                    checked = stopMode == QuiddityConstants.GROUP_STOP_MODE_B,
+                    onCheckedChange = { checked ->
+                        onStopModeChange(
+                            if (checked) QuiddityConstants.GROUP_STOP_MODE_B
+                            else QuiddityConstants.GROUP_STOP_MODE_A
+                        )
+                    }
+                )
+            }
+            MenuSectionCard(title = "外观") {
+                ToggleMenuRow(
+                    title = "深色模式",
+                    subtitle = if (darkMode) "当前：暗色" else "当前：亮色",
+                    checked = darkMode,
+                    onCheckedChange = onDarkModeChange
+                )
+                MenuRow(
+                    title = "群聊壁纸",
+                    subtitle = if (conversation?.wallpaperUri != null) "已设置" else "未设置",
+                    onClick = onWallpaper
+                )
+            }
+            MenuSectionCard(title = "成员管理") {
+                MenuRow(
+                    title = "查看 / 添加 / 移除成员",
+                    subtitle = "当前 ${conversation?.memberConversationIds?.size ?: 0}/3 个",
+                    onClick = onManageMembers,
+                    trailingIcon = Icons.Filled.ChevronRight
+                )
+            }
+            MenuSectionCard(title = "危险操作") {
+                MenuRow(
+                    title = "清除聊天记录",
+                    subtitle = "删除本群所有消息，不可恢复",
+                    onClick = onClearMessages
+                )
+                MenuRow(
+                    title = "删除该会话",
+                    subtitle = "删除群聊及其全部消息，成员私聊不受影响",
+                    onClick = onDeleteConversation,
+                    titleColor = MaterialTheme.colorScheme.error
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 群名称编辑面板（方案十.1：群名称可随时改名）。
+ */
+@Composable
+private fun GroupNamePanel(
+    currentName: String,
+    onBack: () -> Unit,
+    onSave: (String) -> Unit
+) {
+    var name by rememberSaveable { mutableStateOf(currentName) }
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "群名称",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { onBack() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack, "返回",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+        Spacer(modifier = Modifier.size(16.dp))
+        OutlinedTextField(
+            value = name,
+            onValueChange = { name = it },
+            label = { Text("群名称") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(modifier = Modifier.size(16.dp))
+        TextButton(
+            enabled = name.isNotBlank(),
+            onClick = { onSave(name.trim()) }
+        ) {
+            Text("保存")
+        }
+    }
+}
+
+/**
+ * 群聊上下文条数 N 编辑面板（方案六.2：默认 50，范围 1～200）。
+ */
+@Composable
+private fun GroupContextLimitPanel(
+    currentLimit: Int,
+    onBack: () -> Unit,
+    onSave: (Int) -> Unit
+) {
+    var limit by rememberSaveable { mutableIntStateOf(currentLimit) }
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "上下文条数 N",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { onBack() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack, "返回",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+        Spacer(modifier = Modifier.size(16.dp))
+        Text(
+            text = "群聊记录只取最近 N 条（1～200）",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.size(12.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(
+                enabled = limit > QuiddityConstants.GROUP_MIN_CONTEXT_LIMIT,
+                onClick = { limit = (limit - 5).coerceAtLeast(QuiddityConstants.GROUP_MIN_CONTEXT_LIMIT) }
+            ) { Text("−5") }
+            TextButton(
+                enabled = limit > QuiddityConstants.GROUP_MIN_CONTEXT_LIMIT,
+                onClick = { limit = (limit - 1).coerceAtLeast(QuiddityConstants.GROUP_MIN_CONTEXT_LIMIT) }
+            ) { Text("−1") }
+            Text(
+                text = limit.toString(),
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(horizontal = 16.dp)
+            )
+            TextButton(
+                enabled = limit < QuiddityConstants.GROUP_MAX_CONTEXT_LIMIT,
+                onClick = { limit = (limit + 1).coerceAtMost(QuiddityConstants.GROUP_MAX_CONTEXT_LIMIT) }
+            ) { Text("+1") }
+            TextButton(
+                enabled = limit < QuiddityConstants.GROUP_MAX_CONTEXT_LIMIT,
+                onClick = { limit = (limit + 5).coerceAtMost(QuiddityConstants.GROUP_MAX_CONTEXT_LIMIT) }
+            ) { Text("+5") }
+        }
+        Spacer(modifier = Modifier.size(16.dp))
+        TextButton(onClick = { onSave(limit) }) { Text("保存") }
+    }
+}
+
+/**
+ * 群聊背景 / 场景编辑面板：背景（氛围描述）与场景（多人情境）合并为一个设置项，
+ * 单选其一开启；文本注入所有成员的回复提示词。清空输入并保存 = 移除。
+ */
+@Composable
+private fun GroupBackgroundPanel(
+    currentText: String,
+    currentMode: String,
+    onBack: () -> Unit,
+    onSave: (String, String) -> Unit
+) {
+    var text by rememberSaveable { mutableStateOf(currentText) }
+    var mode by rememberSaveable { mutableStateOf(currentMode) }
+    val isScene = mode == QuiddityConstants.GROUP_BACKGROUND_MODE_SCENE
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "群聊背景 / 场景",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { onBack() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack, "返回",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+        Spacer(modifier = Modifier.size(16.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { mode = QuiddityConstants.GROUP_BACKGROUND_MODE_BACKGROUND }
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                androidx.compose.material3.RadioButton(
+                    selected = !isScene,
+                    onClick = { mode = QuiddityConstants.GROUP_BACKGROUND_MODE_BACKGROUND }
+                )
+                Text(
+                    text = "背景",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { mode = QuiddityConstants.GROUP_BACKGROUND_MODE_SCENE }
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                androidx.compose.material3.RadioButton(
+                    selected = isScene,
+                    onClick = { mode = QuiddityConstants.GROUP_BACKGROUND_MODE_SCENE }
+                )
+                Text(
+                    text = "场景",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+        }
+        Spacer(modifier = Modifier.size(12.dp))
+        OutlinedTextField(
+            value = text,
+            onValueChange = { text = it },
+            label = { Text(if (isScene) "场景描述" else "背景描述") },
+            placeholder = {
+                Text(
+                    if (isScene) {
+                        "例如：你们几个朋友正在一场篝火晚会上，夜空晴朗，周围是树林"
+                    } else {
+                        "例如：大学同学群，关系很熟，说话随意，偶尔互怼"
+                    }
+                )
+            },
+            minLines = 4,
+            maxLines = 8,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(modifier = Modifier.size(8.dp))
+        Text(
+            text = if (isScene) {
+                "多人场景的情境描述，会注入到每个成员回复时的提示词里；清空后保存即移除。"
+            } else {
+                "氛围与群规描述，会注入到每个成员回复时的提示词里；清空后保存即移除。"
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.size(16.dp))
+        TextButton(onClick = { onSave(text, mode) }) {
+            Text("保存")
+        }
+    }
+}
+
+/**
+ * 成员添加流程状态机（多弹窗稳定切换：同一时刻只显示一个弹窗；
+ * 新增 API 底部面板作为覆盖层叠加在配置弹窗之上）。
+ */
+private sealed interface MemberAddFlow {
+    data object None : MemberAddFlow
+    data object Selecting : MemberAddFlow
+    data class Result(
+        val passedCount: Int,
+        val failed: List<Pair<Conversation, String>>
+    ) : MemberAddFlow
+    data class Config(
+        val member: Conversation,
+        val failed: List<Pair<Conversation, String>>
+    ) : MemberAddFlow
+}
+
+/**
+ * 群聊成员管理面板（方案十.4-5 + 需求）：
+ * 显示当前成员头像（通过的加入后立即显示）；不足 3 个显示加号按钮（添加成员）；
+ * 单个 API 有问题时通过的正常加入，未通过的进入弹窗重试/配置（可现场新增 API）。
+ */
+@Composable
+private fun GroupMemberManagePanel(
+    group: Conversation,
+    viewModel: ChatViewModel,
+    settings: com.quiddity.app.data.model.AppSettings,
+    onBack: () -> Unit
+) {
+    var addFlow by remember { mutableStateOf<MemberAddFlow>(MemberAddFlow.None) }
+    var showApiCreateSheet by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val conversationRepo = com.quiddity.app.di.ServiceLocator.conversationRepository
+    val settingsRepo = com.quiddity.app.di.ServiceLocator.settingsRepository
+    val apiCatalogManager = com.quiddity.app.di.ServiceLocator.apiCatalogManager
+
+    val members = remember(group.memberConversationIds) {
+        group.memberConversationIds.mapNotNull { id ->
+            conversationRepo.getConversation(id)
+        }
+    }
+    val soloList = remember(settings.catalog) {
+        conversationRepo.conversations.value
+            .filter { it.type == ConversationType.SOLO }
+    }
+
+    /** 提交添加：通过的正常加入（显示头像），未通过的进入结果弹窗。 */
+    fun submitAdd(ids: List<String>) {
+        if (ids.isEmpty()) {
+            addFlow = MemberAddFlow.None
+            return
+        }
+        viewModel.addGroupMembers(ids) { _, failures ->
+            val failedPairs = failures.mapNotNull { (id, reason) ->
+                conversationRepo.getConversation(id)?.let { it to reason }
+            }
+            val passedCount = ids.size - failures.size
+            if (failures.isEmpty()) {
+                android.widget.Toast.makeText(
+                    context,
+                    "已添加 $passedCount 个成员",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+                addFlow = MemberAddFlow.None
+            } else {
+                addFlow = MemberAddFlow.Result(passedCount, failedPairs)
+            }
+        }
+    }
+
+    /** 配置成员 API 后重新校验；通过则从失败列表移除。 */
+    fun configureMemberAndRevalidate(member: Conversation, catalogId: String?) {
+        scope.launch {
+            val updated = member.copy(apiCatalogId = catalogId)
+            conversationRepo.updateConversation(updated)
+            val result = conversationRepo.validateGroupMember(updated)
+            if (result.isSuccess) {
+                android.widget.Toast.makeText(
+                    context,
+                    "${member.persona.name.ifBlank { "成员" }} 配置成功，已加入",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+                val remaining = (addFlow as? MemberAddFlow.Config)
+                    ?.failed
+                    ?.filterNot { it.first.id == member.id }
+                    .orEmpty()
+                addFlow = if (remaining.isEmpty()) MemberAddFlow.None
+                else MemberAddFlow.Result(0, remaining)
+            } else {
+                android.widget.Toast.makeText(
+                    context,
+                    "仍未通过：${result.exceptionOrNull()?.message ?: "校验失败"}",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "成员管理",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { onBack() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack, "返回",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+        Spacer(modifier = Modifier.size(16.dp))
+
+        Text(
+            text = "当前成员（${members.size}/${QuiddityConstants.GROUP_MAX_MEMBERS}）",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.size(8.dp))
+        LazyColumn(modifier = Modifier.weight(1f)) {
+            items(members, key = { it.id }) { member ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        AiAvatar(
+                            avatarUri = member.persona.aiAvatarUri,
+                            name = member.persona.name,
+                            size = 40.dp
+                        )
+                    }
+                    Spacer(modifier = Modifier.size(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = member.persona.name.ifBlank { "未命名 AI" },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "模型：${member.apiCatalogId?.let { id ->
+                                settings.catalog.firstOrNull { c -> c.id == id }?.apiModel
+                            } ?: "跟随全局"}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    TextButton(
+                        enabled = members.size > 1,
+                        onClick = { viewModel.removeGroupMember(member.id) }
+                    ) {
+                        Text(
+                            text = "移除",
+                            color = if (members.size > 1) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                        )
+                    }
+                }
+            }
+            if (members.size < QuiddityConstants.GROUP_MAX_MEMBERS) {
+                item(key = "add_member") {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null
+                            ) { addFlow = MemberAddFlow.Selecting }
+                            .padding(vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primaryContainer),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "+",
+                                style = MaterialTheme.typography.titleLarge,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+                        Spacer(modifier = Modifier.size(10.dp))
+                        Text(
+                            text = "添加成员",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    when (val flow = addFlow) {
+        is MemberAddFlow.Selecting -> {
+            AddGroupMembersDialog(
+                soloList = soloList,
+                currentIds = group.memberConversationIds,
+                hasApiConfig = settings.catalog.isNotEmpty(),
+                onConfirm = { ids -> submitAdd(ids) },
+                onDismiss = { addFlow = MemberAddFlow.None }
+            )
+        }
+        is MemberAddFlow.Result -> {
+            MemberAddResultDialog(
+                passedCount = flow.passedCount,
+                failed = flow.failed,
+                onRetry = { submitAdd(flow.failed.map { it.first.id }) },
+                onConfig = { member ->
+                    addFlow = MemberAddFlow.Config(member, flow.failed)
+                },
+                onDone = { addFlow = MemberAddFlow.None }
+            )
+        }
+        is MemberAddFlow.Config -> {
+            MemberApiConfigDialog(
+                member = flow.member,
+                catalog = settings.catalog,
+                currentId = flow.member.apiCatalogId,
+                onSelect = { catalogId -> configureMemberAndRevalidate(flow.member, catalogId) },
+                onAddNew = { showApiCreateSheet = true },
+                onRetry = {
+                    scope.launch {
+                        val updated = conversationRepo.getConversation(flow.member.id)
+                            ?: return@launch
+                        val result = conversationRepo.validateGroupMember(updated)
+                        if (result.isSuccess) {
+                            android.widget.Toast.makeText(
+                                context,
+                                "${updated.persona.name.ifBlank { "成员" }} 校验通过，已加入",
+                                android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                            val remaining = flow.failed.filterNot { it.first.id == updated.id }
+                            addFlow = if (remaining.isEmpty()) MemberAddFlow.None
+                            else MemberAddFlow.Result(0, remaining)
+                        } else {
+                            android.widget.Toast.makeText(
+                                context,
+                                "仍未通过：${result.exceptionOrNull()?.message ?: "校验失败"}",
+                                android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    }
+                },
+                onBack = { addFlow = MemberAddFlow.Result(0, flow.failed) }
+            )
+        }
+        else -> Unit
+    }
+
+    // 新增模型配置底部面板（叠加在配置弹窗之上，保存后回到配置弹窗继续选择）
+    if (showApiCreateSheet) {
+        ApiEditBottomSheet(
+            initial = null,
+            catalogManager = apiCatalogManager,
+            testConnection = { url, key, model ->
+                apiCatalogManager.testConnection(url, key, model)
+            },
+            onDismiss = { showApiCreateSheet = false },
+            onSave = { state ->
+                scope.launch {
+                    runCatching {
+                        val entry = apiCatalogManager.buildEntry(
+                            id = state.id,
+                            name = state.name,
+                            providerId = state.providerId,
+                            apiUrl = state.apiUrl,
+                            apiModel = state.apiModel,
+                            apiKey = state.apiKey
+                        )
+                        settingsRepo.upsertCatalog(entry)
+                    }.onFailure {
+                        android.util.Log.e("GroupMemberManagePanel", "新增模型配置失败", it)
+                        android.widget.Toast.makeText(
+                            context,
+                            "新增模型配置失败：${it.message ?: "未知错误"}",
+                            android.widget.Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+                showApiCreateSheet = false
+            }
+        )
+    }
+}
+
+/**
+ * 成员添加结果弹窗（需求）：通过的已加入并显示头像；未通过的逐条列出原因，
+ * 可整体重试或对单个成员进入配置。
+ */
+@Composable
+private fun MemberAddResultDialog(
+    passedCount: Int,
+    failed: List<Pair<Conversation, String>>,
+    onRetry: () -> Unit,
+    onConfig: (Conversation) -> Unit,
+    onDone: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDone,
+        title = { Text("添加成员结果") },
+        text = {
+            Column {
+                Text(
+                    text = if (passedCount > 0) "已加入 $passedCount 个成员（头像已显示）" else "没有成员通过校验",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                if (failed.isNotEmpty()) {
+                    Spacer(modifier = Modifier.size(10.dp))
+                    Text(
+                        text = "以下 ${failed.size} 个未通过：",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                    Spacer(modifier = Modifier.size(6.dp))
+                    LazyColumn(modifier = Modifier.heightIn(max = 240.dp)) {
+                        items(failed, key = { it.first.id }) { (member, reason) ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = member.persona.name.ifBlank { member.title },
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = reason,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                }
+                                TextButton(onClick = { onConfig(member) }) {
+                                    Text("配置", color = MaterialTheme.colorScheme.primary)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDone) { Text("完成") }
+        },
+        dismissButton = {
+            if (failed.isNotEmpty()) {
+                TextButton(onClick = onRetry) { Text("重试") }
+            }
+        }
+    )
+}
+
+/**
+ * 成员模型配置弹窗（需求：未配置 API 的成员可直接在此页面配置）。
+ * 选择已有配置 / 使用默认（跟随全局）/ 新增配置；配置后自动重新校验。
+ */
+@Composable
+private fun MemberApiConfigDialog(
+    member: Conversation,
+    catalog: List<com.quiddity.app.data.model.ApiCatalogEntry>,
+    currentId: String?,
+    onSelect: (String?) -> Unit,
+    onAddNew: () -> Unit,
+    onRetry: () -> Unit,
+    onBack: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onBack,
+        title = { Text("配置 ${member.persona.name.ifBlank { "成员" }} 的模型") },
+        text = {
+            Column {
+                Text(
+                    text = "成员回复使用各自私聊的模型配置，选择后自动重新校验：",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.size(8.dp))
+                LazyColumn(modifier = Modifier.heightIn(max = 300.dp)) {
+                    items(catalog, key = { it.id }) { entry ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null
+                                ) { onSelect(entry.id) }
+                                .padding(horizontal = 4.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            androidx.compose.material3.RadioButton(
+                                selected = entry.id == currentId,
+                                onClick = { onSelect(entry.id) }
+                            )
+                            Spacer(modifier = Modifier.size(8.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = entry.name,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = entry.apiModel,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                    item(key = "use_default") {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null
+                                ) { onSelect(null) }
+                                .padding(horizontal = 4.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            androidx.compose.material3.RadioButton(
+                                selected = currentId == null,
+                                onClick = { onSelect(null) }
+                            )
+                            Spacer(modifier = Modifier.size(8.dp))
+                            Text(
+                                text = "使用默认（跟随全局激活配置）",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                    item(key = "add_new") {
+                        TextButton(
+                            onClick = onAddNew,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("+ 新增模型配置")
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onBack) { Text("返回") }
+        },
+        dismissButton = {
+            TextButton(onClick = onRetry) { Text("重试") }
+        }
+    )
+}
+
+/**
+ * 添加群聊成员弹窗（方案十.5）：私聊列表勾选，最多选到 3 个，
+ * 确定后执行 API 测试，通过的角色加入，未通过的返回通知可重试。
+ */
+@Composable
+private fun AddGroupMembersDialog(
+    soloList: List<Conversation>,
+    currentIds: List<String>,
+    hasApiConfig: Boolean,
+    onConfirm: (List<String>) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var selected by rememberSaveable { mutableStateOf<Set<String>>(emptySet()) }
+    val candidates = soloList.filter { it.id !in currentIds }
+    fun toggle(id: String) {
+        selected = if (id in selected) selected - id else selected + id
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("添加成员") },
+        text = {
+            if (candidates.isEmpty()) {
+                Text(
+                    text = "没有可添加的私聊会话",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                LazyColumn(modifier = Modifier.heightIn(max = 360.dp)) {
+                    items(candidates, key = { it.id }) { conv ->
+                        val checked = conv.id in selected
+                        val status = when {
+                            !hasApiConfig -> "API 未配置"
+                            conv.userPersona.name.isBlank() -> "用户名未设置"
+                            conv.persona.name.isBlank() -> "AI 名未设置"
+                            else -> "可加入"
+                        }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null
+                                ) { toggle(conv.id) }
+                                .padding(horizontal = 4.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(checked = checked, onCheckedChange = { toggle(conv.id) })
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                            ) {
+                                AiAvatar(
+                                    avatarUri = conv.persona.aiAvatarUri,
+                                    name = conv.persona.name,
+                                    size = 36.dp
+                                )
+                            }
+                            Spacer(modifier = Modifier.size(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = conv.title.ifBlank { "未命名会话" },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = "AI：${conv.persona.name.ifBlank { "未设置" }} · $status",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (status == "可加入") MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.error
+                                )
+                            }
+                        }
+                    }
+                }
+                if (selected.size + currentIds.size > QuiddityConstants.GROUP_MAX_MEMBERS) {
+                    Text(
+                        text = "最多 ${QuiddityConstants.GROUP_MAX_MEMBERS} 个成员",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(top = 6.dp)
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = selected.isNotEmpty() &&
+                    (currentIds.size + selected.size) <= QuiddityConstants.GROUP_MAX_MEMBERS,
+                onClick = { onConfirm(selected.toList()) }
+            ) {
+                Text("确定")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        }
+    )
+}
+
 /**
  * 带开关的设置行。
  *
@@ -1648,8 +2912,8 @@ private fun ToggleMenuRow(
     title: String,
     subtitle: String = "",
     checked: Boolean,
+    enabled: Boolean = true,
     onCheckedChange: (Boolean) -> Unit,
-    hasWallpaper: Boolean = false
 ) {
     // Box 替代 Surface：行内无 elevation 需求，Box+background+clip 跳过 Surface 的 CompositionLocalProvider 开销
     Box(
@@ -1657,13 +2921,18 @@ private fun ToggleMenuRow(
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(
-                if (hasWallpaper) MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.5f)
-                else MaterialTheme.colorScheme.surface
+                com.quiddity.app.ui.components.glassCardColor()
             )
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null
-            ) { onCheckedChange(!checked) }
+            .then(
+                if (enabled) {
+                    Modifier.clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { onCheckedChange(!checked) }
+                } else {
+                    Modifier
+                }
+            )
     ) {
         Row(
             modifier = Modifier
@@ -1676,28 +2945,281 @@ private fun ToggleMenuRow(
                     title,
                     style = MaterialTheme.typography.bodyLarge,
                     fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = if (enabled) {
+                        MaterialTheme.colorScheme.onSurface
+                    } else {
+                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                    }
                 )
                 if (subtitle.isNotEmpty()) {
                     Text(
                         subtitle,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        color = if (enabled) {
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                        }
                     )
                 }
             }
             QuiddityToggleSwitch(
                 checked = checked,
-                onCheckedChange = onCheckedChange
+                onCheckedChange = onCheckedChange,
+                enabled = enabled
             )
         }
     }
 }
 
 /**
+ * 会话级采样温度编辑面板：预设快捷档 + 0～2 滑杆 + 跟随默认重置。
+ * 官方文档：DeepSeek 思考模式下 temperature 不生效。
+ */
+@Composable
+private fun TemperatureEditorPanel(
+    current: Double?,
+    globalDefault: Double,
+    onTemperatureChange: (Double?) -> Unit
+) {
+    val effective = current ?: globalDefault
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 3.dp),
+        shape = RoundedCornerShape(14.dp),
+        color = com.quiddity.app.ui.components.glassCardColor()
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "温度",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                if (current != null) {
+                    TextButton(onClick = { onTemperatureChange(null) }) {
+                        Text("跟随默认")
+                    }
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                temperaturePresets.forEach { (value, label) ->
+                    TemperaturePresetChip(
+                        value = value,
+                        label = label,
+                        selected = kotlin.math.abs(effective - value) < 0.001,
+                        onClick = { onTemperatureChange(value) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+            TemperatureSlider(
+                value = effective,
+                onValueChangeFinished = { onTemperatureChange(it) }
+            )
+            Text(
+                text = "范围 0～2，DeepSeek 官方默认 1.0；思考模式下温度不生效。\n" +
+                    "0.0 代码/数学 · 1.0 数据抽取 · 1.3 通用对话/翻译 · 1.5 创意写作",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+            )
+        }
+    }
+}
+
+/** 官方场景建议档位（值 → 展示标签）。 */
+private val temperaturePresets = listOf(
+    0.0 to "0.0 严谨",
+    1.0 to "1.0 均衡",
+    1.3 to "1.3 对话",
+    1.5 to "1.5 创意"
+)
+
+@Composable
+private fun TemperaturePresetChip(
+    value: Double,
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick
+            ),
+        shape = RoundedCornerShape(8.dp),
+        color = if (selected) {
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+        } else {
+            MaterialTheme.colorScheme.surface
+        },
+        border = androidx.compose.foundation.BorderStroke(
+            width = 1.dp,
+            color = if (selected) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+            }
+        )
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = if (selected) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                }
+            )
+        }
+    }
+}
+
+/**
+ * DeepSeek 官方服务端联网搜索开关行。
+ * 仅官方服务商 + 支持模型可用（由 [supported] 判定）；不支持时整行禁用并说明原因。
+ */
+@Composable
+private fun WebSearchMenuRow(
+    enabled: Boolean,
+    supported: Boolean,
+    currentModelId: String,
+    onWebSearchChange: (Boolean) -> Unit
+) {
+    ToggleMenuRow(
+        title = "官方联网搜索",
+        subtitle = if (supported) {
+            if (enabled) {
+                "已开启：DeepSeek 服务端搜索，无需第三方引擎"
+            } else {
+                "DeepSeek 官方服务端联网搜索"
+            }
+        } else {
+            "仅 DeepSeek 官方 " + QuiddityConstants.DEEPSEEK_RESPONSES_MODEL +
+                " 支持（当前：$currentModelId）"
+        },
+        checked = enabled,
+        enabled = supported,
+        onCheckedChange = { onWebSearchChange(it) }
+    )
+}
+
+/**
+ * DeepSeek 思考开关行 + 思考深度选择（浅 / 深）。
+ * 仅 DeepSeek 官方模型可用（由 [supported] 判定）；不支持时整行禁用。
+ */
+@Composable
+private fun ThinkingMenuRow(
+    enabled: Boolean,
+    supported: Boolean,
+    depth: String,
+    onThinkingChange: (Boolean) -> Unit,
+    onDepthChange: (String) -> Unit
+) {
+    ToggleMenuRow(
+        title = "思考",
+        subtitle = if (supported) {
+            if (enabled) {
+                "回复前先思考，内容单独显示"
+            } else {
+                "回复前先思考（默认关闭）"
+            }
+        } else {
+            "仅 DeepSeek 官方模型支持"
+        },
+        checked = enabled,
+        enabled = supported,
+        onCheckedChange = onThinkingChange
+    )
+    if (enabled && supported) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "思考深度",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                modifier = Modifier.weight(1f)
+            )
+            ThinkingDepthChip(
+                label = "浅（默认）",
+                selected = depth != QuiddityConstants.THINKING_DEPTH_DEEP,
+                onClick = { onDepthChange(QuiddityConstants.THINKING_DEPTH_SHALLOW) }
+            )
+            Spacer(modifier = Modifier.size(6.dp))
+            ThinkingDepthChip(
+                label = "深",
+                selected = depth == QuiddityConstants.THINKING_DEPTH_DEEP,
+                onClick = { onDepthChange(QuiddityConstants.THINKING_DEPTH_DEEP) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun ThinkingDepthChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = if (selected) {
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+        } else {
+            com.quiddity.app.ui.components.glassCardColor().copy(alpha = 0.4f)
+        },
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (selected) {
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+            } else {
+                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
+            }
+        ),
+        onClick = onClick
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (selected) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+        )
+    }
+}
+
+/**
  * 导出/导入卡片：标题、说明文字、以及「导出」「导入」两个按钮。
  *
- * @param hasWallpaper 壁纸存在时使用更低透明度，形成玻璃层级区分
  */
 @Composable
 private fun ExportImportCard(
@@ -1705,7 +3227,6 @@ private fun ExportImportCard(
     subtitle: String,
     onExport: () -> Unit,
     onImport: () -> Unit,
-    hasWallpaper: Boolean = false
 ) {
     // Box 替代 Surface：无 elevation 需求，Box+background+clip 跳过 Surface 开销
     Box(
@@ -1713,9 +3234,7 @@ private fun ExportImportCard(
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(
-                // 玻璃层级区分：壁纸存在时卡片用更低透明度
-                if (hasWallpaper) MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.5f)
-                else MaterialTheme.colorScheme.surfaceContainerLow
+                com.quiddity.app.ui.components.glassCardColor()
             )
     ) {
         Column(modifier = Modifier.padding(16.dp)) {

@@ -39,7 +39,7 @@ class MiniAppInviteManager(
         val entry = settings.catalog.firstOrNull { it.id == settings.activeCatalogId }
             ?: settings.catalog.firstOrNull()
         val llmOk = entry?.let { e ->
-            apiCatalogManager.testConnection(e.apiUrl, apiCatalogManager.decryptKey(e), e.apiModel).isSuccess
+            apiCatalogManager.testConnection(e.apiUrl, apiCatalogManager.decryptKey(e).orEmpty(), e.apiModel).isSuccess
         } ?: false
 
         val conversation = sessionRepository.findOrCreateCharacterConversation(character)

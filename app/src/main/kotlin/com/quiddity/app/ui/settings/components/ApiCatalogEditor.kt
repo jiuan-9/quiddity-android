@@ -257,17 +257,16 @@ fun ApiCatalogEditor(
                                 isActive = entry.id == settings.activeCatalogId,
                                 catalogManager = apiCatalogManager,
                                 onClick = {
-                                    // 关键：编辑时把已加密的 Key 解密后预填
-                                    val decryptedKey = runCatching {
-                                        apiCatalogManager.decryptKey(entry)
-                                    }.getOrDefault("")
+                                    // 设计：编辑不预填解密后的密钥（密钥是秘密，解密展示无必要）。
+                                    // 已存密钥时表单提示"已保存，留空保持不变"；
+                                    // 输入新密钥则替换。避免"解密失败被误认为没保存"。
                                     editingState = ApiCatalogEditFormState(
                                         id = entry.id,
                                         name = entry.name,
                                         providerId = entry.providerId,
                                         apiUrl = entry.apiUrl,
                                         apiModel = entry.apiModel,
-                                        apiKey = decryptedKey
+                                        apiKey = ""
                                     )
                                 },
                                 onSetActive = { viewModel.setActiveCatalog(entry.id) },
@@ -285,6 +284,9 @@ fun ApiCatalogEditor(
         ApiEditBottomSheet(
             initial = state,
             catalogManager = apiCatalogManager,
+            hasStoredKey = settings.catalog.firstOrNull { it.id == state.id }?.let {
+                apiCatalogManager.hasStoredKey(it)
+            } ?: false,
             testConnection = { url, key, model ->
                 apiCatalogManager.testConnection(url, key, model)
             },
@@ -360,7 +362,7 @@ private fun CatalogCard(
             ),
         shape = RoundedCornerShape(16.dp),
         color = if (isActive) MaterialTheme.colorScheme.primaryContainer
-        else MaterialTheme.colorScheme.surfaceContainerLow,
+        else com.quiddity.app.ui.components.glassCardColor(),
         tonalElevation = 0.dp
     ) {
         Row(
@@ -407,6 +409,15 @@ private fun CatalogCard(
                     text = entry.apiUrl,
                     style = MaterialTheme.typography.labelSmall,
                     maxCollapsedLines = 1
+                )
+                Text(
+                    text = if (catalogManager.hasStoredKey(entry)) "密钥：已设置" else "密钥：未设置",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (catalogManager.hasStoredKey(entry)) {
+                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                    } else {
+                        MaterialTheme.colorScheme.error.copy(alpha = 0.7f)
+                    }
                 )
             }
             Box(

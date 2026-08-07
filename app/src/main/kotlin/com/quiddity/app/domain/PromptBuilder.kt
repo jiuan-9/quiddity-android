@@ -5,6 +5,8 @@ import com.quiddity.app.data.model.Message
 import com.quiddity.app.data.model.MemoryCompressionResult
 import com.quiddity.app.data.model.Role
 import com.quiddity.app.data.remote.ChatMessage
+import com.quiddity.app.data.remote.ResponsesInputItem
+import com.quiddity.app.data.remote.ResponsesTool
 import com.quiddity.app.data.remote.ToolDefinition
 import com.quiddity.app.data.remote.ToolFunction
 import com.quiddity.app.util.QuiddityConstants
@@ -47,7 +49,7 @@ import kotlinx.serialization.json.JsonPrimitive
  *
  * 字段命名规范（全文件统一，跨提示词一致，对准应用内设置填空项）：
  * - AI 人设：【名字】【身份背景】【性格】【外观】【世界背景】【期望特质】
- * - 用户人设（【对话伙伴信息】下）：名字 / 身份 / 性别 / 年龄 / 外观
+ * - 用户人设（【用户信息】下）：名字 / 身份 / 性别 / 年龄 / 外观
  * - 其他：【当前场景】【历史对话摘要】【需要记住的事】
  *
  * 多消息切分不再由提示词驱动：[MessageStreamCoordinator] 在流式输出阶段按句末标点 +
@@ -86,7 +88,8 @@ object PromptBuilder {
 2. 精确保留——数字、ID、日期、金额、专有名词、人名、地名等必须一字不差。
 3. 删除冗余——修饰词、客套话、寒暄、重复解释、语气词全部删掉。
 4. 消除指代——把「它」「那个」「这个」「他」等代词替换为具体名词。
-5. 紧凑输出——摘要是一段连续文本，不使用列表或标题格式。
+5. 人称客观——摘要中统一使用「用户」「AI（+名字）」客观称呼双方，禁止出现「你」「我」等对话人称。
+6. 紧凑输出——摘要是一段连续文本，不使用列表或标题格式。
 
 输出格式（严格遵守，只输出以下两段）：
 【摘要】
@@ -171,6 +174,11 @@ object PromptBuilder {
     internal val PERSONA_REFINE_SYSTEM_PROMPT = """
 你是一个"人设精调器"。你的任务是理解用户对 AI 角色的描述，将其精调为一份让下游 AI 能精准扮演目标角色的结构化系统指令。
 
+视角规则（最高优先级）：
+1. 所有输出必须站在第三人称客观视角，禁止出现「你」「我」这类直接称呼（引用用户原话时除外）。
+2. 用户口语中的「你」指 AI 角色本人，用户口语中的「我」指用户本人；精调时一律改写为角色的名字或"这个角色""对方"等客观称谓，不得照搬。
+3. 精调结果只描述角色自身的行为、语言与特质，不向角色发号施令，不出现"你要……""你应该……"这类句式。
+
 精调项严格对准应用内的设置填空项，只输出以下四节（用户未填的字段省略对应章节）。不要输出"名字""世界背景"（由系统单独处理），也不要输出"行为""规则""准则"等任何填空项之外的项目：
 
 【身份背景】概述角色的身份定位和背景设定。
@@ -227,66 +235,74 @@ object PromptBuilder {
     /**
      * AI 开场引导消息（空对话时作为 user 消息，仅提示 AI 主动说出第一句）。
      */
-    const val LET_AI_START_GUIDE = "（请主动开启第一句）"
+    const val LET_AI_START_GUIDE = "（请主动开启第一句：以你的角色身份说出一句自然的开场白，必须包含实际台词）"
 
     /**
      * 组装聊天 system 提示词。
      *
-     * 组装顺序：
-     * 1. AI 人设（精调结果优先；精调结果不含名字/世界背景，需单独透传，修复过去精调后两字段丢失的问题）
-     * 2. 用户人设
-     * 3. 场景
-     * 4. 记忆（6.4 随身带 / 6.5 小抄两种组装，按记忆策略分支）
+     * 通用模板（不再叠加补丁块），各节职责单一：
+     * 1. 【角色与对话双方】——身份认知（机器必需的最小组件：谁是谁、只说自己角色的发言）
+     * 2. 【AI 人设】——用户内容原样注入（精调结果优先，名字/世界背景单独透传）
+     * 3. 【用户信息】——用户人设原样注入
+     * 4. 【世界与场景】——世界背景常驻 + 当前场景仅在首轮注入（避免场景崩塌）
+     * 5. 【记忆】——随身带 / 小抄两种组装
+     * 6. 【对话方式】——用户可配置的表达风格 + 应用机制（括号动作、不加前缀、继续说语义）
+     *
+     * 设计原则：提示词只承载"身份 + 用户内容 + 少量应用机制"，不强制任何表达风格。
      *
      * @param memoryStrategy 记忆策略覆盖值（null = 跟随 [Conversation.memoryStrategy]，
      *   仍为 null 时回退为随身带现状）。完整级默认策略由 2.0.0 运行时按模型分级解析后传入。
      */
     fun buildSystemPrompt(
         conv: Conversation,
-        memoryStrategy: String? = null
+        memoryStrategy: String? = null,
+        regeneratePreviousReply: String? = null,
+        thinkingDepth: String? = null
     ): String {
         val sb = StringBuilder()
-
-        // ===== 1. AI 人设 =====
         val persona = conv.persona
+        val aiName = persona.name.ifBlank { "AI" }
+        val userName = conv.userPersona.name.ifBlank { "用户" }
+
+        // ===== 1. 角色与对话双方（身份认知） =====
+        sb.append("【角色与对话双方】\n")
+        sb.append("你扮演的角色：").append(aiName).append("\n")
+        sb.append("对话伙伴：").append(userName).append("\n")
+        sb.append("「").append(aiName).append("」指你本人，「").append(userName)
+            .append("」指对话伙伴；你只以「").append(aiName).append("」身份发言，不替对方说话。\n\n")
+
+        // ===== 2. AI 人设（用户内容，原样注入） =====
+        sb.append("【AI 人设】\n")
         if (conv.compileEnabled && !persona.compiledPersona.isNullOrBlank()) {
-            // 精调结果：身份背景 / 性格 / 外观 / 期望特质
             sb.append(persona.compiledPersona).append("\n\n")
-            // 名字、世界背景不参与精调，直接透传
             if (persona.name.isNotBlank()) {
-                sb.append("【名字】").append(persona.name).append("\n\n")
-            }
-            if (persona.worldBackground.isNotBlank()) {
-                sb.append("【世界背景】").append(persona.worldBackground).append("\n\n")
+                sb.append("名字：").append(persona.name).append("\n")
             }
         } else {
-            // 未精调：原始字段直接拼接（身份背景为空时回退默认身份，确保 AI 有角色定位）
             if (persona.name.isNotBlank()) {
-                sb.append("【名字】").append(persona.name).append("\n\n")
+                sb.append("名字：").append(persona.name).append("\n")
             }
             val effectivePersona = persona.persona.ifBlank { QuiddityConstants.DEFAULT_AI_IDENTITY }
             if (effectivePersona.isNotBlank()) {
-                sb.append("【身份背景】\n").append(effectivePersona).append("\n\n")
+                sb.append("身份背景：").append(effectivePersona).append("\n")
             }
             if (persona.character.isNotBlank()) {
-                sb.append("【性格】").append(persona.character).append("\n\n")
+                sb.append("性格：").append(persona.character).append("\n")
             }
             if (persona.appearance.isNotBlank()) {
-                sb.append("【外观】").append(persona.appearance).append("\n\n")
-            }
-            if (persona.worldBackground.isNotBlank()) {
-                sb.append("【世界背景】").append(persona.worldBackground).append("\n\n")
+                sb.append("外观：").append(persona.appearance).append("\n")
             }
             if (persona.desired.isNotBlank()) {
-                sb.append("【期望特质】\n").append(persona.desired).append("\n\n")
+                sb.append("期望特质：").append(persona.desired).append("\n")
             }
         }
+        sb.append("\n")
 
-        // ===== 2. 用户人设 =====
+        // ===== 3. 用户信息 =====
         val user = conv.userPersona
         if (user.name.isNotBlank() || user.identity.isNotBlank() || user.gender.isNotBlank()
             || user.age.isNotBlank() || user.appearance.isNotBlank()) {
-            sb.append("【对话伙伴信息】\n")
+            sb.append("【用户信息】\n")
             if (user.name.isNotBlank()) sb.append("- 名字：").append(user.name).append("\n")
             if (user.identity.isNotBlank()) sb.append("- 身份：").append(user.identity).append("\n")
             if (user.gender.isNotBlank()) sb.append("- 性别：").append(user.gender).append("\n")
@@ -295,14 +311,20 @@ object PromptBuilder {
             sb.append("\n")
         }
 
-        // ===== 3. 场景 =====
-        // 当前规则：场景仅在首轮注入（sceneInjected=false）。注入一次后由对话上文延续场景，
-        // 避免反复重发静态场景导致 LLM 跑回最开始场景（场景崩塌）。场景被修改时 sceneInjected 重置为 false。
-        if (conv.scene.isNotBlank() && !conv.sceneInjected) {
-            sb.append("【当前场景】\n").append(conv.scene).append("\n\n")
+        // ===== 4. 世界与场景（世界背景常驻；当前场景仅在首轮注入） =====
+        val sceneInjectedThisRound = conv.scene.isNotBlank() && !conv.sceneInjected
+        if (persona.worldBackground.isNotBlank() || sceneInjectedThisRound) {
+            sb.append("【世界与场景】\n")
+            if (persona.worldBackground.isNotBlank()) {
+                sb.append("世界背景：").append(persona.worldBackground).append("\n")
+            }
+            if (sceneInjectedThisRound) {
+                sb.append("当前场景：").append(conv.scene).append("\n")
+            }
+            sb.append("\n")
         }
 
-        // ===== 4. 记忆（6.4 随身带 / 6.5 小抄两种组装） =====
+        // ===== 5. 记忆（6.4 随身带 / 6.5 小抄两种组装） =====
         val effectiveStrategy = memoryStrategy
             ?: conv.memoryStrategy
             ?: QuiddityConstants.MEMORY_STRATEGY_CARRY
@@ -330,7 +352,32 @@ object PromptBuilder {
             }
         }
 
-        // ===== 5. 时间库说明（主动消息开启且有查看密码时） =====
+        // ===== 6. 对话方式（用户可配置的表达风格 + 应用机制） =====
+        sb.append("【对话方式】\n")
+        sb.append("- 动作/神态用括号括起，如（轻笑）。\n")
+        sb.append("- 直接发言，不加「名字：」前缀或解释。\n")
+        sb.append("- 「继续说」时接着自己上一句继续，不回答自己的问题。\n")
+        sb.append("- 不提及自己是 AI 或模型（用户明确询问时除外）。\n\n")
+        if (!regeneratePreviousReply.isNullOrBlank()) {
+            sb.append("- 本次是「重说」请求：重新构思这句话该怎么回，换一种表达方式、结构和角度重写，不要沿用上一版的原句或句式。\n")
+            sb.append("上一版回复（仅作对照，禁止复述）：").append(regeneratePreviousReply.take(600)).append("\n\n")
+        }
+
+        // ===== 6.5 内部思考（提示词方式，任意模型可用） =====
+        // 让模型把思考内容写进回复并用标记包裹，客户端按标记拆成"思考消息 + 正式回复"；
+        // 深度（浅/深）通过提示词控制思考详略。
+        if (thinkingDepth != null) {
+            sb.append("【思考要求】\n")
+            if (thinkingDepth == com.quiddity.app.util.QuiddityConstants.THINKING_DEPTH_DEEP) {
+                sb.append("回答前请先深入思考。思考内容单独用【思考】标记包裹输出，正式回答另起一段用【回答】标记包裹，先输出【思考】再输出【回答】。")
+                    .append("思考要详细充分：拆解问题、考虑关键点和可能遗漏，再给出回答。\n\n")
+            } else {
+                sb.append("回答前请先简要思考。思考内容单独用【思考】标记包裹输出，正式回答另起一段用【回答】标记包裹，先输出【思考】再输出【回答】。")
+                    .append("思考简明扼要即可，不要把答案本身写进思考。\n\n")
+            }
+        }
+
+        // ===== 7. 时间库说明（主动消息开启且有查看密码时） =====
         // 让 AI 确切知道时间库查看密码与告知状态，避免在对话中编造错误密码
         if (conv.activeMessageEnabled && conv.timeLibraryPassword.isNotBlank()) {
             sb.append("【时间库查看密码】\n")
@@ -349,34 +396,99 @@ object PromptBuilder {
     /**
      * 把消息列表转为 ChatMessage（含 system）。
      *
-     * @param senderLabels 群聊发言人标签映射（senderId → 名字，6.5.3 群聊转述可区分说话人）。
-     *   仅当映射非空且消息带 senderId 时给内容加 `[名字] ` 前缀；私聊/空映射行为不变。
+     * @param senderLabels 群聊发言人标签映射（senderId → 成员 AI 名字）。
+     *   仅当映射非空时给内容加「名字：」前缀；私聊/空映射行为不变。
+     * @param userName 群聊场景下用户消息的名字（方案九.3：= 该成员私聊里的用户人设名字）；
+     *   null 时用户消息（senderId=null）不加前缀。
+     * 群聊（senderLabels 非空）下还会追加「对谁说」标注，让成员能区分发言对象：
+     *   - 消息文本含「@名字」时标注点名对象（成员名与用户名都参与匹配）；
+     *   - 用户无点名的消息标注「对全体成员说」；
+     *   - 其他 AI 成员无点名的消息不机械标注（接话判断由系统提示词规则兜底）。
      */
     fun toApiMessages(
         systemPrompt: String,
         history: List<Message>,
-        senderLabels: Map<String, String> = emptyMap()
+        senderLabels: Map<String, String> = emptyMap(),
+        userName: String? = null
     ): List<ChatMessage> {
         val result = mutableListOf<ChatMessage>()
         if (systemPrompt.isNotBlank()) {
             result.add(ChatMessage(role = "system", content = systemPrompt))
         }
-        history.forEach { msg ->
+        val memberNames = senderLabels.values.filter { it.isNotBlank() }.toSet()
+        history.filterNot { it.isThinking }.forEach { msg ->
             val role = when (msg.role) {
                 Role.USER -> "user"
                 Role.ASSISTANT -> "assistant"
                 Role.SYSTEM -> "system"
             }
-            val content = if (msg.senderId != null && senderLabels.isNotEmpty()) {
-                val label = senderLabels[msg.senderId] ?: msg.senderId
-                "[$label] ${msg.content}"
-            } else {
-                msg.content
+            val baseContent = when {
+                msg.senderId != null && senderLabels.isNotEmpty() -> {
+                    val label = senderLabels[msg.senderId] ?: msg.senderId
+                    "$label：${msg.content}"
+                }
+                msg.senderId == null && userName != null && senderLabels.isNotEmpty() &&
+                    msg.role == Role.USER -> "$userName：${msg.content}"
+                else -> msg.content
             }
-            result.add(ChatMessage(role = role, content = content))
+            val marker = if (senderLabels.isNotEmpty()) {
+                buildGroupAddresseeMarker(msg.content, msg.senderId, userName, memberNames)
+            } else {
+                null
+            }
+            result.add(ChatMessage(role = role, content = baseContent + marker.orEmpty()))
         }
         return result
     }
+
+    /**
+     * 生成单条群聊消息的「对谁说」标注（见 [toApiMessages] 的群聊规则）。
+     */
+    private fun buildGroupAddresseeMarker(
+        content: String,
+        senderId: String?,
+        userName: String?,
+        memberNames: Set<String>
+    ): String? {
+        val mentioned = buildList {
+            memberNames.filter { name -> GroupChatRules.isMentionedAt(content, name) }.forEach(::add)
+            if (userName?.isNotBlank() == true && GroupChatRules.isMentionedAt(content, userName)) add(userName)
+        }.distinct()
+        if (mentioned.isNotEmpty()) {
+            return "（点名${mentioned.joinToString("、") { "@$it" }}）"
+        }
+        if (senderId == null) {
+            return "（对全体成员说）"
+        }
+        return null
+    }
+
+    /**
+     * 把 [toApiMessages] 产出的消息列表转为 Responses API input item 列表。
+     *
+     * system 消息不进入 input（由调用方作为 Responses 请求的 instructions 字段发送，
+     * 服务端将其作为上下文中的第一条 system 消息）；其余消息按 role/content 原样映射。
+     */
+    fun toResponsesInput(apiMessages: List<ChatMessage>): List<ResponsesInputItem> =
+        apiMessages
+            .filterNot { it.role == "system" }
+            .map { msg ->
+                ResponsesInputItem(
+                    role = msg.role,
+                    content = msg.content
+                )
+            }
+
+    /**
+     * 把 OpenAI 兼容 function 工具定义转为 Responses API 工具声明。
+     */
+    fun toResponsesTool(tool: ToolDefinition): ResponsesTool =
+        ResponsesTool(
+            type = tool.type,
+            name = tool.function.name,
+            description = tool.function.description,
+            parameters = tool.function.parameters
+        )
 
     // ============================================================
     // 三、主动消息提示词（时间库生成 + 发送决策）
@@ -430,7 +542,7 @@ $persona
 
 此刻是主动消息触发时间点。请根据你的人设和与用户的聊天记录，自主决定是否主动向用户发一条消息。
 规则：
-1. 若你认为应该主动发消息：直接输出想要发送的消息内容，以你的身份口吻，自然贴合人设与聊天上下文，不要任何前缀、解释或引号。
+1. 若你认为应该主动发消息：直接输出想要发送的消息内容，以你的身份口吻，自然贴合人设与聊天上下文，不要任何前缀、解释或引号；内容必须包含实际说出口的台词，禁止替用户说话，禁止复述对话过程。
 2. 若你认为此刻不应主动发消息（如无话可说、时机不合适）：严格只输出数字 0（仅一个 0，无任何其它字符）。
 """.trim()
     }
@@ -469,15 +581,15 @@ $persona
         val sb = StringBuilder()
         if (conv.compileEnabled && !p.compiledPersona.isNullOrBlank()) {
             sb.append(p.compiledPersona)
-            if (p.name.isNotBlank()) sb.append("\n【名字】").append(p.name)
-            if (p.worldBackground.isNotBlank()) sb.append("\n【世界背景】").append(p.worldBackground)
+            if (p.name.isNotBlank()) sb.append("\n名字：").append(p.name)
+            if (p.worldBackground.isNotBlank()) sb.append("\n世界背景：").append(p.worldBackground)
         } else {
-            if (p.name.isNotBlank()) sb.append("【名字】").append(p.name).append("\n")
-            sb.append("【身份背景】").append(p.persona.ifBlank { QuiddityConstants.DEFAULT_AI_IDENTITY }).append("\n")
-            if (p.character.isNotBlank()) sb.append("【性格】").append(p.character).append("\n")
-            if (p.appearance.isNotBlank()) sb.append("【外观】").append(p.appearance).append("\n")
-            if (p.worldBackground.isNotBlank()) sb.append("【世界背景】").append(p.worldBackground).append("\n")
-            if (p.desired.isNotBlank()) sb.append("【期望特质】").append(p.desired).append("\n")
+            if (p.name.isNotBlank()) sb.append("名字：").append(p.name).append("\n")
+            sb.append("身份背景：").append(p.persona.ifBlank { QuiddityConstants.DEFAULT_AI_IDENTITY }).append("\n")
+            if (p.character.isNotBlank()) sb.append("性格：").append(p.character).append("\n")
+            if (p.appearance.isNotBlank()) sb.append("外观：").append(p.appearance).append("\n")
+            if (p.worldBackground.isNotBlank()) sb.append("世界背景：").append(p.worldBackground).append("\n")
+            if (p.desired.isNotBlank()) sb.append("期望特质：").append(p.desired).append("\n")
         }
         return sb.toString().trim()
     }
@@ -510,34 +622,123 @@ $persona
 """.trim()
 
     /**
-     * 构造群聊成员 system 提示词（4.2）：成员人设 + 群规则。
+     * 构造群聊成员 system 提示词（4.2）：成员人设 + 群规则 + 该成员私聊里的用户人设
+     * （方案九.2：成员 A 回复时注入的用户人设 = A 私聊里的用户人设）。
+     *
+     * @param regeneratePreviousReply 重说场景下该成员上一版回复的原文（null = 正常回复）。
+     *   非空时【对话方式】会标记本次为「重说」并要求换一种表达，避免输出与上一版雷同。
+     * @param groupBackground 群聊背景 / 场景合并设置（null/空白 = 不注入）。
+     *   所有成员回复时都可见；按 [groupBackgroundMode] 注入为【群聊背景】或【群聊场景】节。
+     * @param groupBackgroundMode 合并设置的模式（[QuiddityConstants.GROUP_BACKGROUND_MODE_*]），
+     *   决定上述文本注入的节标题；未知值回退为背景模式。
      */
-    fun buildGroupSystemPrompt(member: Conversation, groupRules: String): String {
+    fun buildGroupSystemPrompt(
+        member: Conversation,
+        groupRules: String,
+        regeneratePreviousReply: String? = null,
+        groupBackground: String? = null,
+        groupBackgroundMode: String? = null,
+        thinkingDepth: String? = null
+    ): String {
         val sb = StringBuilder()
-        sb.append(buildPersonaSnippet(member)).append("\n\n")
+        // 说话人认知：成员名字 = 该成员 AI 角色，用户名字 = 该成员私聊里的用户人设名字
+        val aiName = member.persona.name.ifBlank { "AI" }
+        val userName = member.userPersona.name.ifBlank { "用户" }
+        sb.append("【角色与对话双方】\n")
+        sb.append("你扮演的角色：").append(aiName).append("\n")
+        sb.append("对话伙伴：").append(userName).append("\n")
+        sb.append("转述中「").append(aiName).append("」指你本人，「").append(userName)
+            .append("」指对话伙伴；你只以「").append(aiName).append("」身份发言，不替对方说话。\n\n")
+        sb.append("【AI 人设】\n").append(buildPersonaSnippet(member)).append("\n\n")
+        buildUserPersonaSnippet(member.userPersona)?.let { userSection ->
+            sb.append(userSection).append("\n\n")
+        }
+        if (!groupBackground.isNullOrBlank()) {
+            val sectionTitle = if (groupBackgroundMode == QuiddityConstants.GROUP_BACKGROUND_MODE_SCENE) {
+                "【群聊场景】"
+            } else {
+                "【群聊背景】"
+            }
+            sb.append(sectionTitle).append("\n").append(groupBackground.trim()).append("\n\n")
+        }
         if (groupRules.isNotBlank()) {
-            sb.append("【群聊规则】\n").append(groupRules)
+            sb.append("【群聊规则】\n").append(groupRules).append("\n")
+        }
+        // 与私聊同一套【对话方式】保证：括号动作、直接发言、不提及 AI。
+        // 群聊特有约束（@点名优先回应、不替他人发言）也一并收进本段，避免规则被埋在列表末尾失效。
+        sb.append("【对话方式】\n")
+        sb.append("- 动作/神态用括号括起，如（轻笑）。\n")
+        sb.append("- 直接发言，不加「名字：」前缀或解释。\n")
+        sb.append("- 被用户「@」点名时优先回应；其他成员发言后按需接话。\n")
+        sb.append("- 判断说话对象：被「@自己名字」或直接叫到自己名字才算在叫你；其他成员用昵称（如宝宝）或没点名时，默认是叫用户，不要当成在叫你、不要抢话。\n")
+        sb.append("- 不提及自己是 AI 或模型（用户明确询问时除外）。\n")
+        if (!regeneratePreviousReply.isNullOrBlank()) {
+            sb.append("- 本次是「重说」请求：重新构思这句话该怎么回，换一种表达方式、结构和角度重写，不要沿用上一版的原句或句式。\n")
+            sb.append("上一版回复（仅作对照，禁止复述）：").append(regeneratePreviousReply.take(600)).append("\n")
+        }
+        if (thinkingDepth != null) {
+            sb.append("- 回答前先思考：思考内容用【思考】标记包裹，正式回答用【回答】标记包裹，先【思考】后【回答】。")
+            if (thinkingDepth == com.quiddity.app.util.QuiddityConstants.THINKING_DEPTH_DEEP) {
+                sb.append("思考要详细充分。")
+            } else {
+                sb.append("思考简明扼要即可。")
+            }
+            sb.append("\n")
         }
         return sb.toString().trim()
     }
 
     /**
-     * 构造群聊转述文本（4.2）：`[名字] 内容` 格式，只给最近 [lastN] 条（5.2）。
+     * 用户人设片段（【用户信息】），全空时返回 null。
+     */
+    private fun buildUserPersonaSnippet(user: com.quiddity.app.data.model.UserPersona): String? {
+        if (user.name.isBlank() && user.identity.isBlank() && user.gender.isBlank() &&
+            user.age.isBlank() && user.appearance.isBlank()
+        ) {
+            return null
+        }
+        val sb = StringBuilder()
+        sb.append("【用户信息】\n")
+        if (user.name.isNotBlank()) sb.append("- 名字：").append(user.name).append("\n")
+        if (user.identity.isNotBlank()) sb.append("- 身份：").append(user.identity).append("\n")
+        if (user.gender.isNotBlank()) sb.append("- 性别：").append(user.gender).append("\n")
+        if (user.age.isNotBlank()) sb.append("- 年龄：").append(user.age).append("\n")
+        if (user.appearance.isNotBlank()) sb.append("- 外观：").append(user.appearance).append("\n")
+        return sb.toString().trim()
+    }
+
+    /**
+     * 构造群聊转述文本（4.2）：`名字：内容` 格式（方案五），只给最近 [lastN] 条（5.2）。
      *
-     * @param senderNames 成员会话 id → 名字映射；未映射的 senderId 直接显示 id，无 senderId 显示「未知成员」（3.3）。
+     * @param senderNames 成员会话 id → 成员 AI 名字映射；未映射的 senderId 直接显示 id。
+     * @param userName 用户消息的名字（方案九.3：= 该成员私聊里的用户人设名字）；
+     *   null 时用户消息显示「未知成员」。
      * @param lastN 保留最近 N 条；<= 0 表示全部。
      */
     fun buildGroupTranscript(
         messages: List<Message>,
         lastN: Int,
-        senderNames: Map<String, String> = emptyMap()
+        senderNames: Map<String, String> = emptyMap(),
+        userName: String? = null
     ): String {
         val effective = if (lastN > 0 && messages.size > lastN) messages.takeLast(lastN) else messages
         return effective.joinToString("\n") { msg ->
-            val name = msg.senderId?.let { senderNames[it] ?: it } ?: "未知成员"
-            "[$name] ${msg.content}"
+            val name = when {
+                msg.senderId != null -> senderNames[msg.senderId] ?: msg.senderId
+                userName != null -> userName
+                else -> "未知成员"
+            }
+            "$name：${msg.content}"
         }
     }
+
+    /**
+     * 群聊规则（4.2 群聊成员 system 提示词的群规则部分）。
+     */
+    const val GROUP_RULES =
+        "1. 你在群聊中，成员包括用户和其他 AI 成员。\n" +
+        "2. 先读完整群聊转述再发言，保持人设一致。\n" +
+        "3. 只说你会说的话，不替其他成员或用户发言。"
 
     /**
      * 构造"该不该我接话"的判断指令（4.2）：成员人设 + 群聊转述 + 输出约束。

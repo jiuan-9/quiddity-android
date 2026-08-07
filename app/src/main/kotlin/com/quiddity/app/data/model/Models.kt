@@ -151,9 +151,38 @@ data class Conversation(
      */
     val sceneInjected: Boolean = false,
     val memory: String = "",
+    /**
+     * 快速设定面板的用户描述草稿（持久化以便回看/重新生成）。
+     * 每次输入防抖写入；空字符串表示从未填写。
+     */
+    val quickSetupDraft: String = "",
     val apiCatalogId: String? = null,
     val maxTokens: Int? = null,
     val singleMessageTokens: Int? = null,
+    /**
+     * 会话级采样温度覆盖（0～2，[QuiddityConstants.MIN_TEMPERATURE]～[QuiddityConstants.MAX_TEMPERATURE]）。
+     * - null = 跟随全局默认 [AppSettings.globalTemperature]
+     * - 官方文档：DeepSeek 思考模式下 temperature 不生效
+     */
+    val temperature: Double? = null,
+    /**
+     * 会话级"DeepSeek 官方服务端联网搜索"开关。
+     * - true = 当前 API 配置支持时走 Responses API（tools 携带 web_search，服务端执行搜索）
+     * - 能力依赖官方平台：providerId=deepseek 且模型为 [QuiddityConstants.DEEPSEEK_RESPONSES_MODEL]
+     */
+    val webSearchEnabled: Boolean = false,
+    /**
+     * 会话级"DeepSeek 思考"开关（仅 DeepSeek 官方 flash / pro 模型生效，默认关闭）。
+     * - true = 请求携带 reasoning 能力，模型的思考内容单独成一条消息展示；
+     * - 非 DeepSeek 官方模型时忽略（不发送不识别字段）。
+     */
+    val thinkingEnabled: Boolean = false,
+    /**
+     * 思考深度（仅 [thinkingEnabled] 时生效）：
+     * - [QuiddityConstants.THINKING_DEPTH_SHALLOW] = 浅（默认，reasoning_effort=low）
+     * - [QuiddityConstants.THINKING_DEPTH_DEEP] = 深（reasoning_effort=high）
+     */
+    val thinkingDepth: String = QuiddityConstants.THINKING_DEPTH_SHALLOW,
     val contextLimit: Int = QuiddityConstants.DEFAULT_CONTEXT_LIMIT,
     val compileEnabled: Boolean = false,
     /**
@@ -279,7 +308,30 @@ data class Conversation(
     /**
      * 群聊小本本（成员视角，6.7；1.3.0 仅预留字段）。
      */
-    val groupMemory: String = ""
+    val groupMemory: String = "",
+    /**
+     * 群聊上下文条数 N（仅 type=GROUP 使用；默认 50，范围 1～200）。
+     */
+    val groupContextLimit: Int = QuiddityConstants.GROUP_DEFAULT_CONTEXT_LIMIT,
+    /**
+     * 群聊停止模式（仅 type=GROUP 使用）：A=只停止当前、B=清空整个队列（默认）。
+     */
+    val stopMode: String = QuiddityConstants.GROUP_DEFAULT_STOP_MODE,
+    /**
+     * 群聊背景（仅 type=GROUP 使用）：用户自定义文本，
+     * 注入每个成员回复时的 system 提示词【群聊背景】节，塑造群聊整体氛围；
+     * 空字符串 = 不注入（不影响默认群聊规则）。
+     */
+    val groupBackground: String = "",
+    /**
+     * 群聊背景/场景的模式（仅 type=GROUP 使用，与 [groupBackground] 合并为一个设置项）：
+     * - [com.quiddity.app.util.QuiddityConstants.GROUP_BACKGROUND_MODE_BACKGROUND] = 背景（氛围描述），
+     *   注入为【群聊背景】节
+     * - [com.quiddity.app.util.QuiddityConstants.GROUP_BACKGROUND_MODE_SCENE] = 场景（多人情境），
+     *   注入为【群聊场景】节
+     * 两者可选其一开启；旧数据缺省回退为背景模式。
+     */
+    val groupBackgroundMode: String = QuiddityConstants.GROUP_DEFAULT_BACKGROUND_MODE
 )
 
 /**
@@ -302,6 +354,12 @@ data class Message(
      * - 不发送给 LLM、不参与压缩、不导出（各处已过滤）。
      */
     val isNotice: Boolean = false,
+    /**
+     * 是否为 DeepSeek 思考内容消息（单独占一条消息展示）。
+     * - true = 渲染为思考气泡（带"思考"标签，内容为模型 reasoning_content）；
+     * - 不发送给 LLM、不参与压缩（避免污染上下文），但保留在本地供回看。
+     */
+    val isThinking: Boolean = false,
     /**
      * 发言人会话 id（2.0.0 群聊消息使用）。
      * - 群聊消息带 senderId（指向成员私聊会话 id）
@@ -331,6 +389,11 @@ data class AppSettings(
     val userAvatarUri: String? = null,
     val globalMaxTokens: Int = QuiddityConstants.DEFAULT_MAX_TOKENS,
     val globalSingleMessageTokens: Int = QuiddityConstants.DEFAULT_SINGLE_MESSAGE_TOKENS,
+    /**
+     * 全局默认采样温度（0～2，官方默认 1.0）。
+     * 会话未单独设置温度时使用该值。
+     */
+    val globalTemperature: Double = QuiddityConstants.DEFAULT_TEMPERATURE,
     val globalContextLimit: Int = QuiddityConstants.DEFAULT_CONTEXT_LIMIT,
     /**
      * AI 回复多消息切分（UI 叫法"AI 回复切分"）：
@@ -347,6 +410,13 @@ data class AppSettings(
      * 默认 true（开启，营造剧本式旁白视觉）。
      */
     val bracketGrayEnabled: Boolean = true,
+    /**
+     * Markdown 渲染开关。
+     * 开启后 AI / 用户消息中的标题、加粗、斜体、删除线、行内代码、链接、
+     * 引用、列表标记会以 Markdown 样式显示；关闭后一律按纯文本显示。
+     * 围栏代码块（```）不受此开关影响，始终按代码卡片渲染。
+     */
+    val markdownEnabled: Boolean = true,
     /**
      * 会话列表界面壁纸 URI（全局设置）。
      * - null = 不使用壁纸（应用默认背景）
@@ -380,7 +450,8 @@ data class AppSettings(
     val sendDelayEnabled: Boolean = QuiddityConstants.DEFAULT_SEND_DELAY_ENABLED,
     /**
      * - 范围 [QuiddityConstants.MIN_SEND_DELAY_SECONDS] - [QuiddityConstants.MAX_SEND_DELAY_SECONDS]
-     * - 默认 [QuiddityConstants.DEFAULT_SEND_DELAY_SECONDS]（3秒）
+     * - 默认 [QuiddityConstants.DEFAULT_SEND_DELAY_SECONDS]（2秒）
+     * - 0 秒 = 关闭发送延迟
      */
     val sendDelaySeconds: Int = QuiddityConstants.DEFAULT_SEND_DELAY_SECONDS,
     /**
@@ -409,7 +480,19 @@ data class AppSettings(
      * - 若不同，将所有会话时间库的 done 重置为 pending
      * - 空字符串表示从未重置过
      */
-    val proactiveMessageLastResetDate: String = ""
+    val proactiveMessageLastResetDate: String = "",
+    /**
+     * 群聊教程弹窗是否已看过（首次进入群聊模式列表页弹一次，方案十.9）。
+     */
+    val groupTutorialSeen: Boolean = false,
+    /**
+     * 私聊默认名计数器：新会话 1、2、3…，删除不补号（方案二.4）。
+     */
+    val soloChatCounter: Int = 0,
+    /**
+     * 群聊默认名计数器：新群聊 1、2、3…，删除不补号（方案二.4）。
+     */
+    val groupChatCounter: Int = 0
 ) {
     companion object {
         val Default = AppSettings()

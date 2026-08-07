@@ -89,7 +89,7 @@ fun DelaySettingsPanel(
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(14.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            color = com.quiddity.app.ui.components.glassCardColor(),
             tonalElevation = 0.dp
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
@@ -120,7 +120,7 @@ fun DelaySettingsPanel(
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text = "统一管控打字机效果与发送延迟，关闭则所有延迟功能停用",
+text = "统一管控加载动画时长与发送延迟，关闭则所有延迟功能停用",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                         )
@@ -187,15 +187,15 @@ fun DelaySettingsPanel(
                     ) {
                         // ===== 子项 1：延迟输出 =====
                         DelaySliderRow(
-                            label = "延迟输出（打字机效果）",
+                            label = "延迟输出（加载动画）",
                             value = typingDelayMsPerChar.toFloat(),
                             valueRange = QuiddityConstants.MIN_TYPING_DELAY_MS_PER_CHAR.toFloat()..
                                 QuiddityConstants.MAX_TYPING_DELAY_MS_PER_CHAR.toFloat(),
                             steps = QuiddityConstants.MAX_TYPING_DELAY_MS_PER_CHAR - 1,
                             enabled = overallEnabled,
-                            explanation = "AI 每输出一个字后等待的毫秒数。数值越大，打字机效果越明显" +
-                                "（看起来像慢速打字）；数值为 0 则无延迟，AI 输出即时显示。" +
-                                "建议设置 10-30ms 以获得自然的真人打字感。",
+                            explanation = "按 AI 回复字数决定加载动画时长（约 字数 × 每字毫秒数）。" +
+                                "流式输出本身不受影响；网络快时加载动画也不会提前结束。" +
+                                "设为 0 则关闭，加载动画随流式自然结束。",
                             valueFormatter = { "${it}ms" },
                             onCommit = { onTypingDelayMsPerCharChange(it) }
                         )
@@ -206,11 +206,13 @@ fun DelaySettingsPanel(
                             value = sendDelaySeconds.toFloat(),
                             valueRange = QuiddityConstants.MIN_SEND_DELAY_SECONDS.toFloat()..
                                 QuiddityConstants.MAX_SEND_DELAY_SECONDS.toFloat(),
-                            steps = QuiddityConstants.MAX_SEND_DELAY_SECONDS - 2,
+                            steps = QuiddityConstants.MAX_SEND_DELAY_SECONDS -
+                                QuiddityConstants.MIN_SEND_DELAY_SECONDS - 1,
                             enabled = overallEnabled,
                             explanation = "点击发送后，应用等待的秒数。期间若你继续输入，" +
                                 "计时会重置，直到你停止输入才真正发出请求。" +
-                                "这样能避免连续输入时发出多个请求，节省 Token 消耗。",
+                                "这样能避免连续输入时发出多个请求，节省 Token 消耗。" +
+                                "设为 0 秒即关闭本功能。",
                             valueFormatter = { "${it}s" },
                             onCommit = { onSendDelaySecondsChange(it) }
                         )

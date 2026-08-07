@@ -62,6 +62,88 @@ object ChatRecordSearch {
     )
 
     /**
+     * Search excerpt: keyword-centered window with hit ranges.
+     *
+     * @param text display text (may contain leading/trailing ellipsis)
+     * @param highlights hit ranges inside [text], merged and sorted
+     */
+    data class Excerpt(
+        val text: String,
+        val highlights: List<IntRange>
+    )
+
+    /**
+     * Builds a keyword-centered excerpt for search result rows.
+     *
+     * For long messages the window (up to [maxChars] chars) is centered on the
+     * first hit, with ellipses appended around it; all hits inside the window
+     * are returned (case-insensitive, overlapping ranges merged). Returns null
+     * when the query has no terms or no hit, so callers can fall back.
+     */
+    fun buildExcerpt(content: String, query: String, maxChars: Int = 80): Excerpt? {
+        val normalized = content.replace("\n", " ").trim()
+        if (normalized.isEmpty()) return null
+        val terms = MemorySearch.extractTerms(query)
+        if (terms.isEmpty()) return null
+        val lower = normalized.lowercase()
+
+        var firstHit = -1
+        var firstTermLen = 0
+        for (term in terms) {
+            val idx = lower.indexOf(term)
+            if (idx >= 0 && (firstHit < 0 || idx < firstHit)) {
+                firstHit = idx
+                firstTermLen = term.length
+            }
+        }
+        if (firstHit < 0) return null
+
+        val len = normalized.length
+        val (start, end) = if (len <= maxChars) {
+            0 to len
+        } else {
+            var s = (firstHit - (maxChars - firstTermLen) / 2).coerceAtLeast(0)
+            var e = (s + maxChars).coerceAtMost(len)
+            if (e == len) s = (e - maxChars).coerceAtLeast(0)
+            s to e
+        }
+
+        val prefix = if (start > 0) "…" else ""
+        val suffix = if (end < len) "…" else ""
+        val text = prefix + normalized.substring(start, end) + suffix
+
+        val offsetBase = prefix.length - start
+        val ranges = mutableListOf<IntRange>()
+        for (term in terms) {
+            var from = start
+            while (true) {
+                val idx = lower.indexOf(term, from)
+                if (idx < 0 || idx >= end) break
+                if (idx + term.length <= end) {
+                    ranges += (idx + offsetBase) until (idx + term.length + offsetBase)
+                }
+                from = idx + term.length
+            }
+        }
+        return Excerpt(text, mergeRanges(ranges))
+    }
+
+    private fun mergeRanges(ranges: List<IntRange>): List<IntRange> {
+        if (ranges.isEmpty()) return emptyList()
+        val sorted = ranges.sortedBy { it.first }
+        val merged = mutableListOf(sorted.first())
+        for (range in sorted.drop(1)) {
+            val last = merged.last()
+            if (range.first <= last.last) {
+                merged[merged.size - 1] = last.first..maxOf(last.last, range.last)
+            } else {
+                merged += range
+            }
+        }
+        return merged
+    }
+
+    /**
      * 在当前会话的 [messages] 中按 [query] 检索历史消息。
      *
      * @param messages 该会话的完整消息列表（调用方已过滤 isNotice 提示气泡）

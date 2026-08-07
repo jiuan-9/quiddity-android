@@ -256,8 +256,23 @@ class GlossaryProvider {
                 "不包含设置数据，仅用于查看对话内容。",
             category = "数据与备份"
         ),
+        Term(
+            name = "对话导出长图",
+            pinyin = "duihuadaochuchangtu",
+            explanation = "在聊天页长按消息进入多选，选中若干条消息后点击“导出长图”，" +
+                "会生成一张白底气泡样式的长图并直接弹出系统分享，可发给好友或保存到相册。",
+            category = "数据与备份"
+        ),
 
         // ===== 交互功能 =====
+        Term(
+            name = "聊天记录搜索",
+            pinyin = "liaotianjilusousuo",
+            explanation = "首页搜索框支持同时搜索会话名称和消息内容；" +
+                "聊天页顶栏的搜索图标可搜索当前会话内的消息，" +
+                "点击搜索结果会自动跳转到对应消息。",
+            category = "交互功能"
+        ),
         Term(
             name = "多行文本自动切分",
             pinyin = "duohangwenben zidongqiefen",

@@ -153,7 +153,7 @@ sealed class ApiAccess {
             } catch (e: CryptoUtils.DecryptFailure.AuthenticationFailed) {
                 return Failure(
                     reason = Failure.Reason.KEY_AUTHENTICATION_FAILED,
-                    userMessage = "接口密钥数据认证失败——可能设备系统时间错误或应用数据被篡改",
+                    userMessage = "接口密钥无法解密（可能来自其他设备 / 数据损坏 / 升级迁移未完成），请重新填写密钥",
                     cause = e
                 )
             } catch (e: CryptoUtils.DecryptFailure.CryptoError) {

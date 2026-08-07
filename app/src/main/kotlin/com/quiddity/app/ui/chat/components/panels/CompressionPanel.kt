@@ -106,7 +106,7 @@ fun CompressionPanel(
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerLow
+            color = com.quiddity.app.ui.components.glassCardColor()
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(

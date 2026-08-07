@@ -3,8 +3,10 @@ package com.quiddity.app.util
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
+import kotlin.test.assertTrue
 
 /*
  * ============================================================================
@@ -43,7 +45,9 @@ import kotlin.test.assertNotEquals
  * 2. 加解密往返必须保留原文
  * 3. 篡改密文必须抛 [CryptoUtils.DecryptFailure.AuthenticationFailed]
  * 4. Base64 损坏必须抛 [CryptoUtils.DecryptFailure.Malformed]
- * 5. **跨设备可解密**（这是为什么不用 Android Keystore 的根本原因）
+ * 5. 旧版（固定密钥）密文可被 [CryptoUtils.decryptLegacy] 解开，供升级迁移使用；
+ *    注意：JVM 测试环境没有 Android Keystore，当前密钥与旧密钥是同一个派生密钥，
+ *    因此 [CryptoUtils.isLegacyEncrypted] 在 JVM 上恒为 false（真机才可能为 true）。
  */
 class CryptoUtilsTest {
 
@@ -139,5 +143,44 @@ class CryptoUtilsTest {
         val encrypted = CryptoUtils.encrypt(plain)
         val decrypted = CryptoUtils.decrypt(encrypted)
         assertEquals(plain, decrypted)
+    }
+
+    @Test
+    fun `legacy encrypted value roundtrips via decryptLegacy`() {
+        val plain = "sk-legacy-migration-test"
+        val encrypted = CryptoUtils.encryptLegacy(plain)
+        assertEquals(plain, CryptoUtils.decryptLegacy(encrypted))
+    }
+
+    @Test
+    fun `public decrypt accepts anything encrypt produced`() {
+        // 契约：encrypt 输出的密文必须能被公开 decrypt 解开
+        // （加密回退派生密钥时，解密同样回退，保证"保存→重新编辑"能解开）
+        val plain = "some-api-key-123456"
+        assertEquals(plain, CryptoUtils.decrypt(CryptoUtils.encrypt(plain)))
+        // 派生密钥加密的密文也要能被公开 decrypt 解开
+        assertEquals(plain, CryptoUtils.decrypt(CryptoUtils.encryptLegacy(plain)))
+    }
+
+    @Test
+    fun `decryptOrNull returns null instead of throwing`() {
+        assertEquals("abc", CryptoUtils.decryptOrNull(CryptoUtils.encrypt("abc")))
+        assertEquals(null, CryptoUtils.decryptOrNull(""))
+        assertEquals(null, CryptoUtils.decryptOrNull("not-valid-base64-!!!@@@"))
+        assertEquals(null, CryptoUtils.decryptOrNull("only-iv-without-ciphertext"))
+    }
+
+    @Test
+    fun `isDecryptable accepts legacy and current ciphertexts`() {
+        val plain = "sk-decryptable-test"
+        assertTrue(CryptoUtils.isDecryptable(CryptoUtils.encrypt(plain)))
+        assertTrue(CryptoUtils.isDecryptable(CryptoUtils.encryptLegacy(plain)))
+        assertTrue(CryptoUtils.isDecryptable(""))
+    }
+
+    @Test
+    fun `isDecryptable rejects corrupt ciphertext`() {
+        assertFalse(CryptoUtils.isDecryptable("not-valid-base64-!!!@@@"))
+        assertFalse(CryptoUtils.isDecryptable("only-iv-without-ciphertext"))
     }
 }

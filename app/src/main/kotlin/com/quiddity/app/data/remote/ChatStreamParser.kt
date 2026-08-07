@@ -1,6 +1,9 @@
 package com.quiddity.app.data.remote
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 /*
  * ============================================================================
@@ -52,7 +55,9 @@ class ChatStreamParser {
      */
     data class ParsedChunk(
         val content: String?,
-        val toolCalls: List<ToolCallFragment>
+        val toolCalls: List<ToolCallFragment>,
+        /** DeepSeek 思考内容增量（reasoning_content / reasoning 事件）。 */
+        val reasoning: String? = null
     )
 
     /**
@@ -102,6 +107,7 @@ class ChatStreamParser {
             val delta = choice?.delta
             ParsedChunk(
                 content = delta?.content,
+                reasoning = delta?.reasoning_content,
                 toolCalls = delta?.tool_calls.orEmpty().map { tc ->
                     ToolCallFragment(
                         index = tc.index,
@@ -143,6 +149,112 @@ class ChatStreamParser {
             )
         }.toList()
         toolCallAccumulators.clear()
+        return result
+    }
+}
+
+/**
+ * DeepSeek Responses API 语义化 SSE 流解析器。
+ *
+ * 与 [ChatStreamParser]（OpenAI 兼容 choices[].delta）不同，Responses 流的每个
+ * `data:` 行带独立 event 类型（response.output_text.delta / response.completed 等），
+ * 没有 `[DONE]` 消息，最后一条事件为 response.completed / response.incomplete /
+ * response.failed。
+ *
+ * - output_text.delta → 内容片段
+ * - function_call_arguments.delta + output_item.done(function_call) → 聚合函数调用
+ * - web_search_call（服务端搜索动作）仅为告知性事件，无需客户端处理
+ */
+class ResponsesStreamParser {
+
+    private val json = Json {
+        ignoreUnknownKeys = true
+        isLenient = true
+        explicitNulls = false
+    }
+
+    private class FunctionCallAccumulator(val itemId: String) {
+        var name: String? = null
+        val arguments = StringBuilder()
+    }
+
+    private val callAccumulators = linkedMapOf<String, FunctionCallAccumulator>()
+
+    /** 流结束时的错误信息（仅 response.failed 事件置位；正常结束为 null）。 */
+    var terminalError: String? = null
+        private set
+
+    /**
+     * 解析单条 Responses SSE data（event 类型由 [eventType] 提供）。
+     * 返回内容片段与工具调用增量；返回 null 表示流已结束（completed/incomplete/failed）。
+     */
+    fun acceptEvent(eventType: String?, dataLine: String): ChatStreamParser.ParsedChunk? {
+        if (eventType == null || dataLine.isBlank()) return ChatStreamParser.ParsedChunk("", emptyList())
+        when (eventType) {
+            "response.output_text.delta" -> {
+                val delta = runCatching {
+                    json.parseToJsonElement(dataLine).jsonObject["delta"]?.jsonPrimitive?.contentOrNull
+                }.getOrNull()
+                return ChatStreamParser.ParsedChunk(delta, emptyList())
+            }
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_text.delta" -> {
+                val delta = runCatching {
+                    json.parseToJsonElement(dataLine).jsonObject["delta"]?.jsonPrimitive?.contentOrNull
+                }.getOrNull()
+                return ChatStreamParser.ParsedChunk("", emptyList(), delta)
+            }
+            "response.function_call_arguments.delta" -> {
+                val obj = runCatching { json.parseToJsonElement(dataLine).jsonObject }.getOrNull() ?: return ChatStreamParser.ParsedChunk("", emptyList())
+                val itemId = obj["item_id"]?.jsonPrimitive?.contentOrNull ?: return ChatStreamParser.ParsedChunk("", emptyList())
+                val delta = obj["delta"]?.jsonPrimitive?.contentOrNull ?: ""
+                callAccumulators.getOrPut(itemId) { FunctionCallAccumulator(itemId) }
+                    .arguments.append(delta)
+                return ChatStreamParser.ParsedChunk("", emptyList())
+            }
+            "response.output_item.done" -> {
+                val item = runCatching {
+                    json.parseToJsonElement(dataLine).jsonObject["item"]?.jsonObject
+                }.getOrNull()
+                if (item?.get("type")?.jsonPrimitive?.content == "function_call") {
+                    val itemId = item["id"]?.jsonPrimitive?.contentOrNull
+                    val acc = itemId?.let { callAccumulators[it] }
+                    if (acc != null) {
+                        if (acc.name == null) {
+                            acc.name = item["name"]?.jsonPrimitive?.contentOrNull
+                        }
+                        if (acc.arguments.isEmpty()) {
+                            item["arguments"]?.jsonPrimitive?.contentOrNull?.let { acc.arguments.append(it) }
+                        }
+                    }
+                }
+                return ChatStreamParser.ParsedChunk("", emptyList())
+            }
+            "response.failed" -> {
+                terminalError = runCatching {
+                    json.parseToJsonElement(dataLine).jsonObject["error"]?.jsonObject
+                        ?.get("message")?.jsonPrimitive?.content
+                }.getOrNull() ?: "DeepSeek 响应失败"
+                return null
+            }
+            "response.completed", "response.incomplete" -> return null
+            else -> return ChatStreamParser.ParsedChunk("", emptyList())
+        }
+    }
+
+    /**
+     * 取流结束时的完整函数调用列表（按首次出现顺序），并清空聚合状态。
+     */
+    fun takeToolCalls(): List<ChatStreamParser.AggregatedToolCall> {
+        val result = callAccumulators.values.mapIndexed { index, acc ->
+            ChatStreamParser.AggregatedToolCall(
+                index = index,
+                id = acc.itemId,
+                name = acc.name.orEmpty(),
+                arguments = acc.arguments.toString()
+            )
+        }
+        callAccumulators.clear()
         return result
     }
 }

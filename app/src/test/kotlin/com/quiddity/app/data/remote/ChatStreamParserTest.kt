@@ -47,6 +47,30 @@ class ChatStreamParserTest {
     }
 
     @Test
+    fun `reasoning content is parsed separately from content`() {
+        val chunk = parser.parseChunk(
+            """{"choices":[{"delta":{"reasoning_content":"先分析需求，","content":null}}]}"""
+        )
+        assertEquals("先分析需求，", chunk?.reasoning, "reasoning_content 应解析到 reasoning 字段")
+        assertNull(chunk?.content, "该分片不应有普通内容")
+    }
+
+    @Test
+    fun `acceptChunk keeps reasoning while aggregating`() {
+        parser.acceptChunk(
+            """{"choices":[{"delta":{"reasoning_content":"思考第一段"}}]}"""
+        )
+        parser.acceptChunk(
+            """{"choices":[{"delta":{"reasoning_content":"思考第二段"}}]}"""
+        )
+        val first = parser.acceptChunk(
+            """{"choices":[{"delta":{"content":"回复内容"}}]}"""
+        )
+        assertEquals("回复内容", first?.content)
+        assertNull(first?.reasoning)
+    }
+
+    @Test
     fun `tool calls are aggregated by index across stream chunks`() {
         parser.acceptChunk(
             """{"choices": [{"delta": {"role": "assistant", "content": null, "tool_calls": [{"index": 0, "id": "call_abc", "type": "function", "function": {"name": "read_memory", "arguments": ""}}]}}]}"""

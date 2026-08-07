@@ -184,7 +184,9 @@ class ConversationStore(private val context: Context) {
 
         return getLoadLock(convId).withLock {
             messagesFlows[convId]?.let { return@withLock it }
-            val messages = loadMessagesFromDisk(convId)
+            // 性能：首次进入会话时消息文件读取 + JSON 解码移到 IO 线程，
+            // 避免在主线程阻塞导致进入页面卡死
+            val messages = withContext(Dispatchers.IO) { loadMessagesFromDisk(convId) }
             messagesCache.getOrPut(convId) { messages.toMutableList() }
             messagesFlows.getOrPut(convId) { MutableStateFlow(messages) }
         }
@@ -227,21 +229,26 @@ class ConversationStore(private val context: Context) {
         return success
     }
 
-    suspend fun createConversation(conv: Conversation) = withContext(Dispatchers.IO) {
+    /** @return 是否写盘成功 */
+    suspend fun createConversation(conv: Conversation): Boolean = withContext(Dispatchers.IO) {
         val newList = listOf(conv) + _conversations.value
-        writeConversationsAtomic(newList)
+        val ok = writeConversationsAtomic(newList)
         _conversations.value = newList
+        ok
     }
 
-    suspend fun updateConversation(conv: Conversation) = withContext(Dispatchers.IO) {
+    /** @return 是否写盘成功 */
+    suspend fun updateConversation(conv: Conversation): Boolean = withContext(Dispatchers.IO) {
         val newList = _conversations.value.map { if (it.id == conv.id) conv else it }
-        writeConversationsAtomic(newList)
+        val ok = writeConversationsAtomic(newList)
         _conversations.value = newList
+        ok
     }
 
-    suspend fun deleteConversation(convId: String) = withContext(Dispatchers.IO) {
+    /** @return 是否写盘成功 */
+    suspend fun deleteConversation(convId: String): Boolean = withContext(Dispatchers.IO) {
         val newList = _conversations.value.filter { it.id != convId }
-        writeConversationsAtomic(newList)
+        val ok = writeConversationsAtomic(newList)
         _conversations.value = newList
         runCatching { messagesFile(convId).delete() }
             .onFailure { android.util.Log.w("ConversationStore", "删除 messages_$convId.json 失败", it) }
@@ -249,16 +256,18 @@ class ConversationStore(private val context: Context) {
             messagesCache.remove(convId)
             messagesFlows.remove(convId)?.value = emptyList()
         }
+        ok
     }
 
     /**
      * 批量删除多个会话：单次内存过滤 + 单次写盘，避免 N 个会话触发 N 次整文件重写。
      */
-    suspend fun deleteConversations(convIds: List<String>) = withContext(Dispatchers.IO) {
-        if (convIds.isEmpty()) return@withContext
+    /** @return 是否写盘成功 */
+    suspend fun deleteConversations(convIds: List<String>): Boolean = withContext(Dispatchers.IO) {
+        if (convIds.isEmpty()) return@withContext true
         val target = convIds.toSet()
         val newList = _conversations.value.filterNot { it.id in target }
-        writeConversationsAtomic(newList)
+        val ok = writeConversationsAtomic(newList)
         _conversations.value = newList
         convIds.forEach { convId ->
             runCatching { messagesFile(convId).delete() }
@@ -268,6 +277,7 @@ class ConversationStore(private val context: Context) {
                 messagesFlows.remove(convId)?.value = emptyList()
             }
         }
+        ok
     }
 
     /** @return 是否写盘成功 */
@@ -297,14 +307,7 @@ class ConversationStore(private val context: Context) {
             if (!writeMessagesAtomic(convId, snapshot)) return@withContext false
         }
 
-        val preview = message.content
-            .replace("\n", " ")
-            .trim()
-            .let {
-                if (it.length > QuiddityConstants.MESSAGE_PREVIEW_MAX_CHARS)
-                    it.take(QuiddityConstants.MESSAGE_PREVIEW_MAX_CHARS) + "…"
-                else it
-            }
+        val preview = computePreview(message.content)
         val now = System.currentTimeMillis()
         // 流式中的 AI 消息尚未定型：不更新会话预览与 updatedAt，
         // 避免每个 token 都重写 conversations.json（预览内容也是中间态）
@@ -319,7 +322,13 @@ class ConversationStore(private val context: Context) {
         true
     }
 
-    /** @return 是否写盘成功 */
+    /**
+     * @return 是否写盘成功
+     *
+     * 消息定型（isStreaming=false）后同步更新会话预览与 updatedAt，
+     * 保证 AI 回复完成后会话列表立刻反映最新内容与排序；
+     * 流式中间态（isStreaming=true）跳过，避免每个 token 都重写 conversations.json。
+     */
     suspend fun updateMessage(message: Message): Boolean = withContext(Dispatchers.IO) {
         val convId = message.conversationId
         getMessageLock(convId).withLock {
@@ -329,8 +338,19 @@ class ConversationStore(private val context: Context) {
             cache[idx] = message
             val snapshot = cache.toList()
             messagesFlows[convId]?.value = snapshot
-            writeMessagesAtomic(convId, snapshot)
+            if (!writeMessagesAtomic(convId, snapshot)) return@withLock false
         }
+        if (!message.isStreaming) {
+            val preview = computePreview(message.content)
+            val now = System.currentTimeMillis()
+            val newList = _conversations.value.map { conv ->
+                if (conv.id == convId) conv.copy(lastMessagePreview = preview, updatedAt = now)
+                else conv
+            }
+            if (!writeConversationsAtomic(newList)) return@withContext false
+            _conversations.value = newList
+        }
+        true
     }
 
     /** @return 是否写盘成功 */
@@ -340,15 +360,7 @@ class ConversationStore(private val context: Context) {
             messagesFlows[convId]?.value = messages
             if (!writeMessagesAtomic(convId, messages)) return@withContext false
         }
-        val preview = messages.lastOrNull()?.content
-            ?.replace("\n", " ")
-            ?.trim()
-            ?.let {
-                if (it.length > QuiddityConstants.MESSAGE_PREVIEW_MAX_CHARS)
-                    it.take(QuiddityConstants.MESSAGE_PREVIEW_MAX_CHARS) + "…"
-                else it
-            }
-            .orEmpty()
+        val preview = computePreview(messages.lastOrNull()?.content.orEmpty())
         val now = System.currentTimeMillis()
         val newList = _conversations.value.map { conv ->
             if (conv.id == convId) conv.copy(lastMessagePreview = preview, updatedAt = now)
@@ -367,22 +379,24 @@ class ConversationStore(private val context: Context) {
         result
     }
 
+    /** @return 是否全部写盘成功（任一文件失败返回 false） */
     suspend fun importAll(
         conversations: List<Conversation>,
         messages: Map<String, List<Message>>
-    ) = withContext(Dispatchers.IO) {
+    ): Boolean = withContext(Dispatchers.IO) {
         val merged = (conversations + _conversations.value)
             .distinctBy { it.id }
             .sortedWith(compareByDescending<Conversation> { it.pinned }.thenByDescending { it.updatedAt })
-        writeConversationsAtomic(merged)
+        var allOk = writeConversationsAtomic(merged)
         _conversations.value = merged
         messages.forEach { (convId, msgs) ->
             getMessageLock(convId).withLock {
                 messagesCache[convId] = msgs.toMutableList()
                 messagesFlows[convId]?.value = msgs
-                writeMessagesAtomic(convId, msgs)
+                if (!writeMessagesAtomic(convId, msgs)) allOk = false
             }
         }
+        allOk
     }
 
     /**
@@ -424,7 +438,9 @@ class ConversationStore(private val context: Context) {
             // 2. 写入新会话列表
             val sorted = conversations
                 .sortedWith(compareByDescending<Conversation> { it.pinned }.thenByDescending { it.updatedAt })
-            writeConversationsAtomic(sorted)
+            if (!writeConversationsAtomic(sorted)) {
+                throw IllegalStateException("写入会话列表失败，已回滚")
+            }
             _conversations.value = sorted
 
             // 3. 写入新消息
@@ -432,7 +448,9 @@ class ConversationStore(private val context: Context) {
                 getMessageLock(convId).withLock {
                     messagesCache[convId] = msgs.toMutableList()
                     messagesFlows[convId]?.value = msgs
-                    writeMessagesAtomic(convId, msgs)
+                    if (!writeMessagesAtomic(convId, msgs)) {
+                        throw IllegalStateException("写入消息文件失败，已回滚")
+                    }
                 }
             }
 
@@ -464,4 +482,16 @@ class ConversationStore(private val context: Context) {
             throw t
         }
     }
+
+    /**
+     * 计算会话列表预览文本：换行转空格、trim、超长截断加省略号。
+     */
+    private fun computePreview(content: String): String =
+        content.replace("\n", " ")
+            .trim()
+            .let {
+                if (it.length > QuiddityConstants.MESSAGE_PREVIEW_MAX_CHARS)
+                    it.take(QuiddityConstants.MESSAGE_PREVIEW_MAX_CHARS) + "…"
+                else it
+            }
 }

@@ -4,14 +4,21 @@ import com.quiddity.app.data.model.Conversation
 import com.quiddity.app.data.model.Message
 import com.quiddity.app.data.model.MemoryCompressionResult
 import com.quiddity.app.data.model.Role
+import com.quiddity.app.data.model.AppSettings
 import com.quiddity.app.data.remote.ChatApi
 import com.quiddity.app.data.remote.ChatCompletionRequest
 import com.quiddity.app.data.remote.ChatException
 import com.quiddity.app.data.remote.ChatMessage
 import com.quiddity.app.data.remote.ChatStreamParser
 import com.quiddity.app.data.remote.AssistantToolCall
+import com.quiddity.app.data.remote.DeepSeekResponsesRequest
+import com.quiddity.app.data.remote.ResponsesInputItem
+import com.quiddity.app.data.remote.ResponsesTool
+import com.quiddity.app.data.remote.ToolDefinition
 import com.quiddity.app.domain.ChatRecordSearch
 import com.quiddity.app.domain.ChatError
+import com.quiddity.app.domain.ApiCatalogManager
+import com.quiddity.app.domain.GroupReplyPlanner
 import com.quiddity.app.domain.MemorySearch
 import com.quiddity.app.domain.MessageStreamCoordinator
 import com.quiddity.app.domain.PromptBuilder
@@ -19,8 +26,8 @@ import com.quiddity.app.domain.StreamCoordinator
 import com.quiddity.app.util.IdGenerator
 import com.quiddity.app.util.QuiddityConstants
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.JsonObject
 
 /*
  * ============================================================================
@@ -51,6 +58,74 @@ import kotlinx.serialization.json.JsonPrimitive
 
 
 /**
+ * 聊天请求的统一载体：Chat Completions（所有服务商）或 DeepSeek Responses API
+ * （官方服务端联网搜索）。工具轮（read_memory / search_chat）对两种协议复用同一套流程。
+ *
+ * 每种载体携带自己的请求目标 URL（Completions = chat/completions 端点，
+ * Responses = /responses 端点），由 [ChatRepository.runWithToolRound] 按类型取 URL，
+ * 调用方（私聊 / 群聊）无需各自判断。
+ */
+internal sealed interface ChatRoundRequest {
+    val apiUrl: String
+    data class Completions(val request: ChatCompletionRequest, override val apiUrl: String) : ChatRoundRequest
+    data class Responses(val request: DeepSeekResponsesRequest, override val apiUrl: String) : ChatRoundRequest
+}
+
+/**
+ * 构造聊天请求：启用 DeepSeek 官方联网搜索时走 Responses API（服务端 web_search），
+ * 否则走 OpenAI 兼容 Chat Completions。
+ *
+ * @param responsesUrl 非空表示本会话已启用联网搜索且当前 API 配置支持（由 [ChatRepository.resolveWebSearch] 判定）
+ * @param tools OpenAI 兼容 function 工具（记忆策略 TOOL 时携带）；Responses 路径会附加 web_search
+ * @param tool_choice OpenAI 兼容工具调用策略（"auto" / null）
+ */
+internal fun buildChatRound(
+    access: ApiAccess.Resolved,
+    systemPrompt: String,
+    apiMessages: List<ChatMessage>,
+    maxTokens: Int,
+    temperature: Double,
+    responsesUrl: String?,
+    reasoningEffort: String?,
+    tools: List<ToolDefinition>?,
+    tool_choice: String?
+): ChatRoundRequest {
+    if (responsesUrl.isNullOrBlank()) {
+        return ChatRoundRequest.Completions(
+            ChatCompletionRequest(
+                model = access.model,
+                messages = apiMessages,
+                max_tokens = maxTokens,
+                temperature = temperature,
+                stream = true,
+                reasoning_effort = reasoningEffort,
+                tools = tools,
+                tool_choice = tool_choice
+            ),
+            apiUrl = access.apiUrl
+        )
+    }
+    val responsesTools = buildList {
+        add(ResponsesTool(type = "web_search"))
+        tools.orEmpty().forEach { add(PromptBuilder.toResponsesTool(it)) }
+    }
+    return ChatRoundRequest.Responses(
+        DeepSeekResponsesRequest(
+            model = access.model,
+            input = PromptBuilder.toResponsesInput(apiMessages),
+            instructions = apiMessages.firstOrNull { it.role == "system" }?.content,
+            max_output_tokens = maxTokens,
+            temperature = temperature,
+            stream = true,
+            reasoning_effort = reasoningEffort,
+            tools = responsesTools,
+            tool_choice = tool_choice?.let { JsonPrimitive(it) }
+        ),
+        apiUrl = responsesUrl
+    )
+}
+
+/**
  * 对话仓库：负责发起流式 API 请求，向上层暴露为 Flow<ChatStreamEvent>。
  *
  * 仓库本身只关心：构造请求、调用 API、把原始 delta 喂给协调器、把协调器产出
@@ -62,13 +137,21 @@ class ChatRepository(
     private val conversationRepo: ConversationRepository,
     private val settingsRepo: SettingsRepository,
     /**
+     * 模型分级解析（群聊成员完整级可用 search_chat 工具检索完整群聊消息）。
+     */
+    private val apiCatalogManager: ApiCatalogManager? = null,
+    /**
      * 协调器工厂。默认使用 [MessageStreamCoordinator]。
      * 每轮新 run 都注入新 runId（基于 UUID），保证消息 id 全局唯一。
      * [senderId] 为群聊发言人会话 id（2.0.0 使用），私聊传 null。
      */
-    private val coordinatorFactory: (conversationId: String, runId: String, splitEnabled: Boolean, singleMessageTokens: Int, senderId: String?) -> StreamCoordinator =
-        { conversationId, runId, splitEnabled, singleMessageTokens, senderId ->
-            MessageStreamCoordinator(conversationId, runId, singleMessageTokens, splitEnabled, senderId = senderId)
+    private val coordinatorFactory: (conversationId: String, runId: String, splitEnabled: Boolean, singleMessageTokens: Int, senderId: String?, internalThinking: Boolean) -> StreamCoordinator =
+        { conversationId, runId, splitEnabled, singleMessageTokens, senderId, internalThinking ->
+            MessageStreamCoordinator(
+                conversationId, runId, singleMessageTokens, splitEnabled,
+                senderId = senderId,
+                internalThinking = internalThinking
+            )
         }
 ) {
 
@@ -82,6 +165,8 @@ class ChatRepository(
         data class CompleteMessage(val message: Message) : Event()
         /** 整个流结束。 */
         data object Done : Event()
+        /** 信息性提示（非错误）：如思考功能降级 / 未返回思考内容。 */
+        data class Notice(val text: String) : Event()
         /** 错误。 */
         data class Error(val throwable: Throwable, val partialContent: String) : Event()
     }
@@ -94,12 +179,15 @@ class ChatRepository(
      * @param memoryStrategy 记忆策略覆盖值（null = 跟随 [Conversation.memoryStrategy]，
      *   仍为 null 时回退为随身带 CARRY）。TOOL 模式下请求携带 read_memory 工具，
      *   模型按需检索记忆，不再每轮重读压缩摘要。
+     * @param regeneratePreviousReply 重说场景下上一版回复的原文（null = 正常回复）。
+     *   非空时提示词会标记本次为「重说」并要求换一种表达，避免输出与上一版雷同。
      * @param onEvent suspend 事件回调（由 ViewModel 串行化执行）
      */
     suspend fun streamAssistantReply(
         conv: Conversation,
         history: List<Message>,
         memoryStrategy: String? = null,
+        regeneratePreviousReply: String? = null,
         onEvent: suspend (Event) -> Unit
     ) {
         val settings = settingsRepo.currentSnapshot()
@@ -112,63 +200,75 @@ class ChatRepository(
         val effectiveStrategy = memoryStrategy
             ?: conv.memoryStrategy
             ?: QuiddityConstants.MEMORY_STRATEGY_CARRY
+        val reasoningEffort = resolveThinkingEffort(settings, conv)
+        val thinkingActive = reasoningEffort != null
         val systemPrompt = PromptBuilder.buildSystemPrompt(
             conv = conv,
-            memoryStrategy = effectiveStrategy
+            memoryStrategy = effectiveStrategy,
+            regeneratePreviousReply = regeneratePreviousReply,
+            thinkingDepth = if (thinkingActive) conv.thinkingDepth else null
         )
         val contextLimit = if (conv.contextLimit > 0) conv.contextLimit else settings.globalContextLimit
-        // 过滤 isNotice 提示气泡：不发给 LLM（UI 专用，非对话内容）
-        val filteredHistory = history.filterNot { it.isNotice }
+        // 过滤 isNotice 提示气泡与 isThinking 思考消息：不发给 LLM
+        val filteredHistory = history.filterNot { it.isNotice || it.isThinking }
         val trimmedHistory = takeLastRounds(filteredHistory, contextLimit, buffer = 4)
         val apiMessages = PromptBuilder.toApiMessages(systemPrompt, trimmedHistory)
 
         val maxTokens = conv.maxTokens ?: settings.globalMaxTokens
         val singleMsgTokens = conv.singleMessageTokens ?: settings.globalSingleMessageTokens
-
-        val request = ChatCompletionRequest(
-            model = access.model,
-            messages = apiMessages,
-            max_tokens = maxTokens,
-            temperature = 0.8,
-            stream = true,
-            tools = if (effectiveStrategy == QuiddityConstants.MEMORY_STRATEGY_TOOL &&
-                conv.compressedMemory.isNotBlank()
-            ) {
-                listOf(
-                    PromptBuilder.buildReadMemoryTool(),
-                    PromptBuilder.buildSearchChatTool()
-                )
-            } else {
-                null
-            },
-            tool_choice = if (effectiveStrategy == QuiddityConstants.MEMORY_STRATEGY_TOOL &&
-                conv.compressedMemory.isNotBlank()
-            ) {
-                "auto"
-            } else {
-                null
-            }
+        val temperature = conv.temperature ?: settings.globalTemperature
+        val toolStrategyActive = effectiveStrategy == QuiddityConstants.MEMORY_STRATEGY_TOOL &&
+            conv.compressedMemory.isNotBlank()
+        val buildRequest: (String?) -> ChatRoundRequest = {
+            buildChatRound(
+                access = access,
+                systemPrompt = systemPrompt,
+                apiMessages = apiMessages,
+                maxTokens = maxTokens,
+                temperature = temperature,
+                responsesUrl = resolveWebSearch(settings, conv),
+                // 内部思考：不发送 reasoning_effort（该服务端不认，会空响应）；
+                // 思考内容由提示词引导模型输出【思考】/【回答】，客户端按标记拆分显示。
+                reasoningEffort = null,
+                tools = if (toolStrategyActive) {
+                    listOf(
+                        PromptBuilder.buildReadMemoryTool(),
+                        PromptBuilder.buildSearchChatTool()
+                    )
+                } else {
+                    null
+                },
+                tool_choice = if (toolStrategyActive) "auto" else null
+            )
+        }
+        runWithToolRound(
+            api = api,
+            apiKey = access.apiKey,
+            request = buildRequest(null),
+            coordinator = coordinatorFactory(
+                conv.id,
+                IdGenerator.newUuid(),
+                settings.multilineAutoSplit,
+                singleMsgTokens,
+                null,
+                thinkingActive
+            ),
+            conv = conv,
+            onEvent = onEvent,
+            thinkingActive = thinkingActive
         )
-
-        val coordinator = coordinatorFactory(
-            conv.id,
-            // runId 是协调器内部标签，使用不带前缀的 UUID 即可；
-            // 最终消息 ID 由 MessageStreamCoordinator 拼装为 `{convId}_{runId}_ai_{index}`。
-            IdGenerator.newUuid(),
-            settings.multilineAutoSplit,
-            singleMsgTokens,
-            null
-        )
-
-        runWithToolRound(api, access.apiUrl, access.apiKey, request, coordinator, conv, onEvent)
     }
 
     /**
      * 让 AI 先发消息（空对话开场）。
+     *
+     * @param regeneratePreviousReply 重说场景下上一版开场回复的原文（null = 正常开场）。
+     *   非空时提示词会标记本次为「重说」并要求换一种表达，避免输出与上一版雷同。
      */
     suspend fun letAiStart(
         conv: Conversation,
         memoryStrategy: String? = null,
+        regeneratePreviousReply: String? = null,
         onEvent: suspend (Event) -> Unit
     ) {
         val settings = settingsRepo.currentSnapshot()
@@ -181,9 +281,13 @@ class ChatRepository(
         val effectiveStrategy = memoryStrategy
             ?: conv.memoryStrategy
             ?: QuiddityConstants.MEMORY_STRATEGY_CARRY
+        val reasoningEffort = resolveThinkingEffort(settings, conv)
+        val thinkingActive = reasoningEffort != null
         val systemPrompt = PromptBuilder.buildSystemPrompt(
             conv = conv,
-            memoryStrategy = effectiveStrategy
+            memoryStrategy = effectiveStrategy,
+            regeneratePreviousReply = regeneratePreviousReply,
+            thinkingDepth = if (thinkingActive) conv.thinkingDepth else null
         )
         // 引导：让 AI 主动发起对话
         val guidedMessages = listOf(
@@ -193,69 +297,127 @@ class ChatRepository(
 
         val maxTokens = conv.maxTokens ?: settings.globalMaxTokens
         val singleMsgTokens = conv.singleMessageTokens ?: settings.globalSingleMessageTokens
-
-        val request = ChatCompletionRequest(
-            model = access.model,
-            messages = guidedMessages,
-            max_tokens = maxTokens,
-            temperature = 0.8,
-            stream = true,
-            tools = if (effectiveStrategy == QuiddityConstants.MEMORY_STRATEGY_TOOL &&
-                conv.compressedMemory.isNotBlank()
-            ) {
-                listOf(
-                    PromptBuilder.buildReadMemoryTool(),
-                    PromptBuilder.buildSearchChatTool()
-                )
-            } else {
-                null
-            },
-            tool_choice = if (effectiveStrategy == QuiddityConstants.MEMORY_STRATEGY_TOOL &&
-                conv.compressedMemory.isNotBlank()
-            ) {
-                "auto"
-            } else {
-                null
-            }
+        val temperature = conv.temperature ?: settings.globalTemperature
+        val toolStrategyActive = effectiveStrategy == QuiddityConstants.MEMORY_STRATEGY_TOOL &&
+            conv.compressedMemory.isNotBlank()
+        val buildRequest: (String?) -> ChatRoundRequest = {
+            buildChatRound(
+                access = access,
+                systemPrompt = systemPrompt,
+                apiMessages = guidedMessages,
+                maxTokens = maxTokens,
+                temperature = temperature,
+                responsesUrl = resolveWebSearch(settings, conv),
+                reasoningEffort = null,
+                tools = if (toolStrategyActive) {
+                    listOf(
+                        PromptBuilder.buildReadMemoryTool(),
+                        PromptBuilder.buildSearchChatTool()
+                    )
+                } else {
+                    null
+                },
+                tool_choice = if (toolStrategyActive) "auto" else null
+            )
+        }
+        runWithToolRound(
+            api = api,
+            apiKey = access.apiKey,
+            request = buildRequest(null),
+            coordinator = coordinatorFactory(
+                conv.id,
+                IdGenerator.newUuid(),
+                settings.multilineAutoSplit,
+                singleMsgTokens,
+                null,
+                thinkingActive
+            ),
+            conv = conv,
+            onEvent = onEvent,
+            thinkingActive = thinkingActive
         )
+    }
 
-        val coordinator = coordinatorFactory(
-            conv.id,
-            IdGenerator.newUuid(),
-            settings.multilineAutoSplit,
-            singleMsgTokens,
-            null
-        )
+    /**
+     * 解析会话是否启用 DeepSeek 官方服务端联网搜索。
+     *
+     * 判定链：会话开关开启 → 解析实际 catalog 条目 → 该条目支持 Responses 服务端搜索。
+     * 返回官方 /responses 端点；不满足任一条件返回 null（走 Chat Completions）。
+     */
+    private fun resolveWebSearch(settings: AppSettings, conv: Conversation): String? {
+        val manager = apiCatalogManager ?: return null
+        if (!conv.webSearchEnabled) return null
+        val entry = manager.resolveEntry(settings, conv) ?: return null
+        if (!manager.supportsServerWebSearch(entry)) return null
+        return manager.responsesApiUrl(entry)
+    }
 
-        runWithToolRound(api, access.apiUrl, access.apiKey, request, coordinator, conv, onEvent)
+    /**
+     * 判断会话思考功能是否应生效（思考开关 + DeepSeek 官方模型）。
+     * 返回值 low / high 标识深度，但当前仅用于判定 thinkingActive（思考内容显不显示）：
+     * reasoning_effort 参数实测会导致该服务端返回空响应，因此不发送，
+     * 思考内容完全依赖服务端返回的 reasoning_content 字段。
+     */
+    private fun resolveThinkingEffort(settings: AppSettings, conv: Conversation): String? {
+        if (!conv.thinkingEnabled) return null
+        val manager = apiCatalogManager ?: return null
+        val entry = manager.resolveEntry(settings, conv) ?: return null
+        if (entry.providerId != QuiddityConstants.DEEPSEEK_PROVIDER_ID) return null
+        return if (conv.thinkingDepth == QuiddityConstants.THINKING_DEPTH_DEEP) "high" else "low"
     }
 
     /**
      * 通用流式驱动（含 read_memory 工具轮）：
      * 第一轮如聚合到工具调用，回填检索结果后发起第二轮（最多一轮，防死循环），
      * 最后由 [StreamCoordinator] 负责正确的 NewMessage/UpdateMessage/CompleteMessage 派发。
+     *
+     * 请求目标 URL 由 [ChatRoundRequest] 自身携带（Completions / Responses 端点不同），
+     * 私聊与群聊统一在此按类型取值，不再由调用点各自传 URL。
+     */
+    /**
+     * 通用流式驱动（含 read_memory 工具轮）。
+     *
+     * @return true = 本轮正常完成（含工具回填轮）；false = 任一轮出错（错误已通过 [Event.Error] 派发）
      */
     private suspend fun runWithToolRound(
         api: ChatApi,
-        apiUrl: String,
         apiKey: String,
-        request: ChatCompletionRequest,
+        request: ChatRoundRequest,
         coordinator: StreamCoordinator,
         conv: Conversation,
-        onEvent: suspend (Event) -> Unit
-    ) {
-        val firstRoundCalls = runSingleStream(api, apiUrl, apiKey, request, coordinator, onEvent) ?: return
+        onEvent: suspend (Event) -> Unit,
+        thinkingActive: Boolean = true,
+        /**
+         * 内容进入协调器前的流式转换（群聊用于剥离「名字：」前缀，
+         * 避免前缀在切分阶段被拆成独立消息、剥离后变成空白消息）。
+         */
+        contentTransform: (String) -> String = { it }
+    ): Boolean {
+        val apiUrl = request.apiUrl
+        val firstRoundCalls = runSingleStream(
+            api, apiUrl, apiKey, request, coordinator, onEvent, contentTransform, thinkingActive
+        ) ?: return false
         if (firstRoundCalls.isNotEmpty()) {
-            val toolMessages = buildToolResultMessages(request.messages, conv, firstRoundCalls)
-            val secondRequest = request.copy(
-                messages = toolMessages,
-                tools = null,
-                tool_choice = null
+            val secondRequest = try {
+                buildSecondRoundRequest(request, conv, firstRoundCalls)
+            } catch (c: kotlinx.coroutines.CancellationException) {
+                throw c
+            } catch (t: Throwable) {
+                // 第二轮不再聚合工具调用（模型若再次请求工具则忽略），直接流式输出最终答复
+                // 工具回填失败不影响主流程：派发错误并结束本轮，避免异常上抛导致崩溃
+                emitError(onEvent, t, coordinator.snapshot().joinToString("\n") { it.content })
+                return false
+            }
+            // 第二轮失败时错误事件已派发，与第一轮失败语义一致：不派发 Done
+            val secondRoundOk = runSingleStream(
+                api, apiUrl, apiKey, secondRequest, coordinator, onEvent, contentTransform, thinkingActive
             )
-            // 第二轮不再聚合工具调用（模型若再次请求工具则忽略），直接流式输出最终答复
-            runSingleStream(api, apiUrl, apiKey, secondRequest, coordinator, onEvent)
+            if (secondRoundOk == null) {
+                return false
+            }
         }
         onEvent(Event.Done)
+        return true
     }
 
     /**
@@ -267,9 +429,11 @@ class ChatRepository(
         api: ChatApi,
         apiUrl: String,
         apiKey: String,
-        request: ChatCompletionRequest,
+        request: ChatRoundRequest,
         coordinator: StreamCoordinator,
-        onEvent: suspend (Event) -> Unit
+        onEvent: suspend (Event) -> Unit,
+        contentTransform: (String) -> String = { it },
+        thinkingActive: Boolean = true
     ): List<ChatStreamParser.AggregatedToolCall>? {
         var toolCalls: List<ChatStreamParser.AggregatedToolCall> = emptyList()
         try {
@@ -277,11 +441,22 @@ class ChatRepository(
             // 此处不再阻塞流式消费——避免大 delta 时 API 缓冲区堆积、
             // 网络层超时，以及"逐字渲染无感"的问题（旧实现按 delta 整段延迟，
             // delta 较大时用户看到的是整段跳出而非逐字浮现）。
-            api.streamChat(apiUrl, apiKey, request).collect { event ->
+            val stream = when (request) {
+                is ChatRoundRequest.Completions -> api.streamChat(apiUrl, apiKey, request.request)
+                is ChatRoundRequest.Responses -> api.streamResponses(apiUrl, apiKey, request.request)
+            }
+            stream.collect { event ->
                 when (event) {
                     is ChatApi.StreamEvent.Content -> {
-                        val evictions = coordinator.accept(event.text)
+                        val evictions = coordinator.accept(contentTransform(event.text))
                         evictions.forEach { dispatch(onEvent, it) }
+                    }
+                    is ChatApi.StreamEvent.Reasoning -> {
+                        // 思考开关关闭时不显示思考内容（仍正常显示正式回复）
+                        if (thinkingActive) {
+                            val evictions = coordinator.acceptReasoning(event.text)
+                            evictions.forEach { dispatch(onEvent, it) }
+                        }
                     }
                     is ChatApi.StreamEvent.ToolCalls -> {
                         if (event.calls.isNotEmpty()) toolCalls = event.calls
@@ -290,11 +465,48 @@ class ChatRepository(
             }
             // 流结束，强制收尾
             coordinator.finalize().forEach { dispatch(onEvent, it) }
+        } catch (c: kotlinx.coroutines.CancellationException) {
+            // 用户停止 / 页面销毁：不当作错误，向上传播取消，由上层收尾半截消息
+            throw c
         } catch (t: Throwable) {
             emitError(onEvent, t, coordinator.snapshot().joinToString("\n") { it.content })
             return null
         }
         return toolCalls
+    }
+
+    /**
+     * 构造工具回填后的第二轮请求：
+     * - Chat Completions：assistant 工具调用消息 + tool 角色结果消息
+     * - Responses API：function_call / function_call_output input item（call_id 一一对应）
+     */
+    private suspend fun buildSecondRoundRequest(
+        request: ChatRoundRequest,
+        conv: Conversation,
+        calls: List<ChatStreamParser.AggregatedToolCall>
+    ): ChatRoundRequest = when (request) {
+        is ChatRoundRequest.Completions -> {
+            val toolMessages = buildToolResultMessages(request.request.messages, conv, calls)
+            ChatRoundRequest.Completions(
+                request.request.copy(
+                    messages = toolMessages,
+                    tools = null,
+                    tool_choice = null
+                ),
+                apiUrl = request.apiUrl
+            )
+        }
+        is ChatRoundRequest.Responses -> {
+            val items = buildResponsesToolResultItems(request.request.input, conv, calls)
+            ChatRoundRequest.Responses(
+                request.request.copy(
+                    input = items,
+                    tools = null,
+                    tool_choice = null
+                ),
+                apiUrl = request.apiUrl
+            )
+        }
     }
 
     /**
@@ -324,24 +536,62 @@ class ChatRepository(
         val memory = PromptBuilder.buildMemoryDrawerContent(conv)
         calls.forEach { call ->
             val toolCallId = call.id ?: "call_${call.index}"
-            val content = if (call.name == "read_memory") {
-                val query = parseToolQuery(call.arguments)
-                MemorySearch.search(memory, query).content
-            } else if (call.name == "search_chat") {
-                val query = parseToolQuery(call.arguments)
-                val messages = conversationRepo.observeMessages(conv.id).value
-                    .filterNot { it.isNotice }
-                ChatRecordSearch.search(messages, query).content
-            } else {
-                "工具 ${call.name} 不存在"
-            }
             result += ChatMessage(
                 role = "tool",
                 tool_call_id = toolCallId,
-                content = content
+                content = resolveToolContent(call, conv, memory)
             )
         }
         return result
+    }
+
+    /**
+     * 构造 Responses API 工具回填 input：原始消息 + function_call item + function_call_output item。
+     * 官方要求 call_id 非空唯一，且每个 function_call 必须有对应 function_call_output。
+     */
+    private suspend fun buildResponsesToolResultItems(
+        originalInput: List<ResponsesInputItem>,
+        conv: Conversation,
+        calls: List<ChatStreamParser.AggregatedToolCall>
+    ): List<ResponsesInputItem> {
+        val result = originalInput.toMutableList()
+        calls.forEach { call ->
+            result += ResponsesInputItem(
+                type = "function_call",
+                call_id = call.id ?: "call_${call.index}",
+                name = call.name,
+                arguments = call.arguments
+            )
+        }
+        val memory = PromptBuilder.buildMemoryDrawerContent(conv)
+        calls.forEach { call ->
+            result += ResponsesInputItem(
+                type = "function_call_output",
+                call_id = call.id ?: "call_${call.index}",
+                output = resolveToolContent(call, conv, memory)
+            )
+        }
+        return result
+    }
+
+    /**
+     * 解析单个工具调用结果：read_memory / search_chat 走本地检索，其余工具回填"不存在"。
+     */
+    private suspend fun resolveToolContent(
+        call: ChatStreamParser.AggregatedToolCall,
+        conv: Conversation,
+        memory: String
+    ): String = when (call.name) {
+        "read_memory" -> {
+            MemorySearch.search(memory, parseToolQuery(call.arguments)).content
+        }
+        "search_chat" -> {
+            val query = parseToolQuery(call.arguments)
+            val messages = conversationRepo.observeMessages(conv.id).value
+                .filterNot { it.isNotice }
+            ChatRecordSearch.search(messages, query).content
+        }
+        else -> "工具 ${call.name} 不存在"
     }
 
     /** 解析工具参数 JSON 中的 query 字段；解析失败时回退使用原始参数字符串。 */
@@ -362,6 +612,7 @@ class ChatRepository(
     }
 
     private suspend fun emitError(onEvent: suspend (Event) -> Unit, t: Throwable, partial: String) {
+        android.util.Log.w("ChatRepository", "流式请求错误：${t.message}", t)
         onEvent(Event.Error(t, partial))
     }
 
@@ -460,7 +711,7 @@ class ChatRepository(
             ?: throw IllegalStateException("API 未配置，无法压缩记忆")
 
         // 过滤 isNotice 提示气泡：不参与压缩（UI 专用，非对话内容）
-        val filteredMessages = messages.filterNot { it.isNotice }
+        val filteredMessages = messages.filterNot { it.isNotice || it.isThinking }
 
         // 仅压缩上次压缩后的新消息：
         // 取"从第 lastCompressedAtRound 轮开始"的全部消息——以 USER 消息为锚点，
@@ -497,7 +748,7 @@ class ChatRepository(
     }
 
     // ============================================================
-    // 群聊接口（2.0.0 接口预留；1.3.0 仅声明，不实现群聊实体）
+    // 群聊接口（1.5.0 实现；decideGroupResponder 按方案第三节用户点名模式不启用）
     // ============================================================
 
     /**
@@ -510,15 +761,114 @@ class ChatRepository(
      * @param group 群聊会话（群规则 / 群聊小本本）
      * @param transcript 群聊转述（[com.quiddity.app.domain.PromptBuilder.buildGroupTranscript] 产出）
      * @param senderId 发言人会话 id（写入消息 senderId）
+     * @param regeneratePreviousReply 重说场景下该成员上一版回复的原文（null = 正常回复）。
+     *   非空时提示词会标记本次为「重说」并要求换一种表达，避免输出与上一版雷同。
      */
     suspend fun streamGroupMemberReply(
         member: Conversation,
         group: Conversation,
         transcript: List<Message>,
         senderId: String,
+        regeneratePreviousReply: String? = null,
         onEvent: suspend (Event) -> Unit
     ) {
-        throw NotImplementedError("群聊功能未实现：1.3.0 仅预留接口，2.0.0 实体加入")
+        val settings = settingsRepo.currentSnapshot()
+        val memberThinkingActive = resolveThinkingEffort(settings, member) != null
+        // 思考消息不进入群聊转述（避免把成员思考内容发给其他成员）
+        val cleanTranscript = transcript.filterNot { it.isThinking }
+        // 方案六.2：群聊记录只取最近 N 条（默认 50，范围 1～200），在点击定格快照上截断。
+        val trimmed = if (group.groupContextLimit > 0 && cleanTranscript.size > group.groupContextLimit) {
+            cleanTranscript.takeLast(group.groupContextLimit)
+        } else {
+            cleanTranscript
+        }
+        val senderNames = resolveSenderNames(trimmed)
+        val plan = GroupReplyPlanner.buildPlan(
+            settings = settings,
+            member = member,
+            group = group,
+            transcript = trimmed,
+            senderId = senderId,
+            tier = resolveMemberTier(member, settings),
+            senderNames = senderNames,
+            userName = member.userPersona.name.takeIf { it.isNotBlank() },
+            webSearchResponsesUrl = resolveWebSearch(settings, member),
+            thinkingDepth = if (memberThinkingActive) member.thinkingDepth else null,
+            regeneratePreviousReply = regeneratePreviousReply
+        )
+        // 模型有时会误输出「名字：」前缀（如回复开头带其他成员名），
+        // 在事件派发前剥掉，保证落库/展示内容不带任何名字前缀（方案五）。
+        val prefixNames = buildList {
+            member.persona.name.takeIf { it.isNotBlank() }?.let(::add)
+            member.userPersona.name.takeIf { it.isNotBlank() }?.let(::add)
+            addAll(senderNames.values)
+        }
+        val sanitizer = GroupReplyPrefixSanitizer(prefixNames)
+        // 流式剥离「名字：」前缀：在切分之前移除，避免前缀被拆成独立消息后剥离成空白
+        val prefixStripper = GroupReplyPrefixStripper(prefixNames)
+        val cleanEvent: suspend (Event) -> Unit = { event ->
+            when (event) {
+                is Event.NewMessage ->
+                    onEvent(Event.NewMessage(event.message.copy(content = sanitizer.clean(event.message.content))))
+                is Event.UpdateMessage ->
+                    onEvent(Event.UpdateMessage(event.message.copy(content = sanitizer.clean(event.message.content))))
+                is Event.CompleteMessage ->
+                    onEvent(Event.CompleteMessage(event.message.copy(content = sanitizer.clean(event.message.content))))
+                is Event.Done -> onEvent(event)
+                is Event.Error -> onEvent(event)
+                is Event.Notice -> onEvent(event)
+            }
+        }
+        plan.fold(
+            onSuccess = { p ->
+                val coordinator = coordinatorFactory(
+                    group.id,
+                    IdGenerator.newUuid(),
+                    settings.multilineAutoSplit,
+                    p.singleMessageTokens,
+                    p.senderId,
+                    memberThinkingActive
+                )
+                val roundRequest = p.responsesRequest
+                    ?.let { ChatRoundRequest.Responses(it, p.responsesApiUrl ?: p.apiUrl) }
+                    ?: ChatRoundRequest.Completions(p.request, p.apiUrl)
+                runWithToolRound(
+                    api, p.apiKey, roundRequest, coordinator, group, cleanEvent,
+                    thinkingActive = memberThinkingActive
+                ) { prefixStripper.accept(it) }
+            },
+            onFailure = { emitError(onEvent, it, "") }
+        )
+    }
+
+    /**
+     * 解析群聊转述中出现的成员 id → 名字（未设置名字的成员回退显示 id）。
+     */
+    private fun resolveSenderNames(transcript: List<Message>): Map<String, String> {
+        val names = mutableMapOf<String, String>()
+        transcript.forEach { msg ->
+            val senderId = msg.senderId ?: return@forEach
+            if (senderId !in names) {
+                val name = conversationRepo.getConversation(senderId)
+                    ?.persona?.name
+                    ?.takeIf { it.isNotBlank() }
+                names[senderId] = name ?: senderId
+            }
+        }
+        return names
+    }
+
+    /**
+     * 解析成员的模型分级（member.apiCatalogId → activeCatalogId → catalog 第一条）。
+     */
+    private fun resolveMemberTier(member: Conversation, settings: AppSettings): ApiCatalogManager.ModelTier {
+        val manager = apiCatalogManager ?: return ApiCatalogManager.ModelTier.BASIC
+        val entry = settings.catalog
+            .firstOrNull { it.id == member.apiCatalogId }
+            ?: settings.catalog.firstOrNull { it.id == settings.activeCatalogId }
+            ?: settings.catalog.firstOrNull()
+            ?: return ApiCatalogManager.ModelTier.BASIC
+        return manager.getModelTier(entry.apiModel, entry.providerId)
     }
 
     /**
@@ -546,7 +896,27 @@ class ChatRepository(
         group: Conversation,
         transcript: List<Message>
     ): String {
-        throw NotImplementedError("群聊功能未实现：1.3.0 仅预留接口，2.0.0 实体加入")
+        val settings = settingsRepo.currentSnapshot()
+        val access = ApiAccess.resolve(settings, group)
+            as? ApiAccess.Resolved
+            ?: throw IllegalStateException("API 未配置，无法压缩群聊记忆")
+        val transcriptText = PromptBuilder.buildGroupTranscript(
+            transcript.filterNot { it.isNotice || it.isThinking },
+            lastN = 0,
+            senderNames = resolveSenderNames(transcript),
+            userName = "用户"
+        )
+        val raw = api.completeNonStreaming(
+            apiUrl = access.apiUrl,
+            apiKey = access.apiKey,
+            model = access.model,
+            systemPrompt = PromptBuilder.GROUP_MEMORY_SYSTEM_PROMPT,
+            userContent = PromptBuilder.buildGroupMemorySummaryPrompt(transcriptText),
+            maxTokens = QuiddityConstants.GROUP_MEMORY_MAX_TOKENS,
+            temperature = QuiddityConstants.COMPRESSION_TEMPERATURE,
+            emptyError = "群聊记忆压缩返回空内容"
+        )
+        return GroupReplyPlanner.applyMemoryCompression(raw, group.groupMemory)
     }
 
     /**
@@ -673,6 +1043,8 @@ class ChatRepository(
     private fun classifyChatException(msg: String, t: Throwable): ChatError {
         val lower = msg.lowercase()
         return when {
+            // 中文密钥类错误（未配置 / 格式损坏 / 无法解密）统一归为鉴权类，提示检查密钥
+            "密钥" in msg -> ChatError.Auth(userMessage = msg, cause = t)
             "unauthorized" in lower || "401" in lower || "api key" in lower || "forbidden" in lower ->
                 ChatError.Auth(userMessage = msg, cause = t)
             "timeout" in lower || "connect" in lower || "socket" in lower ->
@@ -742,5 +1114,66 @@ class ChatRepository(
         if (startRound >= userIndices.size) return emptyList()
         val startIdx = userIndices[startRound]
         return messages.subList(startIdx, messages.size)
+    }
+}
+
+/**
+ * 群聊回复前缀剥离器：模型误输出「名字：」前缀（含其他成员名/用户名/本人名）时，
+ * 从消息内容开头连续剥掉。内容流式累计，每次事件都对完整内容重新判定，无需维护状态。
+ */
+internal class GroupReplyPrefixSanitizer(names: List<String>) {
+    private val known = names.filter { it.isNotBlank() }.distinct().sortedByDescending { it.length }
+
+    fun clean(content: String): String {
+        var text = content
+        while (true) {
+            val name = known.firstOrNull {
+                text.startsWith("$it：") || text.startsWith("$it:")
+            } ?: break
+            text = text.substring(name.length + 1).trimStart()
+        }
+        return text
+    }
+}
+
+/**
+ * 群聊回复前缀流式剥离器：在内容进入切分器之前，把开头可能跨 delta 分片到达的
+ * 「名字：/名字:」前缀剥掉。
+ *
+ * 与 [GroupReplyPrefixSanitizer]（对完整内容剥离）互补：
+ * - 本类负责流式开头：若前缀在切分阶段被拆成独立消息，剥离后会产生空白消息；
+ * - 匹配成功后立即切换直通模式（前缀只可能出现在回复开头）；
+ * - 只处理开头（含前导空白），正文中的「名字：」仍由 [GroupReplyPrefixSanitizer] 兜底。
+ */
+internal class GroupReplyPrefixStripper(names: List<String>) {
+
+    private val known = names.filter { it.isNotBlank() }.distinct().sortedByDescending { it.length }
+    private val pending = StringBuilder()
+    private var active = true
+
+    fun accept(delta: String): String {
+        if (!active || delta.isEmpty()) return delta
+        pending.append(delta)
+        val text = pending.toString()
+        val start = text.indexOfFirst { !it.isWhitespace() }
+        if (start < 0) return ""
+        val candidate = text.substring(start)
+        for (name in known) {
+            val full = "$name："
+            if (candidate == full || candidate == "$name:") return ""
+            if (candidate.startsWith(full)) return consume(candidate.substring(full.length))
+            if (candidate.startsWith("$name:")) return consume(candidate.substring("$name:".length))
+        }
+        for (name in known) {
+            if (name.startsWith(candidate)) return ""
+            if ("$name：".startsWith(candidate) || "$name:".startsWith(candidate)) return ""
+        }
+        return consume(candidate)
+    }
+
+    private fun consume(rest: String): String {
+        active = false
+        pending.clear()
+        return rest
     }
 }
