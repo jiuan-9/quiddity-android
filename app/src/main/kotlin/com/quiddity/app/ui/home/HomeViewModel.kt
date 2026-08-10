@@ -71,11 +71,15 @@ class HomeViewModel(
 
     // ===== 私聊 / 群聊分节（方案十四：双列表各自独立） =====
     val soloConversations: StateFlow<List<Conversation>> = conversations
-        .map { list -> list.filter { it.type != ConversationType.GROUP } }
+        .map { list -> list.filter { it.type == ConversationType.SOLO } }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     val groupConversations: StateFlow<List<Conversation>> = conversations
         .map { list -> list.filter { it.type == ConversationType.GROUP } }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    val agentConversations: StateFlow<List<Conversation>> = conversations
+        .map { list -> list.filter { it.type == ConversationType.AGENT } }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     /** 群聊成员会话解析（id → Conversation），供列表头像拼合与成员校验。 */
@@ -95,6 +99,13 @@ class HomeViewModel(
     fun createGroupConversation() {
         viewModelScope.launch {
             conversationRepository.createGroupConversation(emptyList(), null)
+        }
+    }
+
+    /** 创建 Agent 会话（固定标题 Agent，不直接进入）。 */
+    fun createAgentConversation() {
+        viewModelScope.launch {
+            conversationRepository.createAgentConversation()
         }
     }
 

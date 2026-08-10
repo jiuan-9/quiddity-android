@@ -106,6 +106,7 @@ import coil.request.ImageRequest
 import com.quiddity.app.data.model.Conversation
 import com.quiddity.app.data.model.ConversationType
 import com.quiddity.app.domain.GlobalChatSearch
+import com.quiddity.app.ui.agent.AgentTab
 import com.quiddity.app.ui.components.AiAvatar
 import com.quiddity.app.ui.components.ConfirmDialog
 import com.quiddity.app.ui.settings.SettingsBottomSheet
@@ -155,6 +156,7 @@ fun HomeScreen(
     settingsViewModel: SettingsViewModel,
     userAvatarUri: String?,
     onOpenMiniApps: () -> Unit = {},
+    onOpenAgentSettings: () -> Unit = {},
     onOpenConversation: (String) -> Unit,
     onOpenMessage: (String, String) -> Unit
 ) {
@@ -165,13 +167,13 @@ fun HomeScreen(
     var showSettings by rememberSaveable { mutableStateOf(false) }
 
     // ===== 私聊 / 群聊双 Tab（方案十四） =====
-    val pagerState = rememberPagerState(pageCount = { 2 })
+    val pagerState = rememberPagerState(initialPage = 1, pageCount = { 3 })
     val pagerScope = rememberCoroutineScope()
     var showGroupTutorial by rememberSaveable { mutableStateOf(false) }
 
     // 首次进入群聊页弹教程（记录已看过，只弹一次，方案十.9）
     LaunchedEffect(pagerState.currentPage) {
-        if (pagerState.currentPage == 1 && !settings.groupTutorialSeen) {
+        if (pagerState.currentPage == 2 && !settings.groupTutorialSeen) {
             showGroupTutorial = true
             settingsViewModel.setGroupTutorialSeen(true)
         }
@@ -242,6 +244,7 @@ fun HomeScreen(
 
     val soloConversations by viewModel.soloConversations.collectAsStateWithLifecycle()
     val groupConversations by viewModel.groupConversations.collectAsStateWithLifecycle()
+    val agentConversations by viewModel.agentConversations.collectAsStateWithLifecycle()
 
     fun filterByQuery(list: List<Conversation>): List<Conversation> {
         if (searchQuery.isBlank()) return list
@@ -253,16 +256,26 @@ fun HomeScreen(
     }
     val soloFiltered = remember(soloConversations, searchQuery) { filterByQuery(soloConversations) }
     val groupFiltered = remember(groupConversations, searchQuery) { filterByQuery(groupConversations) }
+    val agentFiltered = remember(agentConversations, searchQuery) { filterByQuery(agentConversations) }
 
     // ===== 搜索会话仅对当前模式有效（方案十四 + 需求） =====
     val currentTab = pagerState.currentPage
+    val agentIds = remember(agentConversations) { agentConversations.map { it.id }.toSet() }
     val soloIds = remember(soloConversations) { soloConversations.map { it.id }.toSet() }
     val groupIds = remember(groupConversations) { groupConversations.map { it.id }.toSet() }
-    val scopedMessageHits = remember(messageHits, currentTab, soloIds, groupIds) {
-        val ids = if (currentTab == 0) soloIds else groupIds
+    val scopedMessageHits = remember(messageHits, currentTab, agentIds, soloIds, groupIds) {
+        val ids = when (currentTab) {
+            0 -> agentIds
+            1 -> soloIds
+            else -> groupIds
+        }
         messageHits.filter { it.conversationId in ids }
     }
-    val searchScopeConversations = if (currentTab == 0) soloFiltered else groupFiltered
+    val searchScopeConversations = when (currentTab) {
+        0 -> agentFiltered
+        1 -> soloFiltered
+        else -> groupFiltered
+    }
 
     // ===== 顶部 UI 模式切换"重新加载"动画：整体淡出 → 淡入并轻微下落复位。
     // 由 graphicsLayer 在 draw phase 驱动（零重组）；速度放缓避免闪动。 =====
@@ -335,19 +348,20 @@ fun HomeScreen(
     var pullTriggered by remember { mutableStateOf(false) }
     // 时间闸：一次下拉手势只推一次小应用中心，防止手指未抬起时跨阈值重复 navigate
     var lastOpenTriggerMs by remember { mutableStateOf(0L) }
+    val agentListState = rememberLazyListState()
     val soloListState = rememberLazyListState()
     val groupListState = rememberLazyListState()
     val atTop by remember(conversations, searchQuery, pagerState.currentPage, isMultiSelect) {
         derivedStateOf {
-            val pageEmpty = if (pagerState.currentPage == 0) {
-                soloFiltered.isEmpty()
-            } else {
-                groupFiltered.isEmpty()
+            val pageEmpty = when (pagerState.currentPage) {
+                0 -> agentFiltered.isEmpty()
+                1 -> soloFiltered.isEmpty()
+                else -> groupFiltered.isEmpty()
             }
-            val pageAtTop = if (pagerState.currentPage == 0) {
-                soloListState.firstVisibleItemIndex == 0 && soloListState.firstVisibleItemScrollOffset == 0
-            } else {
-                groupListState.firstVisibleItemIndex == 0 && groupListState.firstVisibleItemScrollOffset == 0
+            val pageAtTop = when (pagerState.currentPage) {
+                0 -> agentListState.firstVisibleItemIndex == 0 && agentListState.firstVisibleItemScrollOffset == 0
+                1 -> soloListState.firstVisibleItemIndex == 0 && soloListState.firstVisibleItemScrollOffset == 0
+                else -> groupListState.firstVisibleItemIndex == 0 && groupListState.firstVisibleItemScrollOffset == 0
             }
             !isMultiSelect && searchQuery.isBlank() && (
                 isLoading || conversations.isEmpty() || pageEmpty || pageAtTop
@@ -385,7 +399,11 @@ fun HomeScreen(
     }
     // 空状态（无会话/搜索无结果）下没有可滚动子组件，nestedScroll 收不到手势，
     // 这里用根层指针手势兜底：仅在没有列表内容时启用，不与 LazyColumn 抢手势。
-    val pageEmpty = if (pagerState.currentPage == 0) soloFiltered.isEmpty() else groupFiltered.isEmpty()
+    val pageEmpty = when (pagerState.currentPage) {
+        0 -> agentFiltered.isEmpty()
+        1 -> soloFiltered.isEmpty()
+        else -> groupFiltered.isEmpty()
+    }
     val noScrollContent = isLoading || conversations.isEmpty() || pageEmpty ||
         (searchQuery.isNotBlank() && searchScopeConversations.isEmpty() && scopedMessageHits.isEmpty())
     val usePointerPull = atTop && noScrollContent
@@ -557,14 +575,14 @@ fun HomeScreen(
                             userAvatarUri = userAvatarUri,
                             searchQuery = searchQuery,
                             onSearchQueryChange = { searchQuery = it },
-                            onSettingsClick = { showSettings = true },
+                            onSettingsClick = {
+                                if (pagerState.currentPage == 0) onOpenAgentSettings() else showSettings = true
+                            },
                             onNewConversation = {
-                                if (pagerState.currentPage == 0) {
-                                    viewModel.createConversation()
-                                } else {
-                                    // 群聊：与私聊一致只创建列表项（新群聊 N），不直接进入；
-                                    // 进入后经设置-成员管理添加成员
-                                    viewModel.createGroupConversation()
+                                when (pagerState.currentPage) {
+                                    0 -> viewModel.createAgentConversation()
+                                    1 -> viewModel.createConversation()
+                                    else -> viewModel.createGroupConversation()
                                 }
                             },
                             hasListWallpaper = hasListWallpaper
@@ -620,6 +638,17 @@ fun HomeScreen(
                                 modifier = Modifier.fillMaxSize()
                             ) { page ->
                                 if (page == 0) {
+                                    AgentTab(
+                                        conversations = agentFiltered,
+                                        listState = agentListState,
+                                        isMultiSelect = isMultiSelect,
+                                        selectedIds = selectedIds,
+                                        toggleSelection = ::toggleSelection,
+                                        syncMultiSelect = ::syncMultiSelect,
+                                        onOpenConversation = onOpenConversation,
+                                        hasListWallpaper = hasListWallpaper
+                                    )
+                                } else if (page == 1) {
                                     ChatListPage(
                                         conversations = soloFiltered,
                                         listState = soloListState,
@@ -738,7 +767,7 @@ fun HomeScreen(
 
         // ===== 群聊教程问号按钮（群聊模式淡入，随时可再开教程，方案三.8） =====
         androidx.compose.animation.AnimatedVisibility(
-            visible = pagerState.currentPage == 1 && !isMultiSelect && searchQuery.isBlank(),
+            visible = pagerState.currentPage == 2 && !isMultiSelect && searchQuery.isBlank(),
             enter = fadeIn(tween(Motion.DurationMedium)),
             exit = fadeOut(tween(Motion.DurationShort)),
             modifier = Modifier
@@ -1441,12 +1470,13 @@ private fun GlobalSearchResultList(
  * 单个列表页（私聊 / 群聊），切换 Tab 时整体淡入淡出（方案十四.7）。
  */
 @Composable
-private fun ChatListPage(
+internal fun ChatListPage(
     conversations: List<Conversation>,
     listState: LazyListState,
     isMultiSelect: Boolean,
     selectedIds: Set<String>,
     isGroup: Boolean,
+    emptyText: String? = null,
     userAvatarUri: String?,
     memberResolver: (List<String>) -> List<Conversation>,
     toggleSelection: (String) -> Unit,
@@ -1457,7 +1487,7 @@ private fun ChatListPage(
     if (conversations.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text(
-                text = if (isGroup) "还没有群聊\n点击右上角新建群聊" else "还没有私聊\n点击右上角新建私聊",
+                text = emptyText ?: if (isGroup) "还没有群聊\n点击右上角新建群聊" else "还没有私聊\n点击右上角新建私聊",
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                 textAlign = TextAlign.Center
@@ -1522,19 +1552,27 @@ private fun ChatTypeTabBar(
         verticalAlignment = Alignment.CenterVertically
     ) {
         ChatTypeTabWord(
-            label = "私聊",
-            invert = true,
+            label = "Agent",
+            page = 0,
             pagerState = pagerState,
             darkMode = darkMode,
             onClick = { onSelect(0) }
         )
         Spacer(modifier = Modifier.size(24.dp))
         ChatTypeTabWord(
-            label = "群聊",
-            invert = false,
+            label = "私聊",
+            page = 1,
             pagerState = pagerState,
             darkMode = darkMode,
             onClick = { onSelect(1) }
+        )
+        Spacer(modifier = Modifier.size(24.dp))
+        ChatTypeTabWord(
+            label = "群聊",
+            page = 2,
+            pagerState = pagerState,
+            darkMode = darkMode,
+            onClick = { onSelect(2) }
         )
     }
 }
@@ -1542,7 +1580,7 @@ private fun ChatTypeTabBar(
 @Composable
 private fun ChatTypeTabWord(
     label: String,
-    invert: Boolean,
+    page: Int,
     pagerState: PagerState,
     darkMode: Boolean,
     onClick: () -> Unit
@@ -1555,11 +1593,7 @@ private fun ChatTypeTabWord(
             // 滑动过程中零重组（视觉上等效于颜色从灰渐变到高亮）
             .graphicsLayer {
                 val continuous = pagerState.currentPage + pagerState.currentPageOffsetFraction
-                val fraction = if (invert) {
-                    (1f - continuous).coerceIn(0f, 1f)
-                } else {
-                    continuous.coerceIn(0f, 1f)
-                }
+                val fraction = (1f - kotlin.math.abs(continuous - page)).coerceIn(0f, 1f)
                 alpha = 0.55f + 0.45f * fraction
             }
             .clickable(
