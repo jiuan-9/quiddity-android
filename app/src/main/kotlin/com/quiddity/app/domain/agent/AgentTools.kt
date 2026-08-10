@@ -2,6 +2,8 @@ package com.quiddity.app.domain.agent
 
 import com.quiddity.app.data.local.AgentToolSwitches
 import com.quiddity.app.data.model.Conversation
+import com.quiddity.app.data.remote.ToolDefinition
+import com.quiddity.app.data.remote.ToolFunction
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -67,7 +69,17 @@ data class AgentTool(
     val confirm: AgentConfirmPolicy,
     val enabledByDefault: Boolean,
     val execute: suspend (AgentContext, JsonObject) -> String
-)
+) {
+    /** 转换为 OpenAI 兼容工具声明（params 直接复用 ToolDefinition 形状）。 */
+    fun toToolDefinition(): ToolDefinition = ToolDefinition(
+        type = "function",
+        function = ToolFunction(
+            name = name,
+            description = description,
+            parameters = params
+        )
+    )
+}
 
 /**
  * Agent 执行上下文。

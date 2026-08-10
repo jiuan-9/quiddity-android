@@ -1,10 +1,12 @@
 package com.quiddity.app.data.repo
 
 import com.quiddity.app.data.model.Conversation
+import com.quiddity.app.data.model.ConversationType
 import com.quiddity.app.data.model.Message
 import com.quiddity.app.data.model.MemoryCompressionResult
 import com.quiddity.app.data.model.Role
 import com.quiddity.app.data.model.AppSettings
+import com.quiddity.app.data.local.AgentStore
 import com.quiddity.app.data.remote.ChatApi
 import com.quiddity.app.data.remote.ChatCompletionRequest
 import com.quiddity.app.data.remote.ChatException
@@ -23,6 +25,8 @@ import com.quiddity.app.domain.MemorySearch
 import com.quiddity.app.domain.MessageStreamCoordinator
 import com.quiddity.app.domain.PromptBuilder
 import com.quiddity.app.domain.StreamCoordinator
+import com.quiddity.app.domain.agent.AgentContext
+import com.quiddity.app.domain.agent.AgentToolRegistry
 import com.quiddity.app.util.IdGenerator
 import com.quiddity.app.util.QuiddityConstants
 import kotlinx.serialization.json.Json
@@ -153,6 +157,14 @@ class ChatRepository(
      */
     private val apiCatalogManager: ApiCatalogManager? = null,
     /**
+     * Agent 工具注册表（AGENT 会话分发工具调用；私聊/群聊保持原有 read_memory/search_chat）。
+     */
+    private val agentToolRegistry: AgentToolRegistry? = null,
+    /**
+     * Agent 设置存储（工具开关/白名单/审计快照来源）。
+     */
+    private val agentStore: AgentStore? = null,
+    /**
      * 协调器工厂。默认使用 [MessageStreamCoordinator]。
      * 每轮新 run 都注入新 runId（基于 UUID），保证消息 id 全局唯一。
      * [senderId] 为群聊发言人会话 id（2.0.0 使用），私聊传 null。
@@ -216,12 +228,17 @@ class ChatRepository(
             ?: QuiddityConstants.MEMORY_STRATEGY_CARRY
         val reasoningEffort = resolveThinkingEffort(settings, conv)
         val thinkingActive = reasoningEffort != null
-        val systemPrompt = PromptBuilder.buildSystemPrompt(
-            conv = conv,
-            memoryStrategy = effectiveStrategy,
-            regeneratePreviousReply = regeneratePreviousReply,
-            thinkingDepth = if (thinkingActive) conv.thinkingDepth else null
-        )
+        val isAgent = conv.type == ConversationType.AGENT
+        val systemPrompt = if (isAgent) {
+            PromptBuilder.buildAgentSystemPrompt(conv.persona, conv.userPersona)
+        } else {
+            PromptBuilder.buildSystemPrompt(
+                conv = conv,
+                memoryStrategy = effectiveStrategy,
+                regeneratePreviousReply = regeneratePreviousReply,
+                thinkingDepth = if (thinkingActive) conv.thinkingDepth else null
+            )
+        }
         val contextLimit = if (conv.contextLimit > 0) conv.contextLimit else settings.globalContextLimit
         // 过滤 isNotice 提示气泡与 isThinking 思考消息：不发给 LLM
         val filteredHistory = history.filterNot { it.isNotice || it.isThinking }
@@ -237,6 +254,11 @@ class ChatRepository(
         )
         val toolStrategyActive = effectiveStrategy == QuiddityConstants.MEMORY_STRATEGY_TOOL &&
             conv.compressedMemory.isNotBlank()
+        val agentTools = if (isAgent) {
+            agentToolRegistry?.tools()?.map { it.toToolDefinition() }
+        } else {
+            null
+        }
         val buildRequest: (String?) -> ChatRoundRequest = {
             buildChatRound(
                 access = access,
@@ -248,7 +270,7 @@ class ChatRepository(
                 // 内部思考：不发送 reasoning_effort（该服务端不认，会空响应）；
                 // 思考内容由提示词引导模型输出【思考】/【回答】，客户端按标记拆分显示。
                 reasoningEffort = null,
-                tools = if (toolStrategyActive) {
+                tools = agentTools ?: if (toolStrategyActive) {
                     listOf(
                         PromptBuilder.buildReadMemoryTool(),
                         PromptBuilder.buildSearchChatTool()
@@ -256,7 +278,7 @@ class ChatRepository(
                 } else {
                     null
                 },
-                tool_choice = if (toolStrategyActive) "auto" else null
+                tool_choice = if (agentTools != null || toolStrategyActive) "auto" else null
             )
         }
         runWithToolRound(
@@ -301,12 +323,17 @@ class ChatRepository(
             ?: QuiddityConstants.MEMORY_STRATEGY_CARRY
         val reasoningEffort = resolveThinkingEffort(settings, conv)
         val thinkingActive = reasoningEffort != null
-        val systemPrompt = PromptBuilder.buildSystemPrompt(
-            conv = conv,
-            memoryStrategy = effectiveStrategy,
-            regeneratePreviousReply = regeneratePreviousReply,
-            thinkingDepth = if (thinkingActive) conv.thinkingDepth else null
-        )
+        val isAgent = conv.type == ConversationType.AGENT
+        val systemPrompt = if (isAgent) {
+            PromptBuilder.buildAgentSystemPrompt(conv.persona, conv.userPersona)
+        } else {
+            PromptBuilder.buildSystemPrompt(
+                conv = conv,
+                memoryStrategy = effectiveStrategy,
+                regeneratePreviousReply = regeneratePreviousReply,
+                thinkingDepth = if (thinkingActive) conv.thinkingDepth else null
+            )
+        }
         // 引导：让 AI 主动发起对话
         val guidedMessages = listOf(
             ChatMessage(role = "system", content = systemPrompt),
@@ -321,6 +348,11 @@ class ChatRepository(
         )
         val toolStrategyActive = effectiveStrategy == QuiddityConstants.MEMORY_STRATEGY_TOOL &&
             conv.compressedMemory.isNotBlank()
+        val agentTools = if (isAgent) {
+            agentToolRegistry?.tools()?.map { it.toToolDefinition() }
+        } else {
+            null
+        }
         val buildRequest: (String?) -> ChatRoundRequest = {
             buildChatRound(
                 access = access,
@@ -330,7 +362,7 @@ class ChatRepository(
                 temperature = temperature,
                 responsesUrl = resolveWebSearch(settings, conv),
                 reasoningEffort = null,
-                tools = if (toolStrategyActive) {
+                tools = agentTools ?: if (toolStrategyActive) {
                     listOf(
                         PromptBuilder.buildReadMemoryTool(),
                         PromptBuilder.buildSearchChatTool()
@@ -338,7 +370,7 @@ class ChatRepository(
                 } else {
                     null
                 },
-                tool_choice = if (toolStrategyActive) "auto" else null
+                tool_choice = if (agentTools != null || toolStrategyActive) "auto" else null
             )
         }
         runWithToolRound(
@@ -610,13 +642,32 @@ class ChatRepository(
     }
 
     /**
-     * 解析单个工具调用结果：read_memory / search_chat 走本地检索，其余工具回填"不存在"。
+     * 解析单个工具调用结果：
+     * - AGENT 会话优先走注册表分发（读工具真实执行、写工具安全门控）；
+     * - 私聊/群聊保持原逻辑：read_memory / search_chat 本地检索，其余回填"不存在"。
      */
     private suspend fun resolveToolContent(
         call: ChatStreamParser.AggregatedToolCall,
         conv: Conversation,
         memory: String
-    ): String = when (call.name) {
+    ): String = resolveToolContentInternal(call, conv, memory)
+
+    private suspend fun resolveToolContentInternal(
+        call: ChatStreamParser.AggregatedToolCall,
+        conv: Conversation,
+        memory: String
+    ): String {
+        if (conv.type == ConversationType.AGENT) {
+            val dispatched = dispatchAgentToolIfNeeded(
+                type = conv.type,
+                name = call.name,
+                args = call.arguments,
+                registry = agentToolRegistry,
+                ctx = agentContext(conv)
+            )
+            if (dispatched != null) return dispatched
+        }
+        return when (call.name) {
         "read_memory" -> {
             MemorySearch.search(memory, parseToolQuery(call.arguments)).content
         }
@@ -627,6 +678,35 @@ class ChatRepository(
             ChatRecordSearch.search(messages, query).content
         }
         else -> "工具 ${call.name} 不存在"
+        }
+    }
+
+    private fun agentContext(conv: Conversation): AgentContext? {
+        val store = agentStore ?: return null
+        val settings = store.snapshot()
+        return AgentContext(
+            conversation = conv,
+            switches = settings.toolSwitches,
+            whitelist = settings.whitelist.toSet(),
+            auditAppend = { store.appendAudit(it) }
+        )
+    }
+
+    companion object {
+
+        /**
+         * 仅 AGENT 会话且注册表可用时分发；否则返回 null（走原 read_memory/search_chat 逻辑）。
+         */
+        internal suspend fun dispatchAgentToolIfNeeded(
+            type: ConversationType,
+            name: String,
+            args: String,
+            registry: AgentToolRegistry?,
+            ctx: AgentContext?
+        ): String? {
+            if (type != ConversationType.AGENT || registry == null || ctx == null) return null
+            return registry.dispatch(name, args, ctx)
+        }
     }
 
     /** 解析工具参数 JSON 中的 query 字段；解析失败时回退使用原始参数字符串。 */

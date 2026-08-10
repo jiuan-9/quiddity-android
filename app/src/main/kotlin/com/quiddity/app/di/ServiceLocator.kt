@@ -7,6 +7,7 @@ import com.quiddity.app.data.local.CharacterStore
 import com.quiddity.app.data.local.ConversationStore
 import com.quiddity.app.data.local.MiniAppStore
 import com.quiddity.app.data.local.SettingsStore
+import com.quiddity.app.data.local.AgentStore
 import com.quiddity.app.data.remote.ChatApi
 import com.quiddity.app.data.repo.ChatRepository
 import com.quiddity.app.data.repo.CharacterRepository
@@ -17,6 +18,8 @@ import com.quiddity.app.data.repo.TimeLibraryRepository
 import com.quiddity.app.domain.ApiCatalogManager
 import com.quiddity.app.domain.DocsProvider
 import com.quiddity.app.domain.VisionOcrService
+import com.quiddity.app.domain.agent.AgentExecutors
+import com.quiddity.app.domain.agent.AgentToolRegistry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -72,6 +75,8 @@ object ServiceLocator {
         private set
     lateinit var characterStore: CharacterStore
         private set
+    lateinit var agentStore: AgentStore
+        private set
     lateinit var chatApi: ChatApi
         private set
 
@@ -125,6 +130,7 @@ object ServiceLocator {
         conversationStore = ConversationStore(appContext)
         miniAppStore = MiniAppStore(appContext)
         characterStore = CharacterStore(appContext)
+        agentStore = AgentStore(appContext)
         chatApi = ChatApi()
 
         settingsRepository = SettingsRepository(settingsStore)
@@ -149,7 +155,9 @@ object ServiceLocator {
             api = chatApi,
             conversationRepo = conversationRepository,
             settingsRepo = settingsRepository,
-            apiCatalogManager = apiCatalogManager
+            apiCatalogManager = apiCatalogManager,
+            agentToolRegistry = AgentToolRegistry.defaultRegistry(AgentExecutors(appContext)),
+            agentStore = agentStore
         )
         alarmScheduler = AlarmScheduler(appContext)
         timeLibraryRepository = TimeLibraryRepository(
@@ -171,6 +179,7 @@ object ServiceLocator {
                 conversationRepository.loadAll()
                 characterRepository.loadAll()
                 miniAppStore.load()
+                agentStore.load()
                 // 详见 ConversationStore.migrateDeduplicateMessageIds
                 conversationRepository.migrateDeduplicateMessageIds()
                 // 主动消息：每日首次启动重置 done → pending，并重注册闹钟
