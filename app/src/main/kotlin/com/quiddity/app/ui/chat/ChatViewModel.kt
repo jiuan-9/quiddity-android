@@ -415,8 +415,8 @@ class ChatViewModel(
         }
         // 仅在 API 调用 / 压缩期间阻止发送；发送延迟期间允许继续发送
         if (_isGenerating.value || _compressionState.value is CompressionState.Compressing) return
-        // 方案九.4/6：私聊必须设置用户名才能发送消息
-        if (conv.userPersona.name.isBlank()) {
+        // 方案九.4/6：私聊必须设置用户名才能发送消息（Agent 模式不要求用户名）
+        if (conv.type == ConversationType.SOLO && conv.userPersona.name.isBlank()) {
             _errorEvent.value = "请先设置用户名"
             return
         }

@@ -28,6 +28,8 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.quiddity.app.di.ServiceLocator
+import com.quiddity.app.data.model.ConversationType
+import com.quiddity.app.ui.agent.AgentChatScreen
 import com.quiddity.app.ui.components.UpdateDialog
 import com.quiddity.app.ui.components.rememberUpdateController
 import com.quiddity.app.ui.chat.ChatScreen
@@ -164,7 +166,14 @@ fun QuiddityNavHost() {
                     navigateThrottle.tryNavigate { navController.navigate(QuiddityRoute.MiniApps.path) }
                 },
                 onOpenConversation = { convId ->
-                    navigateThrottle.tryNavigate { navController.navigate(QuiddityRoute.Chat.create(convId)) }
+                    navigateThrottle.tryNavigate {
+                        val conv = ServiceLocator.conversationRepository.getConversation(convId)
+                        if (conv?.type == ConversationType.AGENT) {
+                            navController.navigate(QuiddityRoute.AgentChat.create(convId))
+                        } else {
+                            navController.navigate(QuiddityRoute.Chat.create(convId))
+                        }
+                    }
                 },
                 onOpenMessage = { convId, messageId ->
                     navigateThrottle.tryNavigate { navController.navigate(QuiddityRoute.Chat.create(convId, messageId)) }
@@ -311,6 +320,55 @@ fun QuiddityNavHost() {
                 }
             )
         }
+
+        composable(
+            route = QuiddityRoute.AgentChat.PATTERN,
+            arguments = QuiddityRoute.AgentChat.arguments
+        ) { backStackEntry ->
+            val convId = backStackEntry.arguments?.getString(QuiddityRoute.AgentChat.ARG_CONV_ID).orEmpty()
+            val chatHost: ChatViewModelHost = (LocalContext.current as? ComponentActivity)?.let { activity ->
+                viewModel(
+                    viewModelStoreOwner = activity,
+                    factory = ChatViewModelHostFactory { id, onIdle ->
+                        ChatViewModel(
+                            conversationRepository = ServiceLocator.conversationRepository,
+                            chatRepository = ServiceLocator.chatRepository,
+                            settingsRepository = settingsRepo,
+                            apiCatalogManager = ServiceLocator.apiCatalogManager,
+                            visionOcrService = ServiceLocator.visionOcrService,
+                            conversationId = id,
+                            onIdle = onIdle
+                        )
+                    }
+                )
+            } ?: remember {
+                ChatViewModelHost { id, _ ->
+                    ChatViewModel(
+                        conversationRepository = ServiceLocator.conversationRepository,
+                        chatRepository = ServiceLocator.chatRepository,
+                        settingsRepository = settingsRepo,
+                        apiCatalogManager = ServiceLocator.apiCatalogManager,
+                        visionOcrService = ServiceLocator.visionOcrService,
+                        conversationId = id
+                    )
+                }
+            }
+            val chatVm: ChatViewModel = chatHost.get(convId)
+            val settingsVm: SettingsViewModel = viewModel(
+                factory = SettingsViewModelFactory(
+                    settingsRepo,
+                    ServiceLocator.conversationRepository,
+                    ServiceLocator.apiCatalogManager,
+                    ServiceLocator.characterRepository
+                )
+            )
+            AgentChatScreen(
+                viewModel = chatVm,
+                settingsViewModel = settingsVm,
+                onBack = { navController.popBackStack() },
+                onConversationExit = { chatHost.onScreenExit(convId) }
+            )
+        }
     }
 
     // UpdateDialog 放在 NavHost 之后（z-order 上层）：
@@ -347,6 +405,15 @@ sealed class QuiddityRoute(val path: String) {
                 type = androidx.navigation.NavType.StringType
                 nullable = true
             }
+        )
+    }
+
+    data object AgentChat : QuiddityRoute("agentchat/{convId}") {
+        const val PATTERN = "agentchat/{convId}"
+        const val ARG_CONV_ID = "convId"
+        fun create(convId: String) = "agentchat/$convId"
+        val arguments = listOf(
+            androidx.navigation.navArgument(ARG_CONV_ID) { type = androidx.navigation.NavType.StringType }
         )
     }
 }
