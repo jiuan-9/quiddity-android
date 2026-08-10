@@ -120,6 +120,61 @@ class MessageStreamCoordinatorTest {
     }
 
     @Test
+    fun `trailing standalone zero chunk is stripped at finalize`() {
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("我到家了。")
+        coord.accept("0")
+        val signals = coord.finalize()
+        val finalMsg = signals.mapNotNull {
+            (it as? StreamCoordinator.Signal.Complete)?.message
+        }.firstOrNull() ?: coord.snapshot().last()
+        assertEquals("我到家了。", finalMsg.content, "末尾独立 0 结束标记应被剥离")
+    }
+
+    @Test
+    fun `trailing zero after newline or punctuation is stripped`() {
+        val coord1 = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord1.accept("想你了\n0")
+        assertEquals("想你了", coord1.finalize().mapNotNull {
+            (it as? StreamCoordinator.Signal.Complete)?.message
+        }.firstOrNull()?.content)
+
+        val coord2 = MessageStreamCoordinator("conv1", "run2", singleMessageTokens = 1000)
+        coord2.accept("想你了。0")
+        coord2.finalize()
+        assertEquals(listOf("想你了。"), coord2.snapshot().map { it.content }, "切分后残留的独立 0 不应成为消息")
+    }
+
+    @Test
+    fun `zero inside content is preserved`() {
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("答案是1")
+        coord.accept("0")
+        coord.accept("分。")
+        val contents = coord.snapshot().map { it.content }
+        assertEquals(listOf("答案是10分。"), contents, "正文中间的 0 不能被剥离：$contents")
+    }
+
+    @Test
+    fun `legitimate trailing numbers are preserved`() {
+        val coord1 = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord1.accept("答案是10")
+        assertEquals("答案是10", coord1.snapshot().last().content, "10 结尾不应被剥离")
+
+        val coord2 = MessageStreamCoordinator("conv1", "run2", singleMessageTokens = 1000)
+        coord2.accept("答案是100")
+        assertEquals("答案是100", coord2.snapshot().last().content, "100 结尾不应被剥离")
+    }
+
+    @Test
+    fun `lone zero reply is kept`() {
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("0")
+        coord.finalize()
+        assertEquals("0", coord.snapshot().last().content, "单独的 0 回复应保留")
+    }
+
+    @Test
     fun `partial bracket then close then end updates streaming message without duplicate`() {
         // 回归：括号分两段到达（先流式半截，再闭合）后流直接结束。
         // 旧实现会新建一条完整消息，却把半截流式消息留在界面上 → 内容重复污染。

@@ -47,6 +47,23 @@ class ChatStreamParserTest {
     }
 
     @Test
+    fun `finish reason length is captured as truncation signal`() {
+        val chunk = parser.parseChunk(
+            """{"choices":[{"delta":{"content":"最后一句"}, "finish_reason":"length"}]}"""
+        )
+        assertEquals("最后一句", chunk?.content)
+        assertEquals("length", chunk?.finishReason, "finish_reason=length 应被捕获")
+    }
+
+    @Test
+    fun `finish reason is null on normal content chunks`() {
+        val chunk = parser.parseChunk(
+            """{"choices":[{"delta":{"content":"正常内容"}}]}"""
+        )
+        assertNull(chunk?.finishReason, "普通分片不应有 finish_reason")
+    }
+
+    @Test
     fun `reasoning content is parsed separately from content`() {
         val chunk = parser.parseChunk(
             """{"choices":[{"delta":{"reasoning_content":"先分析需求，","content":null}}]}"""

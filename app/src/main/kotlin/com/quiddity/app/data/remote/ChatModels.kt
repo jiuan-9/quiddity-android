@@ -128,6 +128,41 @@ data class ChatMessage(
 )
 
 /**
+ * 视觉识图请求体（OpenAI 兼容多模态格式）。
+ *
+ * 与 [ChatCompletionRequest] 的区别：content 为内容块数组，图片以
+ * `data:image/jpeg;base64,...` 形式内嵌，适配 OpenAI / Qwen-VL / GLM-4V /
+ * Gemini（OpenAI 兼容端点）等主流视觉模型接口。
+ */
+@Serializable
+data class VisionCompletionRequest(
+    val model: String,
+    val messages: List<VisionChatMessage>,
+    val max_tokens: Int? = null,
+    val temperature: Double = 0.2,
+    val stream: Boolean = false
+)
+
+@Serializable
+data class VisionChatMessage(
+    val role: String,
+    val content: List<VisionContentPart>
+)
+
+@Serializable
+data class VisionContentPart(
+    val type: String,
+    val text: String? = null,
+    val image_url: VisionImageUrl? = null
+)
+
+@Serializable
+data class VisionImageUrl(
+    val url: String,
+    val detail: String? = null
+)
+
+/**
  * 工具定义（OpenAI 兼容 function 格式）。
  */
 @Serializable

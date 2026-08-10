@@ -95,6 +95,9 @@ class SettingsStore(private val context: Context) {
         val ENTER_TO_SEND = booleanPreferencesKey("enter_to_send")
         val ACTIVE_CATALOG_ID = stringPreferencesKey("active_catalog_id")
         val CATALOG_JSON = stringPreferencesKey("catalog_json")
+        val OCR_ENABLED = booleanPreferencesKey("ocr_enabled")
+        val VISION_CATALOG_JSON = stringPreferencesKey("vision_catalog_json")
+        val ACTIVE_VISION_CATALOG_ID = stringPreferencesKey("active_vision_catalog_id")
         val BRACKET_GRAY_ENABLED = booleanPreferencesKey("bracket_gray_enabled")
         val MARKDOWN_ENABLED = booleanPreferencesKey("markdown_enabled")
         val LIST_WALLPAPER_URI = stringPreferencesKey("list_wallpaper_uri")
@@ -127,6 +130,10 @@ class SettingsStore(private val context: Context) {
                 enterToSend = this[Keys.ENTER_TO_SEND] ?: d.enterToSend,
                 activeCatalogId = this[Keys.ACTIVE_CATALOG_ID] ?: d.activeCatalogId,
                 catalog = parseCatalog(this[Keys.CATALOG_JSON]),
+                ocrEnabled = this[Keys.OCR_ENABLED] ?: d.ocrEnabled,
+                visionCatalog = parseCatalog(this[Keys.VISION_CATALOG_JSON]),
+                activeVisionCatalogId =
+                    this[Keys.ACTIVE_VISION_CATALOG_ID] ?: d.activeVisionCatalogId,
                 bracketGrayEnabled = this[Keys.BRACKET_GRAY_ENABLED] ?: d.bracketGrayEnabled,
                 markdownEnabled = this[Keys.MARKDOWN_ENABLED] ?: d.markdownEnabled,
                 listWallpaperUri = this[Keys.LIST_WALLPAPER_URI] ?: d.listWallpaperUri,
@@ -161,13 +168,18 @@ class SettingsStore(private val context: Context) {
             context.appSettingsDataStore.edit { prefs ->
                 val current = prefs.toAppSettings()
                 val next = block(current)
-                // 名册 JSON 序列化失败时整个事务中止（不写任何键），
+                // 名册 / 视觉 OCR 名册 JSON 序列化失败时整个事务中止（不写任何键），
                 // 避免"界面提示保存成功、实际名册未落盘"的静默不一致
-                val catalogJson = try {
-                    json.encodeToString(
+                val (catalogJson, visionCatalogJson) = try {
+                    val catalogEncoded = json.encodeToString(
                         kotlinx.serialization.builtins.ListSerializer(ApiCatalogEntry.serializer()),
                         next.catalog
                     )
+                    val visionEncoded = json.encodeToString(
+                        kotlinx.serialization.builtins.ListSerializer(ApiCatalogEntry.serializer()),
+                        next.visionCatalog
+                    )
+                    catalogEncoded to visionEncoded
                 } catch (t: Throwable) {
                     android.util.Log.e("SettingsStore", "序列化 API 名册失败，事务中止", t)
                     throw t
@@ -182,6 +194,10 @@ class SettingsStore(private val context: Context) {
                 prefs[Keys.MULTILINE_SPLIT] = next.multilineAutoSplit
                 prefs[Keys.ENTER_TO_SEND] = next.enterToSend
                 next.activeCatalogId?.let { prefs[Keys.ACTIVE_CATALOG_ID] = it } ?: prefs.remove(Keys.ACTIVE_CATALOG_ID)
+                prefs[Keys.OCR_ENABLED] = next.ocrEnabled
+                prefs[Keys.VISION_CATALOG_JSON] = visionCatalogJson
+                next.activeVisionCatalogId?.let { prefs[Keys.ACTIVE_VISION_CATALOG_ID] = it }
+                    ?: prefs.remove(Keys.ACTIVE_VISION_CATALOG_ID)
                 prefs[Keys.BRACKET_GRAY_ENABLED] = next.bracketGrayEnabled
                 prefs[Keys.MARKDOWN_ENABLED] = next.markdownEnabled
                 next.listWallpaperUri?.let { prefs[Keys.LIST_WALLPAPER_URI] = it } ?: prefs.remove(Keys.LIST_WALLPAPER_URI)

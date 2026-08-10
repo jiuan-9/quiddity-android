@@ -40,14 +40,15 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 
 /*
- * 小应用"解压"进入动画：
+ * 小应用通用"解压"进入动画：
  * - 小应用像压缩包一样被压着（箱体压扁 + 拉链未拉开）；
  * - 进入时展示解压过程：拉链头下滑、箱体逐渐展开、进度环走满；
+ * - 箱体用中性蓝灰色，避免与棋盘小应用的木纹配色混淆；
  * - 解压完成后内容以弹性缩放展开，加载层淡出。
  */
 @Composable
 fun MiniAppLaunchGate(
-    appName: String,
+    app: MiniApp,
     content: @Composable () -> Unit
 ) {
     val progress = remember { Animatable(0f) }
@@ -82,7 +83,7 @@ fun MiniAppLaunchGate(
             enter = fadeIn(tween(160)),
             exit = fadeOut(tween(240))
         ) {
-            DecompressOverlay(appName = appName, progress = progress.value)
+            DecompressOverlay(appName = app.name, progress = progress.value)
         }
     }
 }
@@ -142,6 +143,9 @@ private fun CompressBox(progress: Float) {
         val left = w * 0.16f
         val boxW = w * 0.68f
         val corner = CornerRadius(12.dp.toPx(), 12.dp.toPx())
+        val boxLight = Color(0xFF454E5E)
+        val boxDark = Color(0xFF262C37)
+        val lineColor = Color(0xFF9AA3B0)
 
         drawRoundRect(
             color = Color(0x33000000),
@@ -151,7 +155,7 @@ private fun CompressBox(progress: Float) {
         )
         drawRoundRect(
             brush = Brush.linearGradient(
-                colors = listOf(Color(0xFFE8BC7F), Color(0xFFC9965A)),
+                colors = listOf(boxLight, boxDark),
                 start = Offset(left, top),
                 end = Offset(left + boxW, top + boxH)
             ),
@@ -162,21 +166,21 @@ private fun CompressBox(progress: Float) {
         for (i in 1..3) {
             val y = top + boxH * i / 4f
             drawLine(
-                color = Color(0xFF8A6234).copy(alpha = 0.32f),
+                color = lineColor.copy(alpha = 0.32f),
                 start = Offset(left + 6.dp.toPx(), y),
                 end = Offset(left + boxW - 6.dp.toPx(), y),
                 strokeWidth = 1.5.dp.toPx()
             )
         }
         drawLine(
-            color = Color(0xFF6B4F2A).copy(alpha = 0.75f),
+            color = Color(0xFFB7BEC9).copy(alpha = 0.55f),
             start = Offset(w / 2f, top + boxH * 0.1f),
             end = Offset(w / 2f, top + boxH * 0.9f),
             strokeWidth = 2.dp.toPx()
         )
         val zipY = top + boxH * (0.1f + 0.8f * progress)
         drawCircle(
-            color = Color(0xFF5A4324),
+            color = Color(0xFFC3CAD4),
             radius = 5.5.dp.toPx(),
             center = Offset(w / 2f, zipY)
         )
@@ -185,7 +189,7 @@ private fun CompressBox(progress: Float) {
             for (i in 0 until 3) {
                 val y = top + boxH * (0.22f + 0.26f * i)
                 drawLine(
-                    color = Color(0xFF8A6234).copy(alpha = 0.45f * a),
+                    color = lineColor.copy(alpha = 0.45f * a),
                     start = Offset(left - 9.dp.toPx(), y),
                     end = Offset(left + boxW + 9.dp.toPx(), y),
                     strokeWidth = 1.dp.toPx()

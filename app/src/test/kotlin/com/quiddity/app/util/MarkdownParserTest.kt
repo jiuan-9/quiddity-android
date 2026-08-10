@@ -3,9 +3,7 @@ package com.quiddity.app.util
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
-import org.junit.Ignore
 
-@Ignore("行内 Markdown 解析实现尚未完成（19 个用例失败），完成前挂起；编译与界面功能不受影响")
 class MarkdownParserTest {
 
     private fun parse(content: String) = MarkdownParser.parseMarkdown(content)

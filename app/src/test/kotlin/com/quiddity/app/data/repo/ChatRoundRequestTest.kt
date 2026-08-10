@@ -1,6 +1,8 @@
 package com.quiddity.app.data.repo
 
 import com.quiddity.app.data.remote.ChatMessage
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 import com.quiddity.app.util.QuiddityConstants
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -91,5 +93,22 @@ class ChatRoundRequestTest {
         assertTrue(request is ChatRoundRequest.Completions, "未启用联网搜索时应构造 Completions 请求")
         request as ChatRoundRequest.Completions
         assertEquals("https://api.deepseek.com/v1/chat/completions", request.apiUrl)
+    }
+
+    @Test
+    fun `looksTruncated flags obvious continuation endings`() {
+        assertTrue(looksTruncated("声音有点颤抖的说："), "以全角冒号结尾视为截断")
+        assertTrue(looksTruncated("她轻轻地说:"), "以半角冒号结尾视为截断")
+        assertTrue(looksTruncated("然后他（"), "以未闭合括号结尾视为截断")
+        assertTrue(looksTruncated("他说“"), "以未闭合引号结尾视为截断")
+        assertTrue(looksTruncated("话还没说完，"), "以逗号结尾视为截断")
+    }
+
+    @Test
+    fun `looksTruncated does not flag complete endings`() {
+        assertFalse(looksTruncated("好的呀"), "完整短句不应误判")
+        assertFalse(looksTruncated("今晚月色真美。"), "以句号结尾不应误判")
+        assertFalse(looksTruncated(""), "空内容不应误判")
+        assertFalse(looksTruncated("   "), "纯空白不应误判")
     }
 }

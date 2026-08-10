@@ -206,6 +206,24 @@ class PromptBuilderTest {
     }
 
     @Test
+    fun `toResponsesInput keeps game log system records as user input`() {
+        val apiMessages = listOf(
+            com.quiddity.app.data.remote.ChatMessage(role = "system", content = "人设提示词"),
+            com.quiddity.app.data.remote.ChatMessage(role = "user", content = "你好"),
+            com.quiddity.app.data.remote.ChatMessage(role = "system", content = "《棋盘》对局记录：你获胜"),
+            com.quiddity.app.data.remote.ChatMessage(role = "assistant", content = "我们再来一局")
+        )
+        val input = PromptBuilder.toResponsesInput(apiMessages)
+        assertEquals(3, input.size)
+        assertEquals("user", input[0].role)
+        assertEquals("你好", input[0].content)
+        assertEquals("user", input[1].role)
+        assertTrue(input[1].content.orEmpty().contains("《棋盘》对局记录"), "对局记录应保留给角色阅读")
+        assertTrue(input[1].content.orEmpty().startsWith("【系统记录】"), "非首条 system 记录应转为带标记的 user 输入")
+        assertEquals("assistant", input[2].role)
+    }
+
+    @Test
     fun `buildGroupTranscript takes last N messages with names`() {
         val messages = listOf(
             msg("m1", Role.USER, "第一句", senderId = "conv_a"),
@@ -515,6 +533,57 @@ class PromptBuilderTest {
         )
         assertTrue(backgroundPrompt.contains("【群聊背景】"), "背景模式应注入为【群聊背景】节")
         assertFalse(backgroundPrompt.contains("【群聊场景】"), "背景模式不应出现【群聊场景】节")
+    }
+
+    // ============================================================
+    // 人设精调结构化解析
+    // ============================================================
+
+    @Test
+    fun `parse persona refine result extracts all four sections`() {
+        val raw = """
+【身份背景】一位深夜电台主播，声音温柔。
+【性格】说话轻声细语，多用"呢""哦"等语气词。
+【外观】戴着圆框眼镜，常穿深蓝色毛衣。
+【期望特质】永远先共情再给建议，不评判用户的选择。
+        """.trim()
+        val result = PromptBuilder.parsePersonaRefineResult(raw)
+        assertEquals("一位深夜电台主播，声音温柔。", result.persona)
+        assertEquals("说话轻声细语，多用\"呢\"\"哦\"等语气词。", result.character)
+        assertEquals("戴着圆框眼镜，常穿深蓝色毛衣。", result.appearance)
+        assertEquals("永远先共情再给建议，不评判用户的选择。", result.desired)
+    }
+
+    @Test
+    fun `parse persona refine result keeps missing sections blank`() {
+        val raw = """
+【性格】开朗爱笑，偶尔自嘲。
+【期望特质】保持自然，不尬聊。
+        """.trim()
+        val result = PromptBuilder.parsePersonaRefineResult(raw)
+        assertEquals("", result.persona, "缺失章节应返回空串")
+        assertEquals("", result.appearance, "缺失章节应返回空串")
+        assertEquals("开朗爱笑，偶尔自嘲。", result.character)
+        assertEquals("保持自然，不尬聊。", result.desired)
+    }
+
+    @Test
+    fun `parse persona refine result trims surrounding separators`() {
+        val raw = "【身份背景】：\n一位林间木屋的主人。\n\n【期望特质】\n沉稳可靠。"
+        val result = PromptBuilder.parsePersonaRefineResult(raw)
+        assertEquals("一位林间木屋的主人。", result.persona)
+        assertEquals("沉稳可靠。", result.desired)
+        assertEquals("", result.character)
+    }
+
+    @Test
+    fun `persona refine suffix demands strict section format`() {
+        val suffix = PromptBuilder.buildPersonaRefineSuffix(1024)
+        assertTrue(suffix.contains("【身份背景】"), "精调后缀应要求按节输出")
+        assertTrue(suffix.contains("【性格】"), "精调后缀应要求按节输出")
+        assertTrue(suffix.contains("【外观】"), "精调后缀应要求按节输出")
+        assertTrue(suffix.contains("【期望特质】"), "精调后缀应要求按节输出")
+        assertTrue(suffix.contains("不要输出「名字」「世界背景」"), "精调后缀应排除名字与世界背景")
     }
 
 }

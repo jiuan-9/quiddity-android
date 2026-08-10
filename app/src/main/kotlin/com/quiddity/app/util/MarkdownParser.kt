@@ -209,7 +209,7 @@ object MarkdownParser {
                 append(edit.replacement)
                 cursor = edit.end
             }
-            append(content, cursor)
+            append(content, cursor, content.length)
         }
 
         fun toFinalBefore(raw: Int): Int {
@@ -234,23 +234,29 @@ object MarkdownParser {
             } else {
                 toFinalBefore(raw.start)
             }
+            val end = if (covering != null) {
+                // 被编辑整体覆盖的区间（如链接替换），其最终文本长度等于替换文本长度
+                start + covering.replacement.length
+            } else {
+                start + (raw.end - raw.start)
+            }
             when (raw) {
                 is RawSpan.Heading ->
-                    MarkdownSpan.Heading(start, start + (raw.end - raw.start), raw.level)
+                    MarkdownSpan.Heading(start, end, raw.level)
                 is RawSpan.Quote ->
-                    MarkdownSpan.Quote(start, start + (raw.end - raw.start))
+                    MarkdownSpan.Quote(start, end)
                 is RawSpan.Bullet ->
-                    MarkdownSpan.Bullet(start, start + (raw.end - raw.start))
+                    MarkdownSpan.Bullet(start, end)
                 is RawSpan.Link ->
-                    MarkdownSpan.Link(start, start + (raw.end - raw.start), raw.url)
+                    MarkdownSpan.Link(start, end, raw.url)
                 is RawSpan.Bold ->
-                    MarkdownSpan.Bold(start, start + (raw.end - raw.start))
+                    MarkdownSpan.Bold(start, end)
                 is RawSpan.Italic ->
-                    MarkdownSpan.Italic(start, start + (raw.end - raw.start))
+                    MarkdownSpan.Italic(start, end)
                 is RawSpan.Strikethrough ->
-                    MarkdownSpan.Strikethrough(start, start + (raw.end - raw.start))
+                    MarkdownSpan.Strikethrough(start, end)
                 is RawSpan.Code ->
-                    MarkdownSpan.Code(start, start + (raw.end - raw.start))
+                    MarkdownSpan.Code(start, end)
             }
         }
         return ParsedMarkdown(finalText, spans)

@@ -68,6 +68,7 @@ import androidx.compose.material.icons.automirrored.filled.Notes
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.Thermostat
 import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material3.CircularProgressIndicator
@@ -121,6 +122,7 @@ import com.quiddity.app.ui.settings.components.DocumentsDrawer
 import com.quiddity.app.ui.settings.components.LegalDocsDrawer
 import com.quiddity.app.ui.settings.components.ListWallpaperPanel
 import com.quiddity.app.ui.settings.components.TokenEditorPanel
+import com.quiddity.app.ui.settings.components.VisionCatalogEditor
 import com.quiddity.app.ui.theme.Motion
 import com.quiddity.app.util.DataPorter
 import com.quiddity.app.util.IdGenerator
@@ -185,6 +187,7 @@ fun SettingsBottomSheet(
 
     // ===== 子页面状态 =====
     var showApiEditor by rememberSaveable { mutableStateOf(false) }
+    var showVisionEditor by rememberSaveable { mutableStateOf(false) }
     var showDonate by rememberSaveable { mutableStateOf(false) }
     var showTokenEditor by rememberSaveable { mutableStateOf(false) }
     var showTemperatureEditor by rememberSaveable { mutableStateOf(false) }
@@ -311,6 +314,9 @@ fun SettingsBottomSheet(
     BackHandler(enabled = showApiEditor) {
         showApiEditor = false
     }
+    BackHandler(enabled = showVisionEditor && !showApiEditor) {
+        showVisionEditor = false
+    }
     BackHandler(enabled = showListWallpaper && !showApiEditor) {
         showListWallpaper = false
     }
@@ -321,7 +327,8 @@ fun SettingsBottomSheet(
         showDocuments = false
     }
     BackHandler(
-        enabled = !showApiEditor && !showDocuments && !showListWallpaper && !showLegalDocs && !showDonate
+        enabled = !showApiEditor && !showVisionEditor && !showDocuments &&
+            !showListWallpaper && !showLegalDocs && !showDonate
     ) {
         visible = false
         scope.launch {
@@ -526,19 +533,68 @@ fun SettingsBottomSheet(
 
                             }
                         }
+                        // ===== 视觉 OCR（识图兜底） =====
+                        item(key = "section_vision_ocr", contentType = { "section" }) {
+                            SettingsSectionCard(title = "视觉 OCR") {
+                            ToggleRow(
+                                icon = Icons.Filled.Image,
+                                title = "OCR 兜底识图",
+                                subtitle = if (settings.ocrEnabled) {
+                                    "已开启：纯文本模型发图时自动识图后转发"
+                                } else {
+                                    "关闭：仅自带视觉的模型可直接识图"
+                                },
+                                checked = settings.ocrEnabled,
+                                onCheckedChange = { viewModel.setOcrEnabled(it) }
+                            )
+                            val visionSubtitle = remember(
+                                settings.visionCatalog,
+                                settings.activeVisionCatalogId
+                            ) {
+                                if (settings.visionCatalog.isEmpty()) "未配置（发图时无兜底可用）"
+                                else "${settings.visionCatalog.size} 项 · 当前：${
+                                    settings.visionCatalog.firstOrNull {
+                                        it.id == settings.activeVisionCatalogId
+                                    }?.let { "${it.name} · ${it.apiModel}" } ?: "未选择"
+                                }"
+                            }
+                            ClickableRow(
+                                icon = Icons.Filled.Layers,
+                                title = "视觉 OCR 模型配置",
+                                subtitle = visionSubtitle,
+                                onClick = { showVisionEditor = true },
+                                expandableSubtitle = true
+                            )
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 3.dp),
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.6f)
+                            ) {
+                                Text(
+                                    text = "识别优先级：当前模型自带视觉 → 直接使用当前模型识图；" +
+                                        "当前模型为纯文本 → 使用上面配置的视觉模型 OCR 兜底。",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                                    modifier = Modifier.padding(12.dp)
+                                )
+                            }
+                            }
+                        }
                         // ===== Section 3: 生成 =====
                         item(key = "section_generation", contentType = { "section" }) {
                             SettingsSectionCard(title = "生成") {
                             val tokenSubtitle = remember(settings.globalMaxTokens, settings.globalSingleMessageTokens) {
                                 "最大回复 ${settings.globalMaxTokens} / 单条 ${settings.globalSingleMessageTokens}"
                             }
-                            ClickableRow(
+                            ExpandableSettingGroup(
                                 icon = Icons.Filled.Memory,
                                 title = "Token 设置",
                                 subtitle = tokenSubtitle,
+                                expanded = showTokenEditor,
                                 onClick = { showTokenEditor = !showTokenEditor }
-                            )
-                        if (showTokenEditor) {
+                            ) {
                                 TokenEditorPanel(
                                     maxTokens = settings.globalMaxTokens,
                                     singleTokens = settings.globalSingleMessageTokens,
@@ -546,42 +602,30 @@ fun SettingsBottomSheet(
                                     onSingleChange = { v -> if (v.isNotEmpty()) viewModel.setSingleMessageTokens(v.toIntOrNull() ?: 800) },
                                     modifier = Modifier
                                 )
-                        }
+                            }
                             val temperatureSubtitle = remember(settings.globalTemperature) {
                                 "默认 " + String.format(java.util.Locale.US, "%.1f", settings.globalTemperature) +
-                                    " · 范围 0～2"
+                                    " · 0～2（按模型上限自动收敛）"
                             }
-                            ClickableRow(
-                                icon = Icons.Filled.FormatSize,
+                            ExpandableSettingGroup(
+                                icon = Icons.Filled.Thermostat,
                                 title = "默认温度",
                                 subtitle = temperatureSubtitle,
+                                expanded = showTemperatureEditor,
                                 onClick = { showTemperatureEditor = !showTemperatureEditor }
-                            )
-                        if (showTemperatureEditor) {
-                            Surface(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 16.dp, vertical = 3.dp),
-                                shape = RoundedCornerShape(14.dp),
-                                color = com.quiddity.app.ui.components.glassCardColor()
                             ) {
-                                Column(
-                                    modifier = Modifier.padding(16.dp),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    TemperatureSlider(
-                                        value = settings.globalTemperature,
-                                        onValueChangeFinished = { viewModel.setGlobalTemperature(it) }
-                                    )
-                                    Text(
-                                        text = "DeepSeek 官方默认 1.0；思考模式下温度不生效。\n" +
-                                            "场景建议：0.0 代码/数学 · 1.0 数据抽取 · 1.3 通用对话/翻译 · 1.5 创意写作",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                                    )
-                                }
+                                TemperatureSlider(
+                                    value = settings.globalTemperature,
+                                    onValueChangeFinished = { viewModel.setGlobalTemperature(it) }
+                                )
+                                Text(
+                                    text = "设置所有会话的默认采样温度：越高回复越发散、更有创意；越低越稳定、更贴合指令。\n" +
+                                        "部分模型最高只支持 1.0，超出会自动收敛。\n" +
+                                        "场景建议：0.0 代码/数学 · 1.0 数据抽取 · 1.3 通用对话 · 1.5 创意写作",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                )
                             }
-                        }
                             ToggleRow(
                                 icon = Icons.Filled.Layers,
                                 title = "AI 回复切分",
@@ -740,6 +784,16 @@ fun SettingsBottomSheet(
             modifier = Modifier.fillMaxSize()
         ) {
             ApiCatalogEditor(viewModel = viewModel, onBack = { showApiEditor = false })
+        }
+
+        // 视觉 OCR 模型配置编辑器（覆盖在总设置上方）
+        AnimatedVisibility(
+            visible = showVisionEditor,
+            enter = fadeIn(tween(Motion.DurationMedium)),
+            exit = fadeOut(tween(Motion.DurationShort)),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            VisionCatalogEditor(viewModel = viewModel, onBack = { showVisionEditor = false })
         }
 
         // 会话列表壁纸子面板（覆盖在总设置上方）
@@ -1231,6 +1285,90 @@ private fun ToggleRow(
                     Toast.makeText(context, "已保存", Toast.LENGTH_SHORT).show()
                 }
             )
+        }
+    }
+}
+
+/**
+ * 可展开设置组：把「设置行 + 展开的子面板」框进同一个容器，
+ * 用连续边框表明子面板归属于上方这一行（母设置框），避免展开面板看起来是独立悬浮卡片。
+ */
+@Composable
+private fun ExpandableSettingGroup(
+    icon: ImageVector,
+    title: String,
+    subtitle: String = "",
+    expanded: Boolean,
+    onClick: () -> Unit,
+    content: @Composable () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 3.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(com.quiddity.app.ui.components.glassCardColor())
+            .border(
+                width = 1.dp,
+                color = com.quiddity.app.ui.components.glassCardBorderColor(),
+                shape = RoundedCornerShape(14.dp)
+            )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onClick
+                )
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(modifier = Modifier.size(14.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                if (subtitle.isNotEmpty()) {
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                    )
+                }
+            }
+            Icon(
+                imageVector = Icons.Filled.ChevronRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                modifier = Modifier.size(20.dp)
+            )
+        }
+        AnimatedVisibility(visible = expanded) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 12.dp, end = 12.dp, bottom = 12.dp)
+            ) {
+                // 行与子面板之间的连接线：强调两者同属一个设置框
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(1.dp)
+                        .background(com.quiddity.app.ui.components.glassCardBorderColor())
+                )
+                Spacer(modifier = Modifier.size(10.dp))
+                content()
+            }
         }
     }
 }

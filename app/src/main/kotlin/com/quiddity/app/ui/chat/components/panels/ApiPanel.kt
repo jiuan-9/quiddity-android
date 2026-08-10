@@ -137,7 +137,10 @@ fun ApiEditorPanel(
         Saver<ApiCatalogEditFormState?, List<String>>(
             save = { state ->
                 if (state == null) emptyList()
-                else listOf(state.id, state.name, state.providerId, state.apiUrl, state.apiModel, state.apiKey)
+                else listOf(
+                    state.id, state.name, state.providerId, state.apiUrl, state.apiModel, state.apiKey,
+                    state.maxTemperature?.toString().orEmpty()
+                )
             },
             restore = { saved ->
                 if (saved.size < 6) null
@@ -147,7 +150,8 @@ fun ApiEditorPanel(
                     providerId = saved[2],
                     apiUrl = saved[3],
                     apiModel = saved[4],
-                    apiKey = saved[5]
+                    apiKey = saved[5],
+                    maxTemperature = saved.getOrNull(6)?.toDoubleOrNull()
                 )
             }
         )
@@ -217,7 +221,8 @@ fun ApiEditorPanel(
                                 providerId = entry.providerId,
                                 apiUrl = entry.apiUrl,
                                 apiModel = entry.apiModel,
-                                apiKey = ""
+                                apiKey = "",
+                                maxTemperature = entry.maxTemperature
                             )
                         },
                     color = com.quiddity.app.ui.components.glassCardColor()

@@ -198,6 +198,24 @@ class TimeLibraryEngineTest {
         assertEquals("10", TimeLibraryEngine.parseDecisionResult("10"))
     }
 
+    @Test
+    fun `parseDecisionResult - strips stray trailing decision zero`() {
+        assertEquals("想你了", TimeLibraryEngine.parseDecisionResult("想你了\n0"))
+        assertEquals("想你了", TimeLibraryEngine.parseDecisionResult("想你了\r\n0"))
+        assertEquals("想你了", TimeLibraryEngine.parseDecisionResult("想你了 0"))
+        assertEquals("想你了。", TimeLibraryEngine.parseDecisionResult("想你了。0"))
+        assertEquals("想你了！", TimeLibraryEngine.parseDecisionResult("想你了！0"))
+        assertEquals("想你了", TimeLibraryEngine.parseDecisionResult("想你了\n\n0"))
+    }
+
+    @Test
+    fun `parseDecisionResult - keeps legitimate trailing digits`() {
+        assertEquals("记住密码 1230", TimeLibraryEngine.parseDecisionResult("记住密码 1230"))
+        assertEquals("10", TimeLibraryEngine.parseDecisionResult("10"))
+        assertEquals("0.0", TimeLibraryEngine.parseDecisionResult("0.0"))
+        assertEquals("我想你了0", TimeLibraryEngine.parseDecisionResult("我想你了0"))
+    }
+
     // ============================================================
     // 六、触发延迟补偿 withinLateWindow
     // ============================================================

@@ -42,6 +42,7 @@ class ChatImageExporterTest {
         id: String,
         content: String,
         isNotice: Boolean = false,
+        isThinking: Boolean = false,
         role: Role = Role.ASSISTANT
     ): Message = Message(
         id = id,
@@ -49,7 +50,8 @@ class ChatImageExporterTest {
         role = role,
         content = content,
         timestamp = 0L,
-        isNotice = isNotice
+        isNotice = isNotice,
+        isThinking = isThinking
     )
 
     private fun seg(isUser: Boolean, content: String, timestamp: Long = 0L) =
@@ -65,6 +67,17 @@ class ChatImageExporterTest {
         val segments = ChatImageExporter.buildSegments(messages)
         assertEquals(listOf("你好", "嗨！"), segments.map { it.content })
         assertEquals(listOf(true, false), segments.map { it.isUser })
+    }
+
+    @Test
+    fun `buildSegments filters thinking messages`() {
+        val messages = listOf(
+            msg("t1", "思考过程", isThinking = true),
+            msg("u1", "你好", role = Role.USER),
+            msg("a1", "嗨！")
+        )
+        val segments = ChatImageExporter.buildSegments(messages)
+        assertEquals(listOf("你好", "嗨！"), segments.map { it.content })
     }
 
     @Test

@@ -147,6 +147,8 @@ class MessageStreamCoordinator(
     private var thinkingEmitted = false
     private var thinkingStartTs = 0L
     private var contentStarted = false
+    /** 流末尾可能独立补发的 "0" 结束标记：先暂存，后续仍有内容则补回正文，流结束则丢弃。 */
+    private var pendingZeroArtifact: String? = null
 
     override fun acceptReasoning(delta: String): List<StreamCoordinator.Signal> {
         if (delta.isEmpty()) return emptyList()
@@ -172,6 +174,11 @@ class MessageStreamCoordinator(
 
     override fun accept(delta: String): List<StreamCoordinator.Signal> {
         if (delta.isEmpty()) return emptyList()
+        // 上一块若是暂存的独立 "0"，说明它并非结束标记（后续还有内容），先补回正文
+        pendingZeroArtifact?.let { pending ->
+            pendingZeroArtifact = null
+            buffer.append(pending)
+        }
         val signals = mutableListOf<StreamCoordinator.Signal>()
         if (internalThinking && !contentStarted) {
             // 内部思考：正式回答（【回答】标记）出现前，所有内容视为思考
@@ -228,7 +235,12 @@ class MessageStreamCoordinator(
             if (thinkingEmitted || thinkingBuffer.isNotEmpty()) {
                 signals += completeThinking()
             }
-            buffer.append(delta)
+            // 独立内容块 "0" 且前面已有正文：按"结束标记"暂存，等待后续内容或流结束判定
+            if (delta == "0" && buffer.isNotBlank()) {
+                pendingZeroArtifact = delta
+            } else {
+                buffer.append(delta)
+            }
         }
 
         // 循环切分：一次 delta 可能包含多个切分点，全部切出
@@ -327,6 +339,24 @@ class MessageStreamCoordinator(
         }
         // buffer 为空白说明全部内容已在 accept 阶段切分完成（或流本就无内容），无需收尾
         if (buffer.isBlank()) return signals
+        // 暂存的独立 "0"：若正文以数字结尾则属于数字的一部分（如 10/100），补回；否则为结束标记，丢弃
+        pendingZeroArtifact?.let { pending ->
+            pendingZeroArtifact = null
+            if (buffer.isNotBlank() && buffer.last().isDigit()) {
+                buffer.append(pending)
+            }
+        }
+        // 句末标点切分后残留的独立 "0"（如"想你了。0"拆出"想你了。"后剩余 0）：属于结束标记，丢弃
+        if (buffer.trim() == "0" && completed.isNotEmpty()) {
+            buffer.clear()
+            return signals
+        }
+        // 清洗流末尾孤立的 "0" 结束标记（部分兼容网关/模型在流结束时补发一个 0），
+        // 避免每条 AI 消息末尾多出一个 0；正常数字结尾（10、0.0 等）不受影响。
+        val cleaned = stripTrailingArtifactZero(buffer.toString())
+        buffer.setLength(0)
+        buffer.append(cleaned)
+        if (buffer.isBlank()) return signals
         val finalMsg = buildMessage(streaming = false)
         if (finalMsg.id in knownIds) {
             signals += StreamCoordinator.Signal.Complete(finalMsg)
@@ -337,6 +367,21 @@ class MessageStreamCoordinator(
         completed += finalMsg
         buffer.clear()
         return signals
+    }
+
+    /**
+     * 剥离流末尾孤立的 "0" 结束标记。
+     *
+     * 仅当 "0" 与前文之间存在换行 / 空白 / 全角句末标点（。！？）分隔时剥离，避免误删正文。
+     * "0" 前一个字符是数字时不剥离（保护 10 / 100 / 0.0 等正常数字结尾）。
+     */
+    private fun stripTrailingArtifactZero(text: String): String {
+        if (text.length <= 1 || !text.endsWith("0")) return text
+        val before = text[text.length - 2]
+        if (before.isDigit()) return text
+        val separated = before.isWhitespace() || before in "。！？"
+        if (!separated) return text
+        return text.dropLast(1).trimEnd()
     }
 
     override fun snapshot(): List<Message> {

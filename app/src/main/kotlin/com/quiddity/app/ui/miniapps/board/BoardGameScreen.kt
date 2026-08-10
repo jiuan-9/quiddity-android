@@ -108,6 +108,8 @@ fun BoardGameScreen(
     onOpenChat: (() -> Unit)?
 ) {
     var showExitConfirm by remember { mutableStateOf(false) }
+    // 结算弹窗可点掉：关掉后留在对局页复盘棋盘，需要时再点"查看战报"重新打开
+    var showResult by remember(session.id) { mutableStateOf(true) }
     // 开局"分先"动画：随机黑白归属，简单展示后淡出（朴素）
     var showColorDraw by remember(session.id) { mutableStateOf(false) }
     val drawAlpha = remember(session.id) { Animatable(0f) }
@@ -243,6 +245,10 @@ fun BoardGameScreen(
                 PressableTextButton(onClick = onResign) {
                     Text("认输", color = MaterialTheme.colorScheme.error)
                 }
+            } else if (!showResult) {
+                PressableTextButton(onClick = { showResult = true }) {
+                    Text("查看战报", color = MaterialTheme.colorScheme.primary)
+                }
             }
         }
 
@@ -275,13 +281,16 @@ fun BoardGameScreen(
     }
 
     finished?.let { result ->
-        BoardResultDialog(
-            result = result,
-            gameName = session.gameType.displayName,
-            onRematch = onRematch,
-            onExit = onBack,
-            onOpenChat = onOpenChat
-        )
+        if (showResult) {
+            BoardResultDialog(
+                result = result,
+                gameName = session.gameType.displayName,
+                onDismiss = { showResult = false },
+                onRematch = onRematch,
+                onExit = onBack,
+                onOpenChat = onOpenChat
+            )
+        }
     }
 
     if (showColorDraw) {
@@ -916,6 +925,7 @@ private fun ChatBubble(message: BoardChatMessage) {
 private fun BoardResultDialog(
     result: BoardStatus.Finished,
     gameName: String,
+    onDismiss: () -> Unit,
     onRematch: () -> Unit,
     onExit: () -> Unit,
     onOpenChat: (() -> Unit)?
@@ -937,7 +947,7 @@ private fun BoardResultDialog(
         appear.animateTo(1f, spring(dampingRatio = 0.45f, stiffness = Spring.StiffnessMediumLow))
     }
     AlertDialog(
-        onDismissRequest = onExit,
+        onDismissRequest = onDismiss,
         shape = RoundedCornerShape(24.dp),
         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         title = {

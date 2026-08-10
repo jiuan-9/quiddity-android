@@ -36,7 +36,9 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.rounded.Apps
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Icon
@@ -58,10 +60,13 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
@@ -72,8 +77,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import com.quiddity.app.data.model.Message
 import com.quiddity.app.data.model.Role
 import com.quiddity.app.ui.components.AiAvatar
@@ -255,14 +263,16 @@ fun MessageBubble(
     // ===== 内容渲染分流决策 =====
     // 关键性能优化：流式中用纯文本渲染（避免每 token 都重跑 MarkdownParser.parse），
     // 流结束后用 message.id 作 key 解析一次，之后保持稳定。
+    // 改写/撤回等「原地替换内容」场景 id 不变，必须以内容作 key 才能让解析结果刷新，
+    // 否则气泡会一直显示旧文本；流式中 key 固定为 null 避免每个 token 都重启解析协程。
     // 性能：Markdown 解析移到后台线程（完成消息时不再占主线程掉帧）
     // Lint 规则 ProduceStateDoesNotAssignValue 无法识别 if/else 双分支赋值（误报）；
-    // 实际两条路径均赋值 value，解析结果随 message.id / isStreaming 正确更新。
+    // 实际两条路径均赋值 value，解析结果随 message.id / 稳定内容（非流式全文）正确更新。
     @SuppressLint("ProduceStateDoesNotAssignValue")
     val parsedContent by produceState(
         initialValue = ParsedMessageContent(emptyList(), MarkdownParser.ParsedMarkdown("", emptyList())),
         key1 = message.id,
-        key2 = isStreaming
+        key2 = if (isStreaming) null else fullContent
     ) {
         if (isStreaming || fullContent.isEmpty()) {
             value = ParsedMessageContent(emptyList(), MarkdownParser.ParsedMarkdown(fullContent, emptyList()))
@@ -379,8 +389,26 @@ fun MessageBubble(
                 }
             }
 
-            // ===== 渲染分流 =====
-            when (renderMode) {
+            // ===== 图片消息：固定卡片样式（缩略图 + 标签 + 文字，参考 DeepSeek 网页版） =====
+            if (message.imageUri?.isNotBlank() == true) {
+                ImageMessageBubble(
+                    imageUri = message.imageUri.orEmpty(),
+                    text = displayWithMarkdown,
+                    isUser = isUser,
+                    isStreaming = isStreaming,
+                    textColor = textColor,
+                    multiSelectMode = multiSelectMode,
+                    onSelectToggle = onSelectToggle,
+                    onBubbleClick = if (isUser) onBubbleClick else null,
+                    onLongClick = onLongClick,
+                    bubbleScaleState = bubbleScaleState,
+                    bubbleInteractionSource = bubbleInteractionSource,
+                    bubbleColor = bubbleColor,
+                    bubbleBorderColor = bubbleBorderColor
+                )
+            } else {
+                // ===== 渲染分流 =====
+                when (renderMode) {
                 RenderMode.PURE_CODE -> {
                     val codeBlock = blocks[0] as MarkdownParser.Block.CodeBlock
                     Box(
@@ -600,6 +628,7 @@ fun MessageBubble(
                             }
                         }
                     }
+                }
                 }
             }
 
@@ -971,6 +1000,168 @@ private fun applyMarkdownStyles(
 }
 
 /**
+ * 图片消息气泡：固定卡片样式（参考 DeepSeek 网页版等聊天界面）。
+ *
+ * 布局：
+ * - 固定尺寸的「图片」图标卡片（图标 + 文字），点击弹出全屏大图；
+ * - 图标卡片下方展示用户输入的文字（纯图片消息则只有卡片）。
+ */
+@Composable
+private fun ImageMessageBubble(
+    imageUri: String,
+    text: AnnotatedString,
+    isUser: Boolean,
+    isStreaming: Boolean,
+    textColor: Color,
+    multiSelectMode: Boolean,
+    onSelectToggle: (() -> Unit)?,
+    onBubbleClick: (() -> Unit)?,
+    onLongClick: (() -> Unit)?,
+    bubbleScaleState: androidx.compose.runtime.State<Float>,
+    bubbleInteractionSource: MutableInteractionSource,
+    bubbleColor: Color,
+    bubbleBorderColor: Color
+) {
+    var showImage by remember(imageUri) { mutableStateOf(false) }
+    Box(
+        modifier = Modifier
+            .widthIn(max = BubbleMaxWidth)
+            .graphicsLayer {
+                scaleX = bubbleScaleState.value
+                scaleY = bubbleScaleState.value
+            }
+            .let { mod ->
+                when {
+                    multiSelectMode && onSelectToggle != null -> {
+                        mod.clickable(
+                            interactionSource = bubbleInteractionSource,
+                            indication = null,
+                            onClick = onSelectToggle
+                        )
+                    }
+                    isUser && onBubbleClick != null -> {
+                        mod.clickable(
+                            interactionSource = bubbleInteractionSource,
+                            indication = null,
+                            onClick = onBubbleClick
+                        )
+                    }
+                    else -> mod
+                }
+            }
+            .clip(BubbleShape(isUser))
+            .border(1.dp, bubbleBorderColor, BubbleShape(isUser))
+            .background(bubbleColor)
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
+            horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
+        ) {
+            // 图片图标卡片：点击弹出全屏大图
+            Box(
+                modifier = Modifier
+                    .size(width = 132.dp, height = 92.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .border(
+                        1.dp,
+                        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                        RoundedCornerShape(12.dp)
+                    )
+                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                    .semantics { contentDescription = "查看图片" }
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) {
+                        if (multiSelectMode) {
+                            onSelectToggle?.invoke()
+                        } else {
+                            showImage = true
+                        }
+                    }
+            ) {
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.Center),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Image,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(28.dp)
+                    )
+                    Spacer(modifier = Modifier.size(6.dp))
+                    Text(
+                        text = "图片",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            // 用户输入的文字（纯图片消息时省略）
+            if (text.text.isNotBlank() || isStreaming) {
+                Spacer(modifier = Modifier.size(8.dp))
+                Row(verticalAlignment = Alignment.Bottom) {
+                    SelectableMessageText(
+                        text = text,
+                        textColor = textColor,
+                        onBubbleClick = if (multiSelectMode) onSelectToggle else onBubbleClick,
+                        onLongClick = if (multiSelectMode || !isUser) null else onLongClick,
+                        modifier = Modifier.widthIn(max = BubbleInnerMaxWidth)
+                    )
+                    if (isStreaming) {
+                        Spacer(modifier = Modifier.size(2.dp))
+                        StreamingCursor()
+                    }
+                }
+            }
+        }
+    }
+
+    // 全屏图片查看器：点击图标卡片后弹出
+    if (showImage) {
+        Dialog(
+            onDismissRequest = { showImage = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.92f))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { showImage = false }
+            ) {
+                AsyncImage(
+                    model = imageUri,
+                    contentDescription = "图片",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize()
+                )
+                Icon(
+                    imageVector = Icons.Filled.Close,
+                    contentDescription = "关闭",
+                    tint = Color.White,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(16.dp)
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(Color.Black.copy(alpha = 0.55f))
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { showImage = false }
+                        .padding(8.dp)
+                )
+            }
+        }
+    }
+}
+
+/**
  * 消息文本（已移除 SelectionContainer 文字提取器）。
  *
  * 当前规则：
@@ -1063,6 +1254,59 @@ fun NoticeBubble(
                 fontSize = 14.sp,
                 lineHeight = 20.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            )
+        }
+    }
+}
+
+/**
+ * 小应用对局记录气泡（isGameLog=true 消息专用）。
+ *
+ * 与 [NoticeBubble] 一样居中展示，但样式更像"战报卡片"：
+ * - 显示小应用名（如"棋盘 · 五子棋"）+ 对局摘要；
+ * - 参与 LLM 上下文，角色能知道自己刚刚和用户一起玩过；
+ * - 无头像、不可撤回/改写。
+ */
+@Composable
+fun GameLogBubble(
+    content: String,
+    modifier: Modifier = Modifier,
+    miniAppTitle: String? = null
+) {
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 28.dp, vertical = 8.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier
+                .clip(RoundedCornerShape(14.dp))
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.07f))
+                .border(
+                    1.dp,
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
+                    RoundedCornerShape(14.dp)
+                )
+                .padding(horizontal = 20.dp, vertical = 12.dp)
+        ) {
+            if (!miniAppTitle.isNullOrBlank()) {
+                Text(
+                    text = "🕹 $miniAppTitle · 对局记录",
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.9f)
+                )
+                Spacer(Modifier.size(4.dp))
+            }
+            Text(
+                text = content,
+                fontSize = 13.sp,
+                lineHeight = 19.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.82f),
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center
             )
         }

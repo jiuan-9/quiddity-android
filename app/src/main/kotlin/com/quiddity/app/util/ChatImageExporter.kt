@@ -1,6 +1,7 @@
 package com.quiddity.app.util
 
 import android.content.Context
+import android.content.ContentValues
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -10,9 +11,16 @@ import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
+import android.media.MediaScannerConnection
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
+import android.util.Log
+import androidx.annotation.RequiresApi
 import androidx.core.content.FileProvider
 import com.quiddity.app.data.model.Message
 import com.quiddity.app.data.model.Role
@@ -162,7 +170,7 @@ object ChatImageExporter {
         senderNames: Map<String, String> = emptyMap()
     ): List<Segment> =
         messages
-            .filterNot { it.isNotice }
+            .filterNot { it.isNotice || it.isThinking }
             .map { message ->
                 val isUser = message.role == Role.USER
                 Segment(
@@ -269,6 +277,77 @@ object ChatImageExporter {
         } catch (e: Exception) {
             false
         }
+    }
+
+    /**
+     * 把已生成长图保存到系统相册（Pictures/Quiddity）。
+     *
+     * - API 29+：走 MediaStore 插入（scoped storage，无需权限）；
+     * - API 26-28：写入公共 Pictures 目录并触发媒体扫描（调用方需先获得
+     *   WRITE_EXTERNAL_STORAGE 运行时权限）。
+     *
+     * @return 相册中的 Uri；失败返回 null（不影响原分享流程）。
+     */
+    fun saveToGallery(context: Context, file: File): Uri? {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                saveToGalleryScoped(context, file)
+            } else {
+                saveToGalleryLegacy(context, file)
+            }
+        } catch (e: Exception) {
+            Log.w("ChatImageExporter", "保存长图到相册失败", e)
+            null
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.Q)
+    private fun saveToGalleryScoped(context: Context, file: File): Uri? {
+        val resolver = context.contentResolver
+        val values = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, file.name)
+            put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+            put(
+                MediaStore.Images.Media.RELATIVE_PATH,
+                Environment.DIRECTORY_PICTURES + "/Quiddity"
+            )
+            put(MediaStore.Images.Media.IS_PENDING, 1)
+        }
+        val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+            ?: return null
+        try {
+            val written = resolver.openOutputStream(uri)?.use { out ->
+                file.inputStream().use { input -> input.copyTo(out) }
+                true
+            } ?: false
+            if (!written) return null
+            values.clear()
+            values.put(MediaStore.Images.Media.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+            return uri
+        } catch (t: Throwable) {
+            runCatching { resolver.delete(uri, null, null) }
+            throw t
+        }
+    }
+
+    private fun saveToGalleryLegacy(context: Context, file: File): Uri? {
+        val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
+            ?: return null
+        val targetDir = File(dir, "Quiddity")
+        if (!targetDir.exists() && !targetDir.mkdirs()) return null
+        val target = File(targetDir, file.name)
+        file.inputStream().use { input ->
+            target.outputStream().use { out -> input.copyTo(out) }
+        }
+        // 触发媒体扫描，让相册立即看到新图片
+        MediaScannerConnection.scanFile(
+            context,
+            arrayOf(target.absolutePath),
+            arrayOf("image/png"),
+            null
+        )
+        return Uri.fromFile(target)
     }
 
     // ==================== 渲染（真机环境，非纯逻辑） ====================

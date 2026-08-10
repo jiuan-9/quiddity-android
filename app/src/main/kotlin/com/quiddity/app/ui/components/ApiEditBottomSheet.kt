@@ -81,7 +81,9 @@ import kotlinx.coroutines.launch
 fun ApiEditBottomSheet(
     initial: ApiCatalogEditFormState?,
     catalogManager: ApiCatalogManager,
+    providers: List<ApiCatalogManager.Provider> = catalogManager.providers,
     testConnection: suspend (apiUrl: String, apiKey: String, model: String) -> Result<String>,
+    testVision: (suspend (apiUrl: String, apiKey: String, model: String) -> Result<String>)? = null,
     hasStoredKey: Boolean = false,
     onDismiss: () -> Unit,
     onSave: (ApiCatalogEditFormState) -> Unit
@@ -168,7 +170,9 @@ fun ApiEditBottomSheet(
                     ApiEditForm(
                         initial = initial,
                         catalogManager = catalogManager,
+                        providers = providers,
                         testConnection = testConnection,
+                        testVision = testVision,
                         hasStoredKey = hasStoredKey,
                         onDismiss = {
                             visible = false

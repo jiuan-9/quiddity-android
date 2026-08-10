@@ -162,6 +162,91 @@ class ApiCatalogManager(
     )
 
     /**
+     * 自带视觉能力的模型清单（图片理解 / 多模态）。
+     *
+     * 覆盖两类来源：
+     * - 聊天名册中"模型本身就支持图片输入"的模型（如 Kimi K3 / K2.6、MiniMax M3），
+     *   发送图片时直接使用当前对话 API 做识图，无需再走 OCR 兜底；
+     * - 视觉 OCR 名册中的预置视觉模型 ID。
+     *
+     * 匹配规则（[isVisionModel]）：
+     * 1. 精确命中本清单（不区分大小写）；
+     * 2. 模型 ID 包含常见视觉关键词（vision / vl / omni / ocr），或命中全系多模态前缀
+     *    （gemini / gpt-5 / gpt-4o / claude），以兼容清单未覆盖的新模型；
+     * 3. 自定义服务商一律视为纯文本，交给用户配置的 OCR 兜底。
+     */
+    private val VISION_MODEL_MAP: Set<String> = setOf(
+        // OpenAI
+        "gpt-5.5", "gpt-5.4", "gpt-4o",
+        // Google Gemini（全系多模态）
+        "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro",
+        // Anthropic Claude（全系支持视觉）
+        "claude-sonnet-4-6", "claude-sonnet-4-5", "claude-opus-4-8",
+        // 阿里云通义千问 VL / Omni
+        "qwen-vl-max", "qwen-vl-plus", "qwen3.5-omni-plus",
+        "qwen2.5-vl-72b-instruct", "qwen2.5-vl-7b-instruct",
+        "Qwen/Qwen2.5-VL-72B-Instruct", "Qwen/Qwen2.5-VL-7B-Instruct",
+        "Qwen/Qwen3-Omni-30B-A3B-Instruct",
+        // 智谱 GLM 视觉
+        "glm-4.1v-thinking-flash",
+        "glm-4.6v-flash", "glm-4.6v", "glm-4v-plus", "glm-4v-flash",
+        "zai-org/GLM-5V-Turbo",
+        // 月之暗面 Kimi（K3 / K2.6 / K2.5 原生视觉）
+        "kimi-k3", "kimi-k2.6", "kimi-k2.5", "moonshot-v1-32k-vision-preview",
+        "moonshotai/Kimi-K3", "moonshotai/Kimi-K2.6",
+        // 字节豆包视觉
+        "doubao-seed-1-6-vision-250815", "doubao-1.5-thinking-vision-pro",
+        "doubao-1.5-vision-pro", "doubao-1.5-vision-lite",
+        // 百度文心 ERNIE-VL
+        "ernie-4.5-turbo-vl", "ernie-4.5-turbo-vl-32k",
+        // MiniMax 多模态
+        "MiniMax-M3", "MiniMaxAI/MiniMax-M3",
+        // 硅基流动 OCR / 视觉专用模型
+        "deepseek-ai/DeepSeek-OCR", "PaddlePaddle/PaddleOCR-VL"
+    )
+
+    private val VISION_MODEL_MAP_NORMALIZED: Set<String> =
+        VISION_MODEL_MAP.mapTo(mutableSetOf()) { it.lowercase() }
+
+    /**
+     * 视觉能力关键词 / 全系多模态前缀。
+     * 命中即认为模型支持图片输入，便于覆盖各平台后续新增的视觉模型。
+     */
+    private val VISION_MODEL_KEYWORDS: List<String> = listOf(
+        "vision", "-vl", "omni", "ocr", "gemini", "gpt-5", "gpt-4o", "claude"
+    )
+
+    /**
+     * 判断模型是否自带视觉能力（可直接接收图片）。
+     *
+     * - 自定义服务商无法确认能力，一律按纯文本处理，交由 OCR 兜底；
+     * - 其余模型按 [VISION_MODEL_MAP] 精确匹配 + 关键词兜底。
+     */
+    fun isVisionModel(apiModel: String, providerId: String): Boolean {
+        val m = apiModel.trim().lowercase()
+        if (m.isEmpty()) return false
+        if (providerId == "custom") return false
+        if (m in VISION_MODEL_MAP_NORMALIZED) return true
+        return VISION_MODEL_KEYWORDS.any { m.contains(it) }
+    }
+
+    /**
+     * 解析图片识图实际使用的模型配置（优先级）：
+     *
+     * 1. 当前对话模型自带视觉 → 直接使用当前对话 API（URL / Key / 模型名均一致）；
+     * 2. 否则回退用户配置的视觉 OCR 模型（先当前选中项，再名册第一条）。
+     *
+     * 返回 null 表示无可用识图配置，由调用方给出引导提示。
+     */
+    fun resolveOcrEntry(settings: AppSettings, chatEntry: ApiCatalogEntry?): ApiCatalogEntry? {
+        if (chatEntry != null && isVisionModel(chatEntry.apiModel, chatEntry.providerId)) {
+            return chatEntry
+        }
+        return settings.visionCatalog.firstOrNull { it.id == settings.activeVisionCatalogId }
+            ?: settings.visionCatalog.firstOrNull()
+    }
+
+    /**
      * 支持服务端联网搜索（Responses API web_search）的模型清单。
      *
      * 官方文档：Responses API 目前仅支持 deepseek-v4-flash，暂不支持 deepseek-v4-pro。
@@ -196,6 +281,8 @@ class ApiCatalogManager(
      */
     fun responsesApiUrl(entry: ApiCatalogEntry): String? =
         findProvider(entry.providerId).responsesUrl
+            // 自定义条目但 URL 指向官方 DeepSeek 端点：按官方能力处理，避免"官方 URL 却灰色不可用"
+            ?: if (isOfficialDeepSeekEntry(entry)) QuiddityConstants.DEEPSEEK_RESPONSES_URL else null
 
     /**
      * 该条目是否支持 DeepSeek 官方服务端联网搜索（Responses API web_search）。
@@ -203,16 +290,40 @@ class ApiCatalogManager(
      * 要求官方服务商（providerId=deepseek）+ 官方支持的模型（[RESPONSES_SUPPORTED_MODELS]）。
      */
     fun supportsServerWebSearch(entry: ApiCatalogEntry): Boolean =
-        entry.providerId == QuiddityConstants.DEEPSEEK_PROVIDER_ID &&
-            entry.apiModel in RESPONSES_SUPPORTED_MODELS &&
-            responsesApiUrl(entry) != null
+        entry.apiModel in RESPONSES_SUPPORTED_MODELS &&
+            isOfficialDeepSeekEntry(entry)
+
+    /**
+     * 判定条目是否为 DeepSeek 官方服务（服务商预设或 URL 指向官方端点）。
+     * 用户用自定义条目填官方 URL 时同样视为官方服务，联网搜索等官方能力可用。
+     */
+    private fun isOfficialDeepSeekEntry(entry: ApiCatalogEntry): Boolean {
+        if (entry.providerId == QuiddityConstants.DEEPSEEK_PROVIDER_ID) return true
+        val url = entry.apiUrl.trim()
+        return url.startsWith("https://api.deepseek.com")
+    }
+
+    /**
+     * 已知模型的采样温度上限（未列出 = 不限制，按全局 2.0）。
+     *
+     * Anthropic Claude 官方 API 温度仅支持 0～1.0，超限请求会被服务端拒绝；
+     * 选中这些预设模型时自动套用上限，用户也可在模型配置里手动覆盖。
+     */
+    private val knownTemperatureCaps: Map<String, Double> = mapOf(
+        "claude-sonnet-4-6" to 1.0,
+        "claude-sonnet-4-5" to 1.0,
+        "claude-opus-4-8" to 1.0
+    )
+
+    /** 返回已知模型的温度上限；未知模型返回 null（按 2.0 不限制）。 */
+    fun defaultMaxTemperature(apiModel: String): Double? = knownTemperatureCaps[apiModel]
 
     /**
      * 查询指定分级对应的默认上下文轮数。
      *
-     * - 完全级：80 轮（[QuiddityConstants.TIER_FULL_CONTEXT_LIMIT]）
-     * - 进阶级：40 轮（[QuiddityConstants.TIER_ADVANCED_CONTEXT_LIMIT]）
-     * - 基础级：12 轮（[QuiddityConstants.TIER_BASIC_CONTEXT_LIMIT]）
+     * - 完全级：40 轮（[QuiddityConstants.TIER_FULL_CONTEXT_LIMIT]）
+     * - 进阶级：20 轮（[QuiddityConstants.TIER_ADVANCED_CONTEXT_LIMIT]）
+     * - 基础级：6 轮（[QuiddityConstants.TIER_BASIC_CONTEXT_LIMIT]）
      *
      * 模型切换时自动重置为此默认值，用户可手动覆盖。
      */
@@ -388,6 +499,128 @@ class ApiCatalogManager(
     fun displayNameOf(providerId: String): String =
         providers.firstOrNull { it.id == providerId }?.name ?: "自定义"
 
+    // ==================== 视觉 OCR 服务商预置（独立名册） ====================
+
+    /**
+     * 视觉 OCR 服务商预置数据（2026-08 核对各厂商官方文档）。
+     *
+     * 与聊天名册共用 [Provider] 结构：默认 URL 均为 OpenAI 兼容的
+     * `/chat/completions` 接口，模型 ID 采用各平台官方文档中的实际模型名。
+     *
+     * 覆盖厂商：
+     * - OpenAI（gpt-5.5 / gpt-5.4 / gpt-4o，全系支持视觉）
+     * - Google Gemini（OpenAI 兼容端点，全系多模态）
+     * - Anthropic Claude（OpenAI 兼容端点）
+     * - 阿里云百炼（qwen-vl-max / qwen2.5-vl / qwen3.5-omni-plus）
+     * - 智谱开放平台（glm-4.6v-flash / glm-4.1v-thinking-flash 免费 / glm-4.6v / glm-4v 系列）
+     * - 月之暗面（kimi-k3 / kimi-k2.6 原生视觉，moonshot-v1 视觉预览版）
+     * - 字节火山方舟（doubao-seed-1.6-vision / doubao-1.5 视觉系列）
+     * - 百度千帆（ernie-4.5-turbo-vl 系列）
+     * - MiniMax（M3 原生多模态）
+     * - 硅基流动聚合平台（Qwen-VL / GLM-5V / DeepSeek-OCR / PaddleOCR-VL）
+     */
+    val visionProviders: List<Provider> = listOf(
+        Provider(
+            "openai", "OpenAI\nOpenAI",
+            "https://api.openai.com/v1/chat/completions",
+            "https://platform.openai.com/api-keys",
+            listOf("gpt-5.5", "gpt-5.4", "gpt-4o")
+        ),
+        Provider(
+            "google", "Google Gemini\nGoogle Gemini",
+            "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+            "https://aistudio.google.com/apikey",
+            listOf("gemini-3.5-flash", "gemini-2.5-flash", "gemini-2.5-pro")
+        ),
+        Provider(
+            "anthropic", "Anthropic Claude\nAnthropic Claude",
+            "https://api.anthropic.com/v1/chat/completions",
+            "https://console.anthropic.com/settings/keys",
+            listOf("claude-sonnet-4-6", "claude-sonnet-4-5", "claude-opus-4-8")
+        ),
+        Provider(
+            "alibaba", "阿里云（通义千问 VL）\nAlibaba Qwen-VL",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+            "https://dashscope.aliyun.com",
+            listOf(
+                "qwen-vl-max",
+                "qwen-vl-plus",
+                "qwen3.5-omni-plus",
+                "qwen2.5-vl-72b-instruct",
+                "qwen2.5-vl-7b-instruct"
+            )
+        ),
+        Provider(
+            "zhipu", "智谱（GLM 视觉）\nZhipu GLM-Vision",
+            "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+            "https://open.bigmodel.cn",
+            listOf(
+                "glm-4.1v-thinking-flash",
+                "glm-4.6v-flash",
+                "glm-4.6v",
+                "glm-4v-plus",
+                "glm-4v-flash"
+            )
+        ),
+        Provider(
+            "moonshot", "月之暗面（Kimi 视觉）\nMoonshot Kimi-Vision",
+            "https://api.moonshot.cn/v1/chat/completions",
+            "https://platform.moonshot.cn",
+            listOf(
+                "kimi-k3",
+                "kimi-k2.6",
+                "kimi-k2.5",
+                "moonshot-v1-32k-vision-preview"
+            )
+        ),
+        Provider(
+            "bytedance", "字节跳动（豆包视觉）\nByteDance Doubao-Vision",
+            "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
+            "https://console.volcengine.com/ark",
+            listOf(
+                "doubao-seed-1-6-vision-250815",
+                "doubao-1.5-thinking-vision-pro",
+                "doubao-1.5-vision-pro",
+                "doubao-1.5-vision-lite"
+            )
+        ),
+        Provider(
+            "baidu", "百度（文心 ERNIE-VL）\nBaidu ERNIE-VL",
+            "https://qianfan.baidubce.com/v2/chat/completions",
+            "https://qianfan.cloud.baidu.com",
+            listOf(
+                "ernie-4.5-turbo-vl",
+                "ernie-4.5-turbo-vl-32k"
+            )
+        ),
+        Provider(
+            "minimax", "MiniMax（M3 多模态）\nMiniMax Multimodal",
+            "https://api.minimax.chat/v1/openai/chat/completions",
+            "https://platform.minimaxi.com",
+            listOf("MiniMax-M3")
+        ),
+        Provider(
+            "siliconflow", "硅基流动（视觉/OCR）\nSiliconFlow Vision",
+            "https://api.siliconflow.cn/v1/chat/completions",
+            "https://cloud.siliconflow.cn",
+            listOf(
+                "Qwen/Qwen2.5-VL-72B-Instruct",
+                "Qwen/Qwen2.5-VL-7B-Instruct",
+                "Qwen/Qwen3-Omni-30B-A3B-Instruct",
+                "zai-org/GLM-5V-Turbo",
+                "deepseek-ai/DeepSeek-OCR",
+                "PaddlePaddle/PaddleOCR-VL"
+            )
+        ),
+        Provider("custom", "自定义", "", "", emptyList())
+    )
+
+    fun findVisionProvider(id: String?): Provider =
+        visionProviders.firstOrNull { it.id == id } ?: customProvider
+
+    fun visionDisplayNameOf(providerId: String): String =
+        visionProviders.firstOrNull { it.id == providerId }?.name ?: "自定义"
+
     /**
      * 获取指定服务商的官方 API-KEY 控制台地址。
      * 自定义或未知服务商返回空字符串。
@@ -447,7 +680,8 @@ class ApiCatalogManager(
         providerId: String,
         apiUrl: String,
         apiModel: String,
-        apiKey: String
+        apiKey: String,
+        maxTemperature: Double? = null
     ): ApiCatalogEntry = ApiCatalogEntry(
         // 关键修复：表单新增时 id 传空字符串 ""（ApiCatalogEditFormState 语义：空 = 新增）。
         // 空串不能当真实 id 用，否则多个新条目 id 相同会互相覆盖（"密钥不保存"根因）
@@ -456,6 +690,8 @@ class ApiCatalogManager(
         providerId = providerId,
         apiUrl = apiUrl,
         apiModel = apiModel,
-        apiKeyEnc = encryptKey(apiKey)
+        apiKeyEnc = encryptKey(apiKey),
+        // 用户未填写时按已知模型默认上限套用（如 Claude 1.0）
+        maxTemperature = maxTemperature ?: defaultMaxTemperature(apiModel)
     )
 }

@@ -146,6 +146,9 @@ import kotlinx.coroutines.withContext
 
 
 // 当前规则：壁纸存在时启用毛玻璃质感和顶部栏半透明；暗化遮罩保证可读性。
+/** 下拉提示松开后自动收回的延迟（无新滚动事件即视为已松手）。 */
+private const val PULL_HINT_RESET_MS = 600L
+
 @Composable
 fun HomeScreen(
     viewModel: HomeViewModel,
@@ -392,6 +395,15 @@ fun HomeScreen(
             pullTriggered = false
         }
     }
+    // 下拉提示回弹：手指松开（无新滚动事件）后自动收回，避免"继续下拉"提示常驻
+    LaunchedEffect(pullDp, pullTriggered) {
+        if (pullDp > 0f && !pullTriggered) {
+            delay(PULL_HINT_RESET_MS)
+            if (pullDp > 0f && !pullTriggered) {
+                pullDp = 0f
+            }
+        }
+    }
 
     fun syncMultiSelect(newIsMulti: Boolean, newIds: Set<String>) {
         multiSelectState.value = newIsMulti to newIds
@@ -441,6 +453,8 @@ fun HomeScreen(
             .pointerInput(usePointerPull, pullTriggered, onOpenMiniApps, density) {
                 if (!usePointerPull) return@pointerInput
                 detectVerticalDragGestures(
+                    onDragEnd = { pullDp = 0f },
+                    onDragCancel = { pullDp = 0f },
                     onVerticalDrag = { change, dragAmount ->
                         change.consume()
                         if (pullTriggered) return@detectVerticalDragGestures

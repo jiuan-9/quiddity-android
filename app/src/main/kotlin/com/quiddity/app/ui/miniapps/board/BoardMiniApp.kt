@@ -43,6 +43,7 @@ object BoardMiniApp : MiniApp {
         val vm: BoardViewModel = viewModel(
             factory = BoardViewModelFactory(
                 sessionRepository = ServiceLocator.miniAppSessionRepository,
+                conversationRepository = ServiceLocator.conversationRepository,
                 characterRepository = ServiceLocator.characterRepository,
                 inviteManager = ServiceLocator.miniAppInviteManager,
                 chatApi = ServiceLocator.chatApi
@@ -100,13 +101,13 @@ private fun BoardAppRoot(
                 )
             }
             is BoardRoute.Invite -> {
-                val characters by vm.characters.collectAsStateWithLifecycle()
+                val invitees by vm.invitees.collectAsStateWithLifecycle()
                 BoardInviteScreen(
-                    characters = characters,
+                    invitees = invitees,
                     game = route.game,
                     checking = uiState.inviteChecking,
                     onBack = { vm.backToMode(route.game) },
-                    onInvite = vm::inviteCharacter
+                    onInvite = vm::inviteFriend
                 )
             }
             is BoardRoute.Playing -> {

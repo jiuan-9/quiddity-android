@@ -1,13 +1,18 @@
 package com.quiddity.app.ui.chat
 
+import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.pm.PackageManager
 import android.graphics.Rect
+import android.net.Uri
 import android.os.Build
 import android.widget.Toast
 import android.view.ViewTreeObserver
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.BackHandler
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -94,6 +99,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.graphics.drawable.BitmapDrawable
 import coil.imageLoader
@@ -108,6 +114,7 @@ import com.quiddity.app.domain.ChatRecordSearch
 import com.quiddity.app.ui.chat.components.ChatInputBar
 import com.quiddity.app.ui.chat.components.CompressionProgressDialog
 import com.quiddity.app.ui.chat.components.GroupAvatarBar
+import com.quiddity.app.ui.chat.components.GameLogBubble
 import com.quiddity.app.ui.chat.components.HamburgerMenu
 import com.quiddity.app.ui.chat.components.MessageBubble
 import com.quiddity.app.ui.chat.components.NoticeBubble
@@ -119,6 +126,7 @@ import com.quiddity.app.ui.chat.gesture.detectNativeHorizontalSwipe
 import com.quiddity.app.ui.theme.Motion
 import com.quiddity.app.util.ChatImageExporter
 import com.quiddity.app.util.DateUtils
+import com.quiddity.app.util.ImageUtils
 import com.quiddity.app.util.QuiddityConstants
 import com.quiddity.app.util.WallpaperContrast
 import kotlin.math.roundToInt
@@ -178,7 +186,34 @@ fun ChatScreen(
     val senderNameMap by viewModel.senderNameMap.collectAsStateWithLifecycle()
     val senderAvatarMap by viewModel.senderAvatarMap.collectAsStateWithLifecycle()
     val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
+    val pendingImageUri by viewModel.pendingImageUri.collectAsStateWithLifecycle()
+    val ocrState by viewModel.ocrState.collectAsStateWithLifecycle()
     val context = LocalContext.current
+
+    // ===== 图片发送：选择图片 → 复制到内部存储（规避临时授权丢失） → 挂载待发送 =====
+    val imagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            val copied = runCatching {
+                ImageUtils.copyToInternalStorage(context, uri, "chat_images")
+            }.getOrNull()
+            if (copied != null) {
+                viewModel.setPendingImage(copied.toString())
+            } else {
+                Toast.makeText(context, "图片读取失败，请重新选择", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+    // 待发送图片清除（发送成功 / 用户移除）后回收内部临时文件
+    var lastAttachedImageUri by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(pendingImageUri) {
+        val previous = lastAttachedImageUri
+        lastAttachedImageUri = pendingImageUri
+        if (pendingImageUri == null && previous != null) {
+            ImageUtils.deleteTempFile(Uri.parse(previous))
+        }
+    }
 
     var showHamburger by rememberSaveable { mutableStateOf(false) }
     val listState = rememberLazyListState()
@@ -555,6 +590,17 @@ fun ChatScreen(
 
     // ===== 多选导出长图 =====
     var exportingImage by remember { mutableStateOf(false) }
+    // Android 8/9 保存到相册需要存储权限：授权后通过标志位重试导出
+    var retryExportAfterPermission by remember { mutableStateOf(false) }
+    val storagePermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            retryExportAfterPermission = true
+        } else {
+            Toast.makeText(context, "需要存储权限才能保存到相册", Toast.LENGTH_LONG).show()
+        }
+    }
     fun exportSelectedAsImage() {
         if (selectedMessageIds.isEmpty() || exportingImage) return
         val conv = conversation ?: return
@@ -568,9 +614,18 @@ fun ChatScreen(
         } else {
             emptyMap()
         }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            val granted = ContextCompat.checkSelfPermission(
+                context, Manifest.permission.WRITE_EXTERNAL_STORAGE
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!granted) {
+                storagePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                return
+            }
+        }
         exportingImage = true
         scope.launch {
-            val outcome = runCatching {
+            try {
                 val file = ChatImageExporter.exportToFile(
                     context = context,
                     messages = selected,
@@ -581,19 +636,30 @@ fun ChatScreen(
                     wallpaperDarken = conv.wallpaperDarken,
                     senderNames = exportSenderNames
                 )
-                ChatImageExporter.share(context, file)
-            }
-            exportingImage = false
-            outcome.onSuccess { shared ->
-                if (shared) {
-                    Toast.makeText(context, "长图已生成", Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(context, "无法打开分享面板", Toast.LENGTH_LONG).show()
+                val galleryUri = ChatImageExporter.saveToGallery(context, file)
+                val shared = ChatImageExporter.share(context, file)
+                when {
+                    galleryUri != null && shared ->
+                        Toast.makeText(context, "已保存到相册", Toast.LENGTH_SHORT).show()
+                    galleryUri != null ->
+                        Toast.makeText(context, "已保存到相册（无法打开分享面板）", Toast.LENGTH_LONG).show()
+                    shared ->
+                        Toast.makeText(context, "长图已生成，但保存相册失败", Toast.LENGTH_LONG).show()
+                    else ->
+                        Toast.makeText(context, "无法打开分享面板", Toast.LENGTH_LONG).show()
                 }
-            }.onFailure { e ->
+            } catch (e: Throwable) {
                 Toast.makeText(context, "生成长图失败：${e.message}", Toast.LENGTH_LONG).show()
+            } finally {
+                exportingImage = false
+                exitMultiSelect()
             }
-            exitMultiSelect()
+        }
+    }
+    LaunchedEffect(retryExportAfterPermission) {
+        if (retryExportAfterPermission) {
+            retryExportAfterPermission = false
+            exportSelectedAsImage()
         }
     }
 
@@ -935,7 +1001,7 @@ fun ChatScreen(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .then(
-                                            if (multiSelectMode && !message.isNotice) {
+                                            if (multiSelectMode && !message.isNotice && !message.isGameLog) {
                                                 // 多选：点击整行勾选，选中行整行高亮
                                                 Modifier
                                                     .clip(RoundedCornerShape(10.dp))
@@ -958,58 +1024,65 @@ fun ChatScreen(
                                             }
                                         )
                                         .padding(
-                                            horizontal = if (multiSelectMode && !message.isNotice) 4.dp else 0.dp
+                                            horizontal = if (multiSelectMode && !message.isNotice && !message.isGameLog) 4.dp else 0.dp
                                         )
                                 ) {
                                     key(message.id) {
-                                        MessageBubbleItem(
-                                            message = message,
-                                            isLastAi = message.role == Role.ASSISTANT &&
-                                                !message.isThinking &&
-                                                messages.lastOrNull { !it.isNotice }?.id == message.id,
-                                            isGroupChat = isGroupChat,
-                                            inMultiSelect = multiSelectMode,
-                                            isGenerating = isGenerating,
-                                            userAvatarUri = settings.userAvatarUri,
-                                            aiAvatarUri = conversation?.persona?.aiAvatarUri,
-                                            aiName = conversation?.persona?.name,
-                                            senderName = if (message.role == Role.USER) {
-                                                if (isGroupChat) "我" else null
-                                            } else {
-                                                if (isGroupChat) {
-                                                    message.senderId?.let {
-                                                        senderNameMap[it]
-                                                            ?.takeIf { name -> name.isNotBlank() }
-                                                            ?: "未知成员"
+                                        if (message.isGameLog) {
+                                            GameLogBubble(
+                                                content = message.content,
+                                                miniAppTitle = message.miniAppTitle
+                                            )
+                                        } else {
+                                            MessageBubbleItem(
+                                                message = message,
+                                                isLastAi = message.role == Role.ASSISTANT &&
+                                                    !message.isThinking &&
+                                                    messages.lastOrNull { !it.isNotice && !it.isGameLog }?.id == message.id,
+                                                isGroupChat = isGroupChat,
+                                                inMultiSelect = multiSelectMode,
+                                                isGenerating = isGenerating,
+                                                userAvatarUri = settings.userAvatarUri,
+                                                aiAvatarUri = conversation?.persona?.aiAvatarUri,
+                                                aiName = conversation?.persona?.name,
+                                                senderName = if (message.role == Role.USER) {
+                                                    if (isGroupChat) "我" else null
+                                                } else {
+                                                    if (isGroupChat) {
+                                                        message.senderId?.let {
+                                                            senderNameMap[it]
+                                                                ?.takeIf { name -> name.isNotBlank() }
+                                                                ?: "未知成员"
+                                                        }
+                                                    } else null
+                                                },
+                                                senderAvatarUri = if (isGroupChat) {
+                                                    message.senderId?.let { senderAvatarMap[it] }
+                                                } else null,
+                                                bracketGrayEnabled = settings.bracketGrayEnabled,
+                                                markdownEnabled = settings.markdownEnabled,
+                                                typingDelayEnabled = settings.typingDelayEnabled,
+                                                typingDelayMsPerChar = settings.typingDelayMsPerChar,
+                                                isSelected = selectedMessageIds.contains(message.id),
+                                                isHighlighted = highlightMessageId == message.id,
+                                                isWithdrawing = expandedActionId == message.id,
+                                                isActionsExpanded = expandedActionId == message.id,
+                                                animateEntry = message.timestamp >= openedAtMs,
+                                                viewModel = viewModel,
+                                                onEnterMultiSelect = ::enterMultiSelect,
+                                                onToggleSelection = ::toggleSelection,
+                                                onToggleActions = {
+                                                    if (!message.isThinking) {
+                                                        expandedActionId = if (expandedActionId == message.id) {
+                                                            null
+                                                        } else {
+                                                            message.id
+                                                        }
                                                     }
-                                                } else null
-                                            },
-                                            senderAvatarUri = if (isGroupChat) {
-                                                message.senderId?.let { senderAvatarMap[it] }
-                                            } else null,
-                                            bracketGrayEnabled = settings.bracketGrayEnabled,
-                                            markdownEnabled = settings.markdownEnabled,
-                                            typingDelayEnabled = settings.typingDelayEnabled,
-                                            typingDelayMsPerChar = settings.typingDelayMsPerChar,
-                                            isSelected = selectedMessageIds.contains(message.id),
-                                            isHighlighted = highlightMessageId == message.id,
-                                            isWithdrawing = expandedActionId == message.id,
-                                            isActionsExpanded = expandedActionId == message.id,
-                                            animateEntry = message.timestamp >= openedAtMs,
-                                            viewModel = viewModel,
-                                            onEnterMultiSelect = ::enterMultiSelect,
-                                            onToggleSelection = ::toggleSelection,
-                                            onToggleActions = {
-                                                if (!message.isThinking) {
-                                                    expandedActionId = if (expandedActionId == message.id) {
-                                                        null
-                                                    } else {
-                                                        message.id
-                                                    }
-                                                }
-                                            },
-                                            onStartRewrite = { rewritingMessageId = it; expandedActionId = null }
-                                        )
+                                                },
+                                                onStartRewrite = { rewritingMessageId = it; expandedActionId = null }
+                                            )
+                                        }
                                     }
                                 }
 
@@ -1061,12 +1134,23 @@ fun ChatScreen(
                         enterToSend = settings.enterToSend,
                         isGenerating = isGenerating,
                         allowSendWhileGenerating = isGroupChat,
-                        onSend = { text -> viewModel.sendMessage(text) },
+                        onSend = { text ->
+                            val imageUri = pendingImageUri
+                            if (imageUri != null) {
+                                viewModel.sendMessageWithImage(context, text, imageUri)
+                            } else {
+                                viewModel.sendMessage(text)
+                            }
+                        },
                         onStop = { viewModel.stopGeneration() },
                         enabled = !showHamburger,
                         transparent = wallpaperUri != null,
                         onTextChange = { text -> viewModel.updateInputText(text) },
                         isCompressing = isCompressing,
+                        onPickImage = { imagePickerLauncher.launch("image/*") },
+                        pendingImageUri = pendingImageUri,
+                        onRemoveImage = { viewModel.clearPendingImage() },
+                        ocrBusy = ocrState is com.quiddity.app.ui.chat.OcrState.Recognizing,
                         // 群聊成员头像栏（方案十一：并入输入框容器、靠左、随键盘一起动）
                         header = if (isGroupChat) {
                             { mentionScope ->

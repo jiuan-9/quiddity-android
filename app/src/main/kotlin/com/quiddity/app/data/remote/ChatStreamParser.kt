@@ -57,7 +57,12 @@ class ChatStreamParser {
         val content: String?,
         val toolCalls: List<ToolCallFragment>,
         /** DeepSeek 思考内容增量（reasoning_content / reasoning 事件）。 */
-        val reasoning: String? = null
+        val reasoning: String? = null,
+        /**
+         * 流式最后一块的 finish_reason（"length" = 输出达到上限被截断）。
+         * 普通内容分片为 null；调用方据此区分"自然结束"与"被截断"。
+         */
+        val finishReason: String? = null
     )
 
     /**
@@ -115,7 +120,8 @@ class ChatStreamParser {
                         name = tc.function?.name,
                         arguments = tc.function?.arguments
                     )
-                }
+                },
+                finishReason = choice?.finish_reason
             )
         }.getOrDefault(ParsedChunk("", emptyList()))
     }
@@ -185,6 +191,13 @@ class ResponsesStreamParser {
         private set
 
     /**
+     * 是否以 response.incomplete 结束（输出被截断：如达到 max_output_tokens 上限）。
+     * 调用方据此区分"自然结束"与"被截断"，避免静默吞掉未说完的回复。
+     */
+    var terminatedIncomplete: Boolean = false
+        private set
+
+    /**
      * 解析单条 Responses SSE data（event 类型由 [eventType] 提供）。
      * 返回内容片段与工具调用增量；返回 null 表示流已结束（completed/incomplete/failed）。
      */
@@ -237,7 +250,11 @@ class ResponsesStreamParser {
                 }.getOrNull() ?: "DeepSeek 响应失败"
                 return null
             }
-            "response.completed", "response.incomplete" -> return null
+            "response.completed" -> return null
+            "response.incomplete" -> {
+                terminatedIncomplete = true
+                return null
+            }
             else -> return ChatStreamParser.ParsedChunk("", emptyList())
         }
     }

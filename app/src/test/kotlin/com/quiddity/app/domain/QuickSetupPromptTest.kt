@@ -73,7 +73,8 @@ class QuickSetupPromptTest {
         val sys = QuickSetupPrompt.QUICK_SETUP_SYSTEM_PROMPT
         assertTrue(sys.contains("2～4 个字的正常人名"), "名字必须是正常人名而非昵称/长句")
         assertTrue(sys.contains("禁止\"小X\"式昵称") || sys.contains("禁止“小X”式昵称"), "禁止随意昵称")
-        assertTrue(sys.contains("[当前场景]只写 1～2 句必要信息"), "场景必须简洁")
+        assertTrue(sys.contains("[当前场景]只写一句"), "场景必须精简到一句")
+        assertTrue(sys.contains("30 字以内"), "场景必须限制字数")
         assertTrue(sys.contains("第三人称客观视角"), "必须第三人称客观视角")
         assertTrue(sys.contains("禁止出现「你」「我」"), "禁止你/我")
     }

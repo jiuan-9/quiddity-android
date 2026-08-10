@@ -408,7 +408,7 @@ object DataPorter {
                 val skipItems = buildSkipItems(migrated)
 
                 // 6. API Key 密文解密自检（3.2）：失败条目标记「需重新填写密钥」
-                val needsKeyRefill = migrated.settings.catalog
+                val needsKeyRefill = (migrated.settings.catalog + migrated.settings.visionCatalog)
                     .filter { entry ->
                         !CryptoUtils.isDecryptable(entry.apiKeyEnc)
                     }

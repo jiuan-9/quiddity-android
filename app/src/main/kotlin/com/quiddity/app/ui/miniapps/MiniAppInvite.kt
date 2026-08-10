@@ -35,7 +35,8 @@ class MiniAppInviteManager(
         character: Character,
         inviteBubbleText: (opponentName: String) -> String,
         miniAppId: String? = null,
-        miniAppTitle: String? = null
+        miniAppTitle: String? = null,
+        existingConversation: Conversation? = null
     ): PreparedCharacterInvite {
         val settings = settingsRepository.currentSnapshot()
         val entry = settings.catalog.firstOrNull { it.id == settings.activeCatalogId }
@@ -44,8 +45,9 @@ class MiniAppInviteManager(
             apiCatalogManager.testConnection(e.apiUrl, apiCatalogManager.decryptKey(e).orEmpty(), e.apiModel).isSuccess
         } ?: false
 
-        val conversation = sessionRepository.findOrCreateCharacterConversation(character)
-        val opponentName = character.persona.name.ifBlank { "神秘角色" }
+        val conversation = existingConversation
+            ?: sessionRepository.findOrCreateCharacterConversation(character)
+        val opponentName = resolveOpponentName(character, existingConversation)
         sessionRepository.appendInviteBubble(
             conversation.id,
             inviteBubbleText(opponentName),
@@ -57,7 +59,7 @@ class MiniAppInviteManager(
         return PreparedCharacterInvite(
             conversationId = conversation.id,
             opponentName = opponentName,
-            opponentPersona = buildPersonaText(character),
+            opponentPersona = buildPersonaText(character, existingConversation),
             access = access
         )
     }
@@ -78,13 +80,29 @@ class MiniAppInviteManager(
         return null
     }
 
-    private fun buildPersonaText(character: Character): String {
+    /**
+     * 对手人设：以会话内实时人设优先，字段为空时回退角色库主档，保证
+     * 对局中的对手与私聊里看到的是同一个人。
+     */
+    private fun buildPersonaText(character: Character, conversation: Conversation?): String {
+        val live = conversation?.persona
+        fun pick(conversationValue: String, characterValue: String): String? {
+            val value = conversationValue.ifBlank { characterValue }.trim()
+            return value.takeIf { it.isNotBlank() }
+        }
         val parts = listOfNotNull(
-            character.persona.persona.takeIf { it.isNotBlank() }?.let { "身份：$it" },
-            character.persona.character.takeIf { it.isNotBlank() }?.let { "性格：$it" },
-            character.persona.appearance.takeIf { it.isNotBlank() }?.let { "外貌：$it" },
-            character.persona.worldBackground.takeIf { it.isNotBlank() }?.let { "背景：$it" }
+            pick(live?.persona.orEmpty(), character.persona.persona)?.let { "身份：$it" },
+            pick(live?.character.orEmpty(), character.persona.character)?.let { "性格：$it" },
+            pick(live?.appearance.orEmpty(), character.persona.appearance)?.let { "外貌：$it" },
+            pick(live?.worldBackground.orEmpty(), character.persona.worldBackground)?.let { "背景：$it" }
         )
         return parts.joinToString("；")
+    }
+
+    /** 对手名：会话内实时名字（persona.name → 标题）优先，回退角色库名。 */
+    private fun resolveOpponentName(character: Character, conversation: Conversation?): String {
+        val convName = conversation?.persona?.name.orEmpty()
+            .ifBlank { conversation?.title.orEmpty() }
+        return convName.ifBlank { character.persona.name }.ifBlank { "神秘角色" }
     }
 }

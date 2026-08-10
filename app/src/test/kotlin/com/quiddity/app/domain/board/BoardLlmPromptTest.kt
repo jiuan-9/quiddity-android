@@ -128,4 +128,50 @@ class BoardLlmPromptTest {
         assertTrue(msg.contains("你这步下得不错"))
         assertNotNull(msg)
     }
+
+    @Test
+    fun parseMoveCommitment_acceptsMoveProtocol() {
+        val parsed = BoardLlmPrompt.parseMoveCommitment("好的，我下到 MOVE(1,1)", 15)
+        assertIs<MoveCommitmentParse.Place>(parsed)
+        assertEquals(Move(1, 1), parsed.move)
+    }
+
+    @Test
+    fun parseMoveCommitment_acceptsNaturalChineseCommitment() {
+        val parsed = BoardLlmPrompt.parseMoveCommitment("没问题，我下到（2，3）", 15)
+        assertIs<MoveCommitmentParse.Place>(parsed)
+        assertEquals(Move(2, 3), parsed.move)
+    }
+
+    @Test
+    fun parseMoveCommitment_usesLatestMention() {
+        val parsed = BoardLlmPrompt.parseMoveCommitment("先别管(4,4)，我们下到(5,5)", 15)
+        assertIs<MoveCommitmentParse.Place>(parsed)
+        assertEquals(Move(5, 5), parsed.move)
+    }
+
+    @Test
+    fun parseMoveCommitment_detectsNegation() {
+        val parsed = BoardLlmPrompt.parseMoveCommitment("还是别下(1,1)了", 15)
+        assertIs<MoveCommitmentParse.Cancelled>(parsed)
+        assertEquals(MoveCommitmentParse.Cancelled, parsed)
+    }
+
+    @Test
+    fun parseMoveCommitment_detectsCannotCommit() {
+        val parsed = BoardLlmPrompt.parseMoveCommitment("我不能下到(1,1)，那里会被吃掉", 15)
+        assertIs<MoveCommitmentParse.Cancelled>(parsed)
+    }
+
+    @Test
+    fun parseMoveCommitment_returnsNoneForOrdinaryChat() {
+        val parsed = BoardLlmPrompt.parseMoveCommitment("这盘棋有意思", 15)
+        assertIs<MoveCommitmentParse.None>(parsed)
+    }
+
+    @Test
+    fun parseMoveCommitment_rejectsOutOfRange() {
+        val parsed = BoardLlmPrompt.parseMoveCommitment("我下到(99,99)", 15)
+        assertIs<MoveCommitmentParse.None>(parsed)
+    }
 }

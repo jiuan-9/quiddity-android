@@ -2,6 +2,7 @@ package com.quiddity.app.data.remote
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -45,6 +46,26 @@ class ResponsesStreamParserTest {
             """{"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":"你好"}"""
         )
         assertEquals("你好", chunk?.content)
+    }
+
+    @Test
+    fun `incomplete terminal event flags truncation`() {
+        val chunk = parser.acceptEvent(
+            "response.incomplete",
+            """{"type":"response.incomplete","incomplete_details":{"reason":"max_output_tokens"}}"""
+        )
+        assertNull(chunk, "incomplete 应为终态事件")
+        assertTrue(parser.terminatedIncomplete, "response.incomplete 应标记为被截断")
+    }
+
+    @Test
+    fun `completed terminal event does not flag truncation`() {
+        val chunk = parser.acceptEvent(
+            "response.completed",
+            """{"type":"response.completed","response":{"id":"resp_1"}}"""
+        )
+        assertNull(chunk, "completed 应为终态事件")
+        assertFalse(parser.terminatedIncomplete, "response.completed 不应标记为被截断")
     }
 
     @Test

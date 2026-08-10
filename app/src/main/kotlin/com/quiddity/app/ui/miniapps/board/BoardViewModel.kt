@@ -7,14 +7,18 @@ import com.quiddity.app.data.model.Character
 import com.quiddity.app.data.remote.ChatApi
 import com.quiddity.app.data.repo.ApiAccess
 import com.quiddity.app.data.repo.CharacterRepository
+import com.quiddity.app.data.repo.ConversationRepository
 import com.quiddity.app.data.repo.MiniAppSessionRepository
 import com.quiddity.app.domain.board.BoardBot
 import com.quiddity.app.domain.board.BoardDifficulty
 import com.quiddity.app.domain.board.BoardGameType
+import com.quiddity.app.domain.board.BoardLlmPrompt
 import com.quiddity.app.domain.board.BoardState
 import com.quiddity.app.domain.board.GameChatTurn
 import com.quiddity.app.domain.board.GoScore
 import com.quiddity.app.domain.board.LlmMove
+import com.quiddity.app.domain.board.Move
+import com.quiddity.app.domain.board.MoveCommitmentParse
 import com.quiddity.app.domain.board.MoveOutcome
 import com.quiddity.app.domain.board.PassOutcome
 import com.quiddity.app.domain.board.Stone
@@ -22,8 +26,11 @@ import com.quiddity.app.util.IdGenerator
 import com.quiddity.app.ui.miniapps.MiniAppInviteManager
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlin.random.Random
@@ -94,6 +101,7 @@ data class BoardUiState(
 
 class BoardViewModel(
     private val sessionRepository: MiniAppSessionRepository,
+    private val conversationRepository: ConversationRepository,
     private val characterRepository: CharacterRepository,
     private val inviteManager: MiniAppInviteManager,
     private val chatApi: ChatApi
@@ -102,7 +110,18 @@ class BoardViewModel(
     private val _uiState = MutableStateFlow(BoardUiState())
     val uiState: StateFlow<BoardUiState> = _uiState.asStateFlow()
 
-    val characters = characterRepository.characters
+    /** 邀请好友名单：私聊会话（好友）为主，角色库作为身份补充。 */
+    val invitees: StateFlow<List<BoardInvitee>> =
+        combine(conversationRepository.conversations, characterRepository.characters) { conversations, characters ->
+            buildBoardInvitees(conversations, characters)
+        }.stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            initialValue = buildBoardInvitees(
+                conversationRepository.conversations.value,
+                characterRepository.characters.value
+            )
+        )
 
     fun selectGame(game: BoardGameType) {
         _uiState.update { it.copy(route = BoardRoute.ModeSelect(game)) }
@@ -139,16 +158,30 @@ class BoardViewModel(
         )
     }
 
-    /** 邀请角色：先检测 API 连接，成功则 LLM 对手；失败则本地电脑兜底，不阻塞开始。 */
-    fun inviteCharacter(character: Character) {
+    /** 邀请好友：复用已有私聊会话并检测 API 连接；失败则本地电脑兜底，不阻塞开始。 */
+    fun inviteFriend(invitee: BoardInvitee) {
         val game = (_uiState.value.route as? BoardRoute.Invite)?.game ?: return
         _uiState.update { it.copy(inviteChecking = true) }
         viewModelScope.launch {
+            val conversation = invitee.conversation
+            val character = invitee.character ?: conversation?.let { conv ->
+                Character(
+                    id = conv.characterId ?: "board_${conv.id}",
+                    persona = conv.persona,
+                    userPersona = conv.userPersona,
+                    memory = conv.memory,
+                    aiAvatarUri = conv.persona.aiAvatarUri
+                )
+            } ?: return@launch
+            if (invitee.character != null && conversation != null && conversation.characterId == null) {
+                conversationRepository.updateConversation(conversation.copy(characterId = invitee.character.id))
+            }
             val invite = inviteManager.prepare(
                 character = character,
                 inviteBubbleText = { name -> BoardMiniApp.inviteBubbleText(game, name) },
                 miniAppId = BoardMiniApp.id,
-                miniAppTitle = BoardMiniApp.name
+                miniAppTitle = BoardMiniApp.name,
+                existingConversation = conversation
             )
 
             startSession(
@@ -337,24 +370,38 @@ class BoardViewModel(
 
             var fallbackNotice: String? = null
             var llmMove: LlmMove? = null
+            var moveOutcome: MoveOutcome? = null
+            var passOutcome: PassOutcome? = null
             if (latest.llmEnabled) {
-                llmMove = latest.access?.let { access ->
-                    BoardLlmClient(access.toLlmGateway(chatApi))
-                        .requestMove(
-                            latest.board,
-                            latest.opponentName,
-                            latest.opponentPersona,
-                            latest.chat.map { GameChatTurn(it.fromUser, it.text) }
-                        )
+                // 聊天中已经明确的落子承诺（用户要求或对方答应）优先执行：
+                // LLM 可能记得但"说话不算话"，这里直接把对话里约定好的位置落子，杜绝言行不一。
+                val commitment = latestMoveCommitment(latest.chat, latest.board.size)
+                if (commitment != null) {
+                    moveOutcome = latest.board.applyMove(commitment)
+                    if (moveOutcome is MoveOutcome.Played) {
+                        fallbackNotice = "对方按聊天中承诺的位置落子"
+                    } else {
+                        moveOutcome = null
+                        fallbackNotice = "对方在聊天中承诺的落子位置不合法，已改为重新决策"
+                    }
                 }
-                // LLM 调用彻底失败（重试后仍不可用）→ 交给本地棋力代下，并明确告知用户
-                if (llmMove == null) {
-                    fallbackNotice = "AI 接口暂时不可用，本手由本地棋力代下"
+                if (moveOutcome == null) {
+                    llmMove = latest.access?.let { access ->
+                        BoardLlmClient(access.toLlmGateway(chatApi))
+                            .requestMove(
+                                latest.board,
+                                latest.opponentName,
+                                latest.opponentPersona,
+                                latest.chat.map { GameChatTurn(it.fromUser, it.text) }
+                            )
+                    }
+                    // LLM 调用彻底失败（重试后仍不可用）→ 交给本地棋力代下，并明确告知用户
+                    if (llmMove == null) {
+                        fallbackNotice = "AI 接口暂时不可用，本手由本地棋力代下"
+                    }
                 }
             }
 
-            var moveOutcome: MoveOutcome? = null
-            var passOutcome: PassOutcome? = null
             if (llmMove is LlmMove.Place) {
                 val outcome = latest.board.applyMove(llmMove.move)
                 if (outcome is MoveOutcome.Played) {
@@ -424,6 +471,7 @@ class BoardViewModel(
         session.conversationId?.let { convId ->
             viewModelScope.launch {
                 sessionRepository.recordGameMemory(convId, summary)
+                sessionRepository.appendGameLog(convId, summary, BoardMiniApp.id, BoardMiniApp.name)
             }
         }
     }
@@ -444,6 +492,21 @@ class BoardViewModel(
         return "《棋盘·${session.gameType.displayName}》对局：你执${session.userStone.label}，$result（$reason，共 ${board.moveCount} 手$scoreText）。"
     }
 
+    /** 从对局聊天里取"最近一次"落子承诺：最新语句优先，否定语句会取消之前的承诺。 */
+    private fun latestMoveCommitment(
+        chat: List<BoardChatMessage>,
+        boardSize: Int
+    ): Move? {
+        for (message in chat.asReversed()) {
+            when (val parsed = BoardLlmPrompt.parseMoveCommitment(message.text, boardSize)) {
+                is MoveCommitmentParse.Place -> return parsed.move
+                MoveCommitmentParse.Cancelled -> return null
+                MoveCommitmentParse.None -> Unit
+            }
+        }
+        return null
+    }
+
     private companion object {
         const val LOCAL_BOT_CHAT_NOTICE_PREFIX = "（本地电脑）"
         /** 对方落子前的"思考"延迟：首手略长（让用户看清自动先手），后续统一短延迟。 */
@@ -454,6 +517,7 @@ class BoardViewModel(
 
 class BoardViewModelFactory(
     private val sessionRepository: MiniAppSessionRepository,
+    private val conversationRepository: ConversationRepository,
     private val characterRepository: CharacterRepository,
     private val inviteManager: MiniAppInviteManager,
     private val chatApi: ChatApi
@@ -462,6 +526,7 @@ class BoardViewModelFactory(
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         return BoardViewModel(
             sessionRepository,
+            conversationRepository,
             characterRepository,
             inviteManager,
             chatApi

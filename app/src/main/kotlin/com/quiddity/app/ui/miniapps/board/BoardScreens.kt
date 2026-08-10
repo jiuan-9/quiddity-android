@@ -57,7 +57,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
-import com.quiddity.app.data.model.Character
 import com.quiddity.app.domain.board.BoardDifficulty
 import com.quiddity.app.domain.board.BoardGameType
 import com.quiddity.app.ui.theme.Motion
@@ -209,11 +208,11 @@ fun BoardDifficultySelectScreen(
 
 @Composable
 fun BoardInviteScreen(
-    characters: List<Character>,
+    invitees: List<BoardInvitee>,
     game: BoardGameType,
     checking: Boolean,
     onBack: () -> Unit,
-    onInvite: (Character) -> Unit
+    onInvite: (BoardInvitee) -> Unit
 ) {
     BackHandler(onBack = onBack)
     Column(
@@ -229,16 +228,16 @@ fun BoardInviteScreen(
             horizontalPadding = 20.dp
         )
         Text(
-            text = "选择一位角色，TA 将作为你的对手。邀请前会自动检测 API 连接，失败则用本地电脑兜底。",
+            text = "选择一位好友，TA 将作为你的对手。邀请前会自动检测 API 连接，失败则用本地电脑兜底。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 20.dp)
         )
         Spacer(Modifier.size(8.dp))
-        if (characters.isEmpty()) {
+        if (invitees.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
-                    text = "角色库是空的\n先去创建/导入一些角色吧",
+                    text = "还没有可邀请的好友\n先去创建一个私聊角色吧",
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -252,11 +251,11 @@ fun BoardInviteScreen(
                     start = 20.dp, end = 20.dp, top = 4.dp, bottom = 24.dp
                 )
             ) {
-                items(characters, key = { it.id }) { character ->
-                    CharacterInviteCard(
-                        character = character,
+                items(invitees, key = { it.key }) { invitee ->
+                    BoardInviteeCard(
+                        invitee = invitee,
                         enabled = !checking,
-                        onClick = { onInvite(character) }
+                        onClick = { onInvite(invitee) }
                     )
                 }
             }
@@ -386,12 +385,12 @@ private fun GameTypeCard(
 }
 
 @Composable
-private fun CharacterInviteCard(
-    character: Character,
+private fun BoardInviteeCard(
+    invitee: BoardInvitee,
     enabled: Boolean,
     onClick: () -> Unit
 ) {
-    val name = character.persona.name.ifBlank { "未命名角色" }
+    val name = invitee.displayName
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(
@@ -434,9 +433,9 @@ private fun CharacterInviteCard(
                     .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)),
                 contentAlignment = Alignment.Center
             ) {
-                if (character.aiAvatarUri != null || character.persona.aiAvatarUri != null) {
+                if (invitee.avatarUri != null) {
                     AsyncImage(
-                        model = character.aiAvatarUri ?: character.persona.aiAvatarUri,
+                        model = invitee.avatarUri,
                         contentDescription = name,
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.size(48.dp).clip(CircleShape)
@@ -457,7 +456,7 @@ private fun CharacterInviteCard(
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface
                 )
-                val hint = character.persona.character.ifBlank { character.persona.persona }.ifBlank { "点击邀请 TA 对弈" }
+                val hint = invitee.subtitle
                 Text(
                     text = hint,
                     style = MaterialTheme.typography.bodySmall,

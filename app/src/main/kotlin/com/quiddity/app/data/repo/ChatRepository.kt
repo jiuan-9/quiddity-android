@@ -72,6 +72,18 @@ internal sealed interface ChatRoundRequest {
 }
 
 /**
+ * 兜底截断判定：内容非空且以"明显还要继续说"的字符结尾时视为截断。
+ * 仅用于网关未返回 finish_reason / response.incomplete 的场景。
+ */
+internal fun looksTruncated(content: String): Boolean {
+    val trimmed = content.trim()
+    if (trimmed.isEmpty()) return false
+    val last = trimmed.last()
+    return last == '：' || last == ':' || last == '，' || last == ',' ||
+        last == '（' || last == '(' || last == '“' || last == '「' || last == '『'
+}
+
+/**
  * 构造聊天请求：启用 DeepSeek 官方联网搜索时走 Responses API（服务端 web_search），
  * 否则走 OpenAI 兼容 Chat Completions。
  *
@@ -165,6 +177,8 @@ class ChatRepository(
         data class CompleteMessage(val message: Message) : Event()
         /** 整个流结束。 */
         data object Done : Event()
+        /** 流以"被截断"结束（finish_reason=length / response.incomplete），内容不完整。 */
+        data object Truncated : Event()
         /** 信息性提示（非错误）：如思考功能降级 / 未返回思考内容。 */
         data class Notice(val text: String) : Event()
         /** 错误。 */
@@ -216,7 +230,11 @@ class ChatRepository(
 
         val maxTokens = conv.maxTokens ?: settings.globalMaxTokens
         val singleMsgTokens = conv.singleMessageTokens ?: settings.globalSingleMessageTokens
-        val temperature = conv.temperature ?: settings.globalTemperature
+        // 按模型支持的最高温度钳制：部分模型仅支持 0～1.0，超限请求会被服务端拒绝
+        val temperature = QuiddityConstants.clampTemperature(
+            conv.temperature ?: settings.globalTemperature,
+            access.maxTemperature
+        )
         val toolStrategyActive = effectiveStrategy == QuiddityConstants.MEMORY_STRATEGY_TOOL &&
             conv.compressedMemory.isNotBlank()
         val buildRequest: (String?) -> ChatRoundRequest = {
@@ -297,7 +315,10 @@ class ChatRepository(
 
         val maxTokens = conv.maxTokens ?: settings.globalMaxTokens
         val singleMsgTokens = conv.singleMessageTokens ?: settings.globalSingleMessageTokens
-        val temperature = conv.temperature ?: settings.globalTemperature
+        val temperature = QuiddityConstants.clampTemperature(
+            conv.temperature ?: settings.globalTemperature,
+            access.maxTemperature
+        )
         val toolStrategyActive = effectiveStrategy == QuiddityConstants.MEMORY_STRATEGY_TOOL &&
             conv.compressedMemory.isNotBlank()
         val buildRequest: (String?) -> ChatRoundRequest = {
@@ -436,6 +457,7 @@ class ChatRepository(
         thinkingActive: Boolean = true
     ): List<ChatStreamParser.AggregatedToolCall>? {
         var toolCalls: List<ChatStreamParser.AggregatedToolCall> = emptyList()
+        var truncated = false
         try {
             // 打字机延迟已在 UI 层（MessageBubble）按字渲染实现，
             // 此处不再阻塞流式消费——避免大 delta 时 API 缓冲区堆积、
@@ -461,10 +483,23 @@ class ChatRepository(
                     is ChatApi.StreamEvent.ToolCalls -> {
                         if (event.calls.isNotEmpty()) toolCalls = event.calls
                     }
+                    is ChatApi.StreamEvent.Truncated -> {
+                        truncated = true
+                    }
                 }
             }
             // 流结束，强制收尾
             coordinator.finalize().forEach { dispatch(onEvent, it) }
+            // 网关未返回截断信号时，用内容形态兜底：以冒号/逗号/未闭合括号引号结尾，
+            // 几乎必然是"话没说完"，不静默吞掉
+            if (!truncated) {
+                val lastContent = coordinator.snapshot().lastOrNull()?.content.orEmpty()
+                if (looksTruncated(lastContent)) truncated = true
+            }
+            // 截断信号在收尾之后派发：先保证半截内容已落盘，再提示用户内容不完整
+            if (truncated) {
+                onEvent(Event.Truncated)
+            }
         } catch (c: kotlinx.coroutines.CancellationException) {
             // 用户停止 / 页面销毁：不当作错误，向上传播取消，由上层收尾半截消息
             throw c
@@ -660,7 +695,10 @@ class ChatRepository(
             systemPrompt = PromptBuilder.PERSONA_REFINE_SYSTEM_PROMPT,
             userContent = userContent,
             maxTokens = QuiddityConstants.PERSONA_COMPILE_MAX_TOKENS,
-            temperature = QuiddityConstants.PERSONA_COMPILE_TEMPERATURE,
+            temperature = QuiddityConstants.clampTemperature(
+                QuiddityConstants.PERSONA_COMPILE_TEMPERATURE,
+                access.maxTemperature
+            ),
             emptyError = "人设精调返回空内容"
         )
     }
@@ -817,6 +855,7 @@ class ChatRepository(
                 is Event.Done -> onEvent(event)
                 is Event.Error -> onEvent(event)
                 is Event.Notice -> onEvent(event)
+                is Event.Truncated -> onEvent(event)
             }
         }
         plan.fold(
@@ -958,7 +997,11 @@ class ChatRepository(
             systemPrompt = com.quiddity.app.domain.QuickSetupPrompt.QUICK_SETUP_SYSTEM_PROMPT,
             userContent = userContent,
             maxTokens = QuiddityConstants.QUICK_SETUP_MAX_TOKENS,
-            temperature = QuiddityConstants.QUICK_SETUP_TEMPERATURE,
+            // 快速设定使用独立温度（面板可调）：温度越高发散性越强，避免每次生成同一套人设
+            temperature = QuiddityConstants.clampTemperature(
+                settings.quickSetupTemperature,
+                access.maxTemperature
+            ),
             emptyError = "快速设定返回空内容"
         )
     }

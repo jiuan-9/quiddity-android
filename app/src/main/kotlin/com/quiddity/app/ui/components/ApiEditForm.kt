@@ -105,14 +105,16 @@ import kotlinx.coroutines.launch
 fun ApiEditForm(
     initial: ApiCatalogEditFormState?,
     catalogManager: ApiCatalogManager,
+    providers: List<ApiCatalogManager.Provider> = catalogManager.providers,
     testConnection: suspend (apiUrl: String, apiKey: String, model: String) -> Result<String>,
+    testVision: (suspend (apiUrl: String, apiKey: String, model: String) -> Result<String>)? = null,
     hasStoredKey: Boolean = false,
     onDismiss: () -> Unit,
     onSave: (ApiCatalogEditFormState) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val providers = catalogManager.providers
-    val initialProvider = catalogManager.findProvider(initial?.providerId)
+    val initialProvider = providers.firstOrNull { it.id == initial?.providerId }
+        ?: catalogManager.customProvider
 
     var name by rememberSaveable { mutableStateOf(initial?.name ?: "") }
     var selectedProviderId by rememberSaveable { mutableStateOf(initialProvider.id) }
@@ -125,6 +127,10 @@ fun ApiEditForm(
     }
     // 安全规则：密钥明文仅存在于组合内存（remember），不进 rememberSaveable，避免进程回收后落盘
     var apiKey by remember { mutableStateOf(initial?.apiKey ?: "") }
+    // 最高温度（可选）：留空 = 不限制（按全局 2.0）；部分模型仅支持 0～1.0
+    var maxTemperatureInput by rememberSaveable(initial?.maxTemperature) {
+        mutableStateOf(initial?.maxTemperature?.toString() ?: "")
+    }
     var providerMenuExpanded by remember { mutableStateOf(false) }
     var modelMenuExpanded by remember { mutableStateOf(false) }
     // 新增时 Key 可见（鼓励用户核对），编辑时默认隐藏
@@ -132,9 +138,13 @@ fun ApiEditForm(
     var testing by remember { mutableStateOf(false) }
     var testResult by remember { mutableStateOf<String?>(null) }
     var testIsSuccess by remember { mutableStateOf(false) }
+    var testingVision by remember { mutableStateOf(false) }
+    var testVisionResult by remember { mutableStateOf<String?>(null) }
+    var testVisionIsSuccess by remember { mutableStateOf(false) }
     var showHelpDialog by remember { mutableStateOf(false) }
 
-    val selectedProvider = catalogManager.findProvider(selectedProviderId)
+    val selectedProvider = providers.firstOrNull { it.id == selectedProviderId }
+        ?: catalogManager.customProvider
     val isCustomProvider = selectedProvider.id == "custom"
     // 新建必须填密钥；编辑可留空（保持已保存的密钥不变）
     val keyRequired = initial == null
@@ -352,6 +362,17 @@ fun ApiEditForm(
             }
         }
 
+        // 最高温度（可选）：部分模型仅支持 0～1.0，超出范围会被服务端拒绝
+        OutlinedTextField(
+            value = maxTemperatureInput,
+            onValueChange = { maxTemperatureInput = it.filter { c -> c.isDigit() || c == '.' } },
+            label = { Text("最高温度（可选）") },
+            placeholder = { Text("默认 2.0，如 1.0") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(modifier = Modifier.size(12.dp))
+
         // 接口密钥（带可见切换；编辑时可留空保持原密钥）
         OutlinedTextField(
             value = apiKey,
@@ -360,12 +381,17 @@ fun ApiEditForm(
             // 占位提示用灰色（与其它输入框一致），避免显示成正文色
             placeholder = {
                 Text(
-                    text = if (hasStoredKey) "已保存密钥，留空保持不变" else "sk-...",
+                    text = if (hasStoredKey) "密钥已保存（不会明文显示）" else "sk-...",
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                 )
             },
             supportingText = if (hasStoredKey && apiKey.isBlank()) {
-                { Text("已保存密钥，如需更换请输入新密钥", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                {
+                    Text(
+                        "密钥已保存，留空保持不变；如需更换请输入新密钥",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             } else if (keyRequired && apiKey.isBlank()) {
                 { Text("新配置必须填写密钥", color = MaterialTheme.colorScheme.error) }
             } else {
@@ -432,6 +458,54 @@ fun ApiEditForm(
                     else MaterialTheme.colorScheme.error
                 )
             }
+            if (testVision != null) {
+                Spacer(modifier = Modifier.size(12.dp))
+                TextButton(
+                    onClick = {
+                        if (!canTest || testingVision) return@TextButton
+                        testingVision = true
+                        testVisionResult = null
+                        scope.launch {
+                            testVision.invoke(apiUrl.trim(), apiKey.trim(), apiModel.trim())
+                                .onSuccess {
+                                    testVisionIsSuccess = true
+                                    testVisionResult = it.take(160)
+                                }
+                                .onFailure {
+                                    testVisionIsSuccess = false
+                                    testVisionResult = (it.message ?: "识图失败").take(160)
+                                }
+                            testingVision = false
+                        }
+                    },
+                    enabled = canTest && !testingVision
+                ) {
+                    Text(if (testingVision) "识图测试中…" else "测试识图")
+                }
+            }
+        }
+
+        // 识图测试结果（单独一行，避免与连接测试结果混排）
+        if (testVision != null && testVisionResult != null) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = if (testVisionIsSuccess) Icons.Filled.Check else Icons.Filled.Clear,
+                    contentDescription = null,
+                    tint = if (testVisionIsSuccess) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.size(4.dp))
+                Text(
+                    text = testVisionResult.orEmpty(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (testVisionIsSuccess) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.error
+                )
+            }
         }
 
         Spacer(modifier = Modifier.size(4.dp))
@@ -451,7 +525,8 @@ fun ApiEditForm(
                                 providerId = selectedProviderId,
                                 apiUrl = apiUrl.trim(),
                                 apiModel = apiModel.trim(),
-                                apiKey = apiKey.trim()
+                                apiKey = apiKey.trim(),
+                                maxTemperature = parseMaxTemperatureInput(maxTemperatureInput)
                             )
                         )
                     }
@@ -476,8 +551,21 @@ data class ApiCatalogEditFormState(
     val providerId: String,
     val apiUrl: String,
     val apiModel: String,
-    val apiKey: String
+    val apiKey: String,
+    /** 该模型支持的最高采样温度（null = 不限制，按全局 2.0）。 */
+    val maxTemperature: Double? = null
 )
+
+/** 解析"最高温度"输入：空白返回 null（不限制），非法/超范围按 0～2 钳制。 */
+private fun parseMaxTemperatureInput(raw: String): Double? {
+    val trimmed = raw.trim()
+    if (trimmed.isEmpty()) return null
+    val parsed = trimmed.toDoubleOrNull() ?: return null
+    return parsed.coerceIn(
+        com.quiddity.app.util.QuiddityConstants.MIN_TEMPERATURE,
+        com.quiddity.app.util.QuiddityConstants.MAX_TEMPERATURE
+    )
+}
 
 @Composable
 private fun ApiHelpTooltip(

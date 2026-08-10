@@ -124,7 +124,13 @@ data class ApiCatalogEntry(
     val providerId: String = "",
     val apiUrl: String,
     val apiModel: String,
-    val apiKeyEnc: String
+    val apiKeyEnc: String,
+    /**
+     * 该模型支持的最高采样温度（null = 不限制，按全局 [QuiddityConstants.MAX_TEMPERATURE]）。
+     * 部分模型（如 Claude 系）仅支持 0～1.0，超范围请求会被服务端拒绝；
+     * 发送请求前按此值钳制，UI 设置过高时不会报错。
+     */
+    val maxTemperature: Double? = null
 )
 
 /**
@@ -372,7 +378,30 @@ data class Message(
      * - 不发送给 LLM、不参与压缩（isNotice 已在各处过滤）
      */
     val miniAppId: String? = null,
-    val miniAppTitle: String? = null
+    val miniAppTitle: String? = null,
+    /**
+     * 小应用对局记录气泡：以居中卡片形式展示在私聊里（如"你们刚玩完一局五子棋"）。
+     * - true = 渲染为居中卡片气泡（不显示头像、不可撤回/改写）；
+     * - 与 isNotice 不同：**会发送给 LLM 参与上下文**，让角色知道刚刚和用户一起玩过；
+     * - false = 普通消息。
+     */
+    val isGameLog: Boolean = false,
+    /**
+     * 图片消息的 OCR 识别结果（隐藏字段）。
+     *
+     * - 仅用于构造发送给聊天 API 的上下文（见 [com.quiddity.app.domain.PromptBuilder]），
+     *   界面上不展示、[content] 保持用户可见的干净文本（如 `[图片]` + 用户输入）；
+     * - null = 普通文本消息。
+     */
+    val ocrText: String? = null,
+    /**
+     * 图片消息的本地图片文件 URI（file://，持久化在 filesDir/chat_images/）。
+     *
+     * - 非空 = 该消息附带一张图片，气泡以固定卡片样式展示缩略图（参考 DeepSeek 网页版）；
+     * - 导出/换机后文件可能不存在，渲染时自动降级为占位样式；
+     * - null = 普通文本消息。
+     */
+    val imageUri: String? = null
 )
 
 /**
@@ -401,6 +430,12 @@ data class AppSettings(
      * 会话未单独设置温度时使用该值。
      */
     val globalTemperature: Double = QuiddityConstants.DEFAULT_TEMPERATURE,
+    /**
+     * 快速设定的采样温度（独立于聊天温度）：
+     * - 温度越高，每次生成的人设发散性越强，避免用户总是拿到同一个人设；
+     * - 在快速设定面板内调整，范围 0～2，默认 [QuiddityConstants.DEFAULT_QUICK_SETUP_TEMPERATURE]。
+     */
+    val quickSetupTemperature: Double = QuiddityConstants.DEFAULT_QUICK_SETUP_TEMPERATURE,
     val globalContextLimit: Int = QuiddityConstants.DEFAULT_CONTEXT_LIMIT,
     /**
      * AI 回复多消息切分（UI 叫法"AI 回复切分"）：
@@ -411,6 +446,22 @@ data class AppSettings(
     val enterToSend: Boolean = true,
     val activeCatalogId: String? = null,
     val catalog: List<ApiCatalogEntry> = emptyList(),
+    /**
+     * 视觉 OCR 兜底总开关。
+     * - true = 当前对话模型不支持图片时，允许用 [visionCatalog] 里的视觉模型做 OCR 识图后转发给聊天 API
+     * - false = 关闭兜底，仅当聊天模型本身支持视觉时才可识图
+     */
+    val ocrEnabled: Boolean = false,
+    /**
+     * 视觉 OCR 模型配置列表（独立于 [catalog]，条目结构与普通模型配置一致）。
+     * 用于图片识别的兜底模型，服务商可选视觉模型预置项或自定义 OpenAI 兼容地址。
+     */
+    val visionCatalog: List<ApiCatalogEntry> = emptyList(),
+    /**
+     * 当前启用的视觉 OCR 模型配置 id（对应 [visionCatalog]）。
+     * null = 自动取 [visionCatalog] 第一条。
+     */
+    val activeVisionCatalogId: String? = null,
     /**
      * 括号内容灰化开关。
      * 开启后，AI / 用户消息中成对括号内的文本以 `onSurfaceVariant.copy(alpha = 0.55f)` 颜色显示。

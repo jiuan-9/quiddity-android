@@ -218,17 +218,20 @@ class SettingsViewModel(
         providerId: String,
         apiUrl: String,
         apiModel: String,
-        apiKey: String
+        apiKey: String,
+        maxTemperature: Double? = null
     ) = viewModelScope.launch {
         val result = runCatching {
             // 编辑时未重新输入密钥（表单明文未持久化，进程回收后为空）：保留原密文
+            settingsRepository.ensureInitialized()
             val existing = id?.let { settingsRepository.getCatalogEntry(it) }
             val entry = if (apiKey.isBlank() && existing != null) {
                 existing.copy(
                     name = name,
                     providerId = providerId,
                     apiUrl = apiUrl,
-                    apiModel = apiModel
+                    apiModel = apiModel,
+                    maxTemperature = maxTemperature
                 )
             } else {
                 apiCatalogManager.buildEntry(
@@ -237,7 +240,8 @@ class SettingsViewModel(
                     providerId = providerId,
                     apiUrl = apiUrl,
                     apiModel = apiModel,
-                    apiKey = apiKey
+                    apiKey = apiKey,
+                    maxTemperature = maxTemperature
                 )
             }
             settingsRepository.upsertCatalog(entry)
@@ -273,6 +277,102 @@ class SettingsViewModel(
         }.onFailure {
             android.util.Log.e("SettingsViewModel", "切换模型配置失败", it)
             _errorEvent.value = "切换模型配置失败：${it.javaClass.simpleName} ${it.message ?: ""}"
+        }
+    }
+
+    /** 视觉 OCR 兜底总开关。 */
+    fun setOcrEnabled(enabled: Boolean) = viewModelScope.launch {
+        settingsRepository.setOcrEnabled(enabled)
+    }
+
+    /**
+     * 新增 / 更新视觉 OCR 模型配置。
+     * 与 [upsertCatalog] 同一套加密与持久化逻辑，仅写入独立名册 [AppSettings.visionCatalog]。
+     */
+    fun upsertVisionCatalog(
+        id: String?,
+        name: String,
+        providerId: String,
+        apiUrl: String,
+        apiModel: String,
+        apiKey: String,
+        maxTemperature: Double? = null
+    ) = viewModelScope.launch {
+        val result: Result<ApiCatalogEntry> = runCatching {
+            // 先确保磁盘快照已加载，避免"编辑留空保留旧密钥"因快照未就绪而误判为新增
+            settingsRepository.ensureInitialized()
+            val existing = id?.let { settingsRepository.getVisionCatalogEntry(it) }
+            val entry = if (apiKey.isBlank() && existing != null) {
+                existing.copy(
+                    name = name,
+                    providerId = providerId,
+                    apiUrl = apiUrl,
+                    apiModel = apiModel,
+                    maxTemperature = maxTemperature
+                )
+            } else {
+                apiCatalogManager.buildEntry(
+                    id = id,
+                    name = name,
+                    providerId = providerId,
+                    apiUrl = apiUrl,
+                    apiModel = apiModel,
+                    apiKey = apiKey,
+                    maxTemperature = maxTemperature
+                )
+            }
+            android.util.Log.d(
+                "SettingsViewModel",
+                "视觉OCR待保存 id=${entry.id} 明文key长度=${apiKey.length} 密文非空=${entry.apiKeyEnc.isNotEmpty()}"
+            )
+            val ok = settingsRepository.upsertVisionCatalog(entry)
+            if (!ok) {
+                throw IllegalStateException("写入失败")
+            }
+            // 写后自检：从磁盘重读，确认条目与密钥密文确实落盘
+            val saved = settingsRepository.readVisionCatalogEntryFromDisk(entry.id)
+            val keyOnDisk = saved?.apiKeyEnc?.isNotEmpty() == true
+            android.util.Log.d(
+                "SettingsViewModel",
+                "视觉OCR写后自检 id=${entry.id} 磁盘条目=${saved != null} 磁盘密钥=${keyOnDisk}"
+            )
+            if (saved == null) {
+                throw IllegalStateException("保存后重读不到配置，可能未落盘")
+            }
+            if (apiKey.isNotBlank() && !keyOnDisk) {
+                throw IllegalStateException("密钥未能写入磁盘")
+            }
+            saved
+        }
+        result.onSuccess { saved ->
+            _toastEvent.value =
+                if (saved.apiKeyEnc.isNotEmpty()) "视觉 OCR 配置已保存（密钥已保存）"
+                else "视觉 OCR 配置已保存（密钥为空）"
+        }.onFailure {
+            android.util.Log.e("SettingsViewModel", "保存视觉 OCR 配置失败", it)
+            _errorEvent.value = "保存视觉 OCR 配置失败：${it.javaClass.simpleName} ${it.message ?: ""}"
+        }
+    }
+
+    fun removeVisionCatalog(entryId: String) = viewModelScope.launch {
+        val result = runCatching { settingsRepository.removeVisionCatalog(entryId) }
+        result.onSuccess { ok ->
+            if (ok) _toastEvent.value = "视觉 OCR 配置已删除"
+            else _errorEvent.value = "删除视觉 OCR 配置失败（写入失败）"
+        }.onFailure {
+            android.util.Log.e("SettingsViewModel", "删除视觉 OCR 配置失败", it)
+            _errorEvent.value = "删除视觉 OCR 配置失败：${it.javaClass.simpleName} ${it.message ?: ""}"
+        }
+    }
+
+    fun setActiveVisionCatalog(id: String?) = viewModelScope.launch {
+        val result = runCatching { settingsRepository.setActiveVisionCatalog(id) }
+        result.onSuccess { ok ->
+            if (ok) _toastEvent.value = "已切换视觉 OCR 配置"
+            else _errorEvent.value = "切换视觉 OCR 配置失败（写入失败）"
+        }.onFailure {
+            android.util.Log.e("SettingsViewModel", "切换视觉 OCR 配置失败", it)
+            _errorEvent.value = "切换视觉 OCR 配置失败：${it.javaClass.simpleName} ${it.message ?: ""}"
         }
     }
 

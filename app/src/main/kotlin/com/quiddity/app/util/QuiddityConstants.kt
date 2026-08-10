@@ -53,6 +53,15 @@ object QuiddityConstants {
     /** 采样温度默认值（DeepSeek 官方默认 1.0；聊天场景官方建议 1.3，由用户自主调节）。 */
     const val DEFAULT_TEMPERATURE = 1.0
 
+    /**
+     * 采样温度钳制：把 [value] 限制在模型支持的范围内。
+     * 部分模型最高只支持 1.0（如 Claude 系），超限请求会被服务端拒绝；
+     * [max] 由模型配置条目的 [com.quiddity.app.data.model.ApiCatalogEntry.maxTemperature] 提供，
+     * 未配置时按全局上限 2.0。
+     */
+    fun clampTemperature(value: Double, max: Double = MAX_TEMPERATURE): Double =
+        value.coerceIn(MIN_TEMPERATURE, max)
+
     // ===== DeepSeek 官方服务端联网搜索（Responses API） =====
     /** DeepSeek 官方服务商 id（Provider 预设）。 */
     const val DEEPSEEK_PROVIDER_ID = "deepseek"
@@ -145,6 +154,8 @@ object QuiddityConstants {
     const val QUICK_SETUP_MAX_TOKENS = 8_000
     /** 快速设定采样温度：略低于精调，兼顾详尽表达与忠实不臆造。 */
     const val QUICK_SETUP_TEMPERATURE = 0.6
+    /** 快速设定默认采样温度：偏高保证每次生成的人设发散度足够，避免千篇一律（用户可在面板内调整）。 */
+    const val DEFAULT_QUICK_SETUP_TEMPERATURE = 1.2
 
     // ===== 网络超时 =====
     const val CONNECT_TIMEOUT_SECONDS = 30L
@@ -178,12 +189,12 @@ object QuiddityConstants {
     const val DEFAULT_AI_IDENTITY = "用户的AI助手"
 
     // ===== 上下文记忆轮数 =====
-    /** 完全级（FULL）默认上下文记忆轮数。 */
-    const val TIER_FULL_CONTEXT_LIMIT = 80
-    /** 进阶级（ADVANCED）默认上下文记忆轮数。 */
-    const val TIER_ADVANCED_CONTEXT_LIMIT = 40
-    /** 基础级（BASIC）默认上下文记忆轮数。 */
-    const val TIER_BASIC_CONTEXT_LIMIT = 12
+    /** 完全级（FULL）默认上下文记忆轮数（默认压缩轮数同此值）。 */
+    const val TIER_FULL_CONTEXT_LIMIT = 40
+    /** 进阶级（ADVANCED）默认上下文记忆轮数（默认压缩轮数同此值）。 */
+    const val TIER_ADVANCED_CONTEXT_LIMIT = 20
+    /** 基础级（BASIC）默认上下文记忆轮数（默认压缩轮数同此值）。 */
+    const val TIER_BASIC_CONTEXT_LIMIT = 6
 
     // ===== 延迟输出（打字机效果） =====
     /** 延迟输出默认开启。 */

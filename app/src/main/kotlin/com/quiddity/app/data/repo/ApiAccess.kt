@@ -61,7 +61,13 @@ sealed class ApiAccess {
     data class Resolved(
         val apiUrl: String,
         val apiKey: String,
-        val model: String
+        val model: String,
+        /**
+         * 该模型支持的最高采样温度（来自 [ApiCatalogEntry.maxTemperature]，
+         * 未配置时按全局 [com.quiddity.app.util.QuiddityConstants.MAX_TEMPERATURE]）。
+         * 发送请求前用 [com.quiddity.app.util.QuiddityConstants.clampTemperature] 钳制。
+         */
+        val maxTemperature: Double = com.quiddity.app.util.QuiddityConstants.MAX_TEMPERATURE
     ) : ApiAccess()
 
     /**
@@ -167,7 +173,9 @@ sealed class ApiAccess {
             return Resolved(
                 apiUrl = entry.apiUrl,
                 apiKey = apiKey,
-                model = entry.apiModel
+                model = entry.apiModel,
+                maxTemperature = entry.maxTemperature
+                    ?: com.quiddity.app.util.QuiddityConstants.MAX_TEMPERATURE
             )
         }
     }

@@ -16,6 +16,10 @@ object BoardLlmPrompt {
         RegexOption.IGNORE_CASE
     )
     private val PASS_REGEX = Regex("""\bPASS\b""", RegexOption.IGNORE_CASE)
+    private val COMMIT_VERB_REGEX = Regex(
+        """(?:下|走|落|放|着|下到|下在|走到|落在|放至|放于|放在|下子|落子)\s*[（(]?\s*(\d+)\s*[,，]\s*(\d+)\s*[)）]?"""
+    )
+    private val NEGATION_HINTS = listOf("不", "别", "莫", "勿", "拒绝", "不能", "不要")
 
     /** 构建落子 system 消息（人设 + 规则 + 格式约束）。 */
     fun buildMoveSystemMessage(
@@ -56,7 +60,7 @@ object BoardLlmPrompt {
                 appendLine("上一手：${it.row},${it.col}")
             }
             appendChatTranscript(this, chatHistory)
-            appendLine("请结合聊天记录里的约定、请求或情绪来决策落子（例如用户求饶时，可以适当手下留情，但不要完全放水）。")
+            appendLine("请结合聊天记录里的约定、请求或情绪来决策落子：如果你或用户已在聊天中明确答应/要求下到某个位置，必须严格执行下到那里，不得反悔或另选他处；用户求饶时可以适当手下留情，但不要完全放水。")
             appendLine("请回复一行指令：MOVE(行,列) 或 PASS。")
         }.trim()
     }
@@ -77,6 +81,7 @@ object BoardLlmPrompt {
             appendLine(boardStonesText(state))
             appendChatTranscript(this, chatHistory)
             appendLine("请以角色口吻自然回复用户消息，可以谈棋局、聊闲天，但不要替用户决策。")
+            appendLine("如果用户要求你下到某个具体位置，而你答应了，那么轮到你落子时就必须真的下到那里——你的落子承诺会被直接执行，说到就要做到。")
         }.trim()
     }
 
@@ -102,6 +107,30 @@ object BoardLlmPrompt {
             return LlmMove.Pass
         }
         return null
+    }
+
+    /**
+     * 解析聊天文本中的"落子承诺"：
+     * - 出现明确的落子位置（MOVE(1,1) / 下到(1,1) / 落在（2，3）等）→ 返回该坐标；
+     * - 出现"不下/别下/不要下到"等否定 → 返回 [MoveCommitmentParse.Cancelled]；
+     * - 其余文本 → [MoveCommitmentParse.None]。
+     *
+     * 坐标越界视为无效承诺（[MoveCommitmentParse.None]）。
+     */
+    fun parseMoveCommitment(text: String, boardSize: Int): MoveCommitmentParse {
+        val candidates = buildList {
+            MOVE_REGEX.find(text)?.let { add(it) }
+            COMMIT_VERB_REGEX.findAll(text).forEach { add(it) }
+        }
+        if (candidates.isEmpty()) return MoveCommitmentParse.None
+        // 只取文本中最后一次出现的落子位置，避免旧约定被新语句覆盖
+        val latest = candidates.maxByOrNull { it.range.last } ?: return MoveCommitmentParse.None
+        val before = text.substring(0, latest.range.first).takeLast(3)
+        if (NEGATION_HINTS.any { before.contains(it) }) return MoveCommitmentParse.Cancelled
+        val row = latest.groupValues[1].toIntOrNull() ?: return MoveCommitmentParse.None
+        val col = latest.groupValues[2].toIntOrNull() ?: return MoveCommitmentParse.None
+        if (row !in 0 until boardSize || col !in 0 until boardSize) return MoveCommitmentParse.None
+        return MoveCommitmentParse.Place(Move(row, col))
     }
 
     /** 生成"黑子位置 / 白子位置"的统一棋局描述，供落子与聊天共用。 */
@@ -144,4 +173,16 @@ data class GameChatTurn(
 sealed interface LlmMove {
     data class Place(val move: Move) : LlmMove
     data object Pass : LlmMove
+}
+
+/** 聊天文本中的"落子承诺"解析结果。 */
+sealed interface MoveCommitmentParse {
+    /** 明确承诺的落子位置。 */
+    data class Place(val move: Move) : MoveCommitmentParse
+
+    /** 明确否定了落子位置（如"别下(1,1)"），应取消既有承诺。 */
+    data object Cancelled : MoveCommitmentParse
+
+    /** 未提到落子位置。 */
+    data object None : MoveCommitmentParse
 }

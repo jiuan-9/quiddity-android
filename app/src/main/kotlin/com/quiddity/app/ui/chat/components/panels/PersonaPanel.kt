@@ -2,7 +2,6 @@ package com.quiddity.app.ui.chat.components.panels
 
 import android.net.Uri
 import android.widget.Toast
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -59,6 +58,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.quiddity.app.data.model.Persona
 import com.quiddity.app.data.model.UserPersona
 import com.quiddity.app.domain.ApiCatalogManager
+import com.quiddity.app.domain.PromptBuilder
 import com.quiddity.app.ui.components.ImageCropper
 import com.quiddity.app.ui.components.ModelTierInfoDialog
 import com.quiddity.app.ui.components.QuiddityTextField
@@ -103,8 +103,8 @@ import kotlinx.coroutines.withContext
  * 提供统一的 [SubPanelScaffold] 头部组件，避免每个面板重写返回按钮。
  *
  * 人设精调开关：
- * - 保存时若开启精调，调用 AI 编译人设为系统提示词，
- *   结果写入 [Persona.compiledPersona]，被 [com.quiddity.app.domain.PromptBuilder] 优先使用。
+ * - 保存时若开启精调，调用 AI 将人设精调为四个填空项（身份背景 / 性格 / 外观 / 期望特质），
+ *   预览确认后精调结果直接覆盖对应字段（名字、世界背景、头像不变），不再写入 compiledPersona 缓存。
  * - 编译期间显示 CircularProgressIndicator，保存按钮禁用，避免重复触发。
  * - 保存成功 / 失败均通过 Toast 反馈。
  *
@@ -207,6 +207,8 @@ fun PersonaPanel(
     var isCompiling by remember { mutableStateOf(false) }
     // 精调结果预览
     var compilePreview by remember { mutableStateOf<String?>(null) }
+    // 精调采用后跳过关闭面板时的兜底自动保存，避免旧字段回写覆盖已采用的精调结果
+    var suppressDisposeSave by remember { mutableStateOf(false) }
     // 模型分配方案弹窗
     var showTierInfo by remember { mutableStateOf(false) }
 
@@ -280,82 +282,39 @@ fun PersonaPanel(
     }
 
     compilePreview?.let { previewText ->
-        BackHandler(enabled = true) { compilePreview = null }
-        Dialog(
-            onDismissRequest = { compilePreview = null },
-            properties = DialogProperties(usePlatformDefaultWidth = false)
-        ) {
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                shape = RoundedCornerShape(24.dp),
-                color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 3.dp
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(20.dp)
-                ) {
-                    Text(
-                        text = "精调预览",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Spacer(modifier = Modifier.size(12.dp))
-                    Surface(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 360.dp),
-                        shape = RoundedCornerShape(12.dp),
-                        color = com.quiddity.app.ui.components.glassCardColor()
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(16.dp)
-                                .verticalScroll(rememberScrollState())
-                        ) {
-                            Text(
-                                text = previewText,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                    Spacer(modifier = Modifier.size(16.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
-                    ) {
-                        TextButton(onClick = { compilePreview = null }) {
-                            Text("返回重调")
-                        }
-                        TextButton(
-                        onClick = {
-                            val finalPersona = buildPersonaFromState(
-                                initial = initial,
-                                name = name,
-                                desired = desired,
-                                persona = persona,
-                                character = character,
-                                appearance = appearance,
-                                worldBackground = worldBackground,
-                                aiAvatarUri = aiAvatarUri,
-                                compiledPersona = previewText,
-                                modelTier = modelTier
-                            )
-                            onSaveAndExit(finalPersona, true)
-                            compilePreview = null
-                            toastMsg = "已采用精调结果"
-                        }
-                    ) { Text("采用") }
-                    }
-                }
-            }
-        }
+        val currentState = buildPersonaFromState(
+            initial = initial,
+            name = name,
+            desired = desired,
+            persona = persona,
+            character = character,
+            appearance = appearance,
+            worldBackground = worldBackground,
+            aiAvatarUri = aiAvatarUri,
+            compiledPersona = null,
+            modelTier = modelTier
+        )
+        RefineResultDialog(
+            rawText = previewText,
+            current = currentState,
+            modelTier = modelTier,
+            onAdopt = { adopted ->
+                // 采用 = 精调结果直接覆盖人设字段（名字/世界背景/头像不变），
+                // 不再写入 compiledPersona 缓存；同步面板字段并跳过兜底保存，避免旧字段回写。
+                name = adopted.name
+                desired = adopted.desired
+                persona = adopted.persona
+                character = adopted.character
+                appearance = adopted.appearance
+                worldBackground = adopted.worldBackground
+                aiAvatarUri = adopted.aiAvatarUri
+                suppressDisposeSave = true
+                compilePreview = null
+                onSaveAndExit(adopted, true)
+                toastMsg = "已采用精调结果，人设字段已覆盖"
+            },
+            onCancel = { compilePreview = null }
+        )
     }
 
     if (showTierInfo) {
@@ -415,7 +374,9 @@ fun PersonaPanel(
     val latestOnAutoSave = rememberUpdatedState(onAutoSave)
     DisposableEffect(Unit) {
         onDispose {
-            if (latestIsCompiling.value || latestCompilePreview.value != null) return@onDispose
+            if (suppressDisposeSave || latestIsCompiling.value || latestCompilePreview.value != null) {
+                return@onDispose
+            }
             val finalPersona = buildPersonaFromState(
                 initial = initial,
                 name = latestName.value,
@@ -665,6 +626,116 @@ fun PersonaPanel(
                     Text("精调中…")
                 } else {
                     Text(if (compiledEnabledState) "精调并保存" else "保存")
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 人设精调结果确认弹窗（与快速设定的「预览确认」一致）。
+ *
+ * - 展示精调器返回的四节内容（身份背景 / 性格 / 外观 / 期望特质），可编辑；
+ * - 缺失章节回退显示当前字段值，采用后保持不变；
+ * - 点击「采用」后由 [onAdopt] 组装最终 Persona：精调内容直接覆盖四个字段，
+ *   名字、世界背景、头像保持不变，compiledPersona 置空（不再走缓存分支）。
+ */
+@Composable
+private fun RefineResultDialog(
+    rawText: String,
+    current: Persona,
+    modelTier: ApiCatalogManager.ModelTier,
+    onAdopt: (Persona) -> Unit,
+    onCancel: () -> Unit
+) {
+    val parsed = remember(rawText) { PromptBuilder.parsePersonaRefineResult(rawText) }
+    var refinePersona by rememberSaveable(parsed.persona) {
+        mutableStateOf(parsed.persona.ifBlank { current.persona })
+    }
+    var refineCharacter by rememberSaveable(parsed.character) {
+        mutableStateOf(parsed.character.ifBlank { current.character })
+    }
+    var refineAppearance by rememberSaveable(parsed.appearance) {
+        mutableStateOf(parsed.appearance.ifBlank { current.appearance })
+    }
+    var refineDesired by rememberSaveable(parsed.desired) {
+        mutableStateOf(parsed.desired.ifBlank { current.desired })
+    }
+
+    val appearanceEnabled = modelTier != ApiCatalogManager.ModelTier.BASIC
+    val desiredEnabled = modelTier == ApiCatalogManager.ModelTier.FULL
+
+    Dialog(
+        onDismissRequest = onCancel,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp),
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    text = "精调结果（将覆盖人设字段）",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(modifier = Modifier.size(4.dp))
+                Text(
+                    text = "采用后精调内容将直接覆盖身份背景 / 性格 / 外观 / 期望特质；名字、世界背景、头像保持不变。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                )
+                Spacer(modifier = Modifier.size(12.dp))
+                QuiddityTextField(
+                    value = refinePersona, onValueChange = { refinePersona = it },
+                    label = "身份背景", singleLine = false, collapsible = true
+                )
+                Spacer(modifier = Modifier.size(12.dp))
+                QuiddityTextField(
+                    value = refineCharacter, onValueChange = { refineCharacter = it },
+                    label = "性格", singleLine = false, collapsible = true
+                )
+                Spacer(modifier = Modifier.size(12.dp))
+                QuiddityTextField(
+                    value = refineAppearance, onValueChange = { refineAppearance = it },
+                    label = "外观（服装等）", singleLine = false, collapsible = true,
+                    enabled = appearanceEnabled
+                )
+                Spacer(modifier = Modifier.size(12.dp))
+                QuiddityTextField(
+                    value = refineDesired, onValueChange = { refineDesired = it },
+                    label = "你希望 ta 是什么样的？", singleLine = false, collapsible = true,
+                    enabled = desiredEnabled
+                )
+                Spacer(modifier = Modifier.size(16.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
+                ) {
+                    TextButton(onClick = onCancel) { Text("返回重调") }
+                    TextButton(
+                        onClick = {
+                            onAdopt(
+                                current.copy(
+                                    persona = refinePersona,
+                                    character = refineCharacter,
+                                    appearance = if (appearanceEnabled) refineAppearance else current.appearance,
+                                    desired = if (desiredEnabled) refineDesired else current.desired,
+                                    compiledPersona = null
+                                )
+                            )
+                        }
+                    ) { Text("采用") }
                 }
             }
         }

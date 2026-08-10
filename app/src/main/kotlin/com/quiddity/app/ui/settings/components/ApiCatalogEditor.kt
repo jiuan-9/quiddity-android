@@ -115,7 +115,10 @@ fun ApiCatalogEditor(
         Saver<ApiCatalogEditFormState?, List<String>>(
             save = { state ->
                 if (state == null) emptyList()
-                else listOf(state.id, state.name, state.providerId, state.apiUrl, state.apiModel)
+                else listOf(
+                    state.id, state.name, state.providerId, state.apiUrl, state.apiModel,
+                    state.maxTemperature?.toString().orEmpty()
+                )
             },
             restore = { saved ->
                 if (saved.size < 5) null
@@ -125,7 +128,8 @@ fun ApiCatalogEditor(
                     providerId = saved[2],
                     apiUrl = saved[3],
                     apiModel = saved[4],
-                    apiKey = ""
+                    apiKey = "",
+                    maxTemperature = saved.getOrNull(5)?.toDoubleOrNull()
                 )
             }
         )
@@ -266,7 +270,8 @@ fun ApiCatalogEditor(
                                         providerId = entry.providerId,
                                         apiUrl = entry.apiUrl,
                                         apiModel = entry.apiModel,
-                                        apiKey = ""
+                                        apiKey = "",
+                                        maxTemperature = entry.maxTemperature
                                     )
                                 },
                                 onSetActive = { viewModel.setActiveCatalog(entry.id) },
@@ -298,7 +303,8 @@ fun ApiCatalogEditor(
                     providerId = updated.providerId,
                     apiUrl = updated.apiUrl,
                     apiModel = updated.apiModel,
-                    apiKey = updated.apiKey
+                    apiKey = updated.apiKey,
+                    maxTemperature = updated.maxTemperature
                 )
                 editingState = null
             }
@@ -321,7 +327,8 @@ fun ApiCatalogEditor(
                     providerId = newState.providerId,
                     apiUrl = newState.apiUrl,
                     apiModel = newState.apiModel,
-                    apiKey = newState.apiKey
+                    apiKey = newState.apiKey,
+                    maxTemperature = newState.maxTemperature
                 )
                 isCreating = false
             }

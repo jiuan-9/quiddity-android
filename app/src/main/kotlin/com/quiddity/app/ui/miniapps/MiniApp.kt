@@ -3,11 +3,16 @@ package com.quiddity.app.ui.miniapps
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.quiddity.app.ui.miniapps.board.BoardMiniApp
+import com.quiddity.app.ui.miniapps.defuse.DefuseMiniApp
+import com.quiddity.app.ui.miniapps.spy.SpyMiniApp
 
 /*
  * 小应用框架核心。
  *
- * 新增小应用三步：
+ * 快捷新增：运行仓库根目录 `new-miniapp.ps1 -Id x -Name "名称" -Description "描述"`，
+ * 自动生成可编译模板并注册到本文件，无需手工改动。
+ *
+ * 手动新增小应用三步：
  * 1. 实现 [MiniApp]（id 全局唯一、图标、名称、描述、邀请气泡文案）；
  * 2. 在 [MiniAppRegistry.all] 注册；
  * 3. 中心页与宿主路由自动生效，无需改动导航。
@@ -49,7 +54,9 @@ class MiniAppHost(
 /** 小应用注册表：未来新应用在此注册即可。 */
 object MiniAppRegistry {
     val all: List<MiniApp> = listOf(
-        BoardMiniApp
+        BoardMiniApp,
+        SpyMiniApp,
+        DefuseMiniApp
     )
 
     fun byId(id: String): MiniApp? = all.firstOrNull { it.id == id }

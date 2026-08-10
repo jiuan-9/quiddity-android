@@ -194,10 +194,15 @@ class ApiCatalogManagerTest {
             apiModel = "deepseek-ai/DeepSeek-V4-Flash", apiKey = "k"
         )
         val custom = deepseekFlash.copy(providerId = "custom")
+        val customNonOfficial = custom.copy(apiUrl = "https://example.com/v1/chat/completions")
         assertTrue(manager.supportsServerWebSearch(deepseekFlash), "官方 deepseek-v4-flash 应支持服务端搜索")
         assertFalse(manager.supportsServerWebSearch(deepseekPro), "官方 deepseek-v4-pro 暂不支持 Responses API")
         assertFalse(manager.supportsServerWebSearch(aggregated), "聚合平台不具备 DeepSeek 官方服务端搜索")
-        assertFalse(manager.supportsServerWebSearch(custom), "自定义服务商不具备官方服务端搜索")
+        assertTrue(
+            manager.supportsServerWebSearch(custom),
+            "自定义条目但 URL 指向官方 DeepSeek 端点应支持服务端搜索"
+        )
+        assertFalse(manager.supportsServerWebSearch(customNonOfficial), "非官方地址不具备官方服务端搜索")
     }
 
     @Test
@@ -237,5 +242,95 @@ class ApiCatalogManagerTest {
             manager.resolveEntry(settings.copy(catalog = emptyList()), base),
             "catalog 为空时返回 null"
         )
+    }
+
+    @Test
+    fun `vision providers preset is not empty and ends with custom`() {
+        assertTrue(manager.visionProviders.isNotEmpty(), "视觉 OCR 服务商预置不应为空")
+        assertEquals("custom", manager.visionProviders.last().id, "自定义服务商应位于视觉名册末尾")
+    }
+
+    @Test
+    fun `isVisionModel classifies built-in vision and text models`() {
+        assertTrue(manager.isVisionModel("kimi-k3", "moonshot"), "Kimi K3 原生视觉")
+        assertTrue(manager.isVisionModel("kimi-k2.6", "moonshot"), "Kimi K2.6 原生视觉")
+        assertTrue(manager.isVisionModel("MiniMax-M3", "minimax"), "MiniMax M3 原生多模态")
+        assertTrue(manager.isVisionModel("qwen-vl-max", "alibaba"), "通义千问 VL")
+        assertTrue(manager.isVisionModel("glm-4.1v-thinking-flash", "zhipu"), "智谱 GLM-4.1V-Thinking-Flash")
+        assertTrue(manager.isVisionModel("glm-4.6v-flash", "zhipu"), "智谱 GLM 视觉")
+        assertTrue(manager.isVisionModel("gemini-2.5-flash", "google"), "Gemini 全系多模态")
+        assertTrue(manager.isVisionModel("gpt-5.4", "openai"), "GPT-5 系列支持视觉")
+
+        assertFalse(manager.isVisionModel("deepseek-v4-flash", "deepseek"), "DeepSeek 纯文本")
+        assertFalse(manager.isVisionModel("qwen-plus", "alibaba"), "通义千问文本模型")
+        assertFalse(manager.isVisionModel("glm-5.2", "zhipu"), "GLM 文本模型")
+        assertFalse(manager.isVisionModel("kimi-k3", "custom"), "自定义服务商一律按纯文本处理")
+    }
+
+    @Test
+    fun `resolveOcrEntry prefers built-in vision chat model then active vision entry`() {
+        val visionChat = manager.buildEntry(
+            id = "chat-vision", name = "Kimi K3", providerId = "moonshot",
+            apiUrl = "https://api.moonshot.cn/v1/chat/completions",
+            apiModel = "kimi-k3", apiKey = "k"
+        )
+        val textChat = visionChat.copy(
+            id = "chat-text",
+            apiModel = "deepseek-v4-flash",
+            providerId = "deepseek"
+        )
+        val ocrA = visionChat.copy(
+            id = "ocr-a", name = "GLM",
+            providerId = "zhipu", apiModel = "glm-4.6v-flash"
+        )
+        val ocrB = visionChat.copy(
+            id = "ocr-b", name = "Qwen-VL",
+            providerId = "alibaba", apiModel = "qwen-vl-max"
+        )
+        val settings = AppSettings.Default.copy(
+            activeVisionCatalogId = "ocr-b",
+            visionCatalog = listOf(ocrA, ocrB)
+        )
+        assertEquals(
+            "chat-vision",
+            manager.resolveOcrEntry(settings, visionChat)?.id,
+            "自带视觉优先使用当前对话模型"
+        )
+        assertEquals(
+            "ocr-b",
+            manager.resolveOcrEntry(settings, textChat)?.id,
+            "纯文本模型回退到当前选中的视觉 OCR 配置"
+        )
+        assertEquals(
+            "ocr-a",
+            manager.resolveOcrEntry(settings.copy(activeVisionCatalogId = null), textChat)?.id,
+            "未选中时取视觉名册第一条"
+        )
+        assertNull(
+            manager.resolveOcrEntry(settings.copy(visionCatalog = emptyList()), textChat),
+            "无视觉 OCR 配置时返回 null"
+        )
+    }
+
+    @Test
+    fun `defaultMaxTemperature caps known models and leaves others unlimited`() {
+        assertEquals(1.0, manager.defaultMaxTemperature("claude-sonnet-4-6"), "Claude 温度上限 1.0")
+        assertEquals(1.0, manager.defaultMaxTemperature("claude-opus-4-8"), "Claude 温度上限 1.0")
+        assertNull(manager.defaultMaxTemperature("deepseek-v4-flash"), "未知模型不限制")
+        assertNull(manager.defaultMaxTemperature("gpt-4o-mini"), "未知模型不限制")
+    }
+
+    @Test
+    fun `buildEntry applies known max temperature when user leaves it blank`() {
+        val entry = manager.buildEntry(
+            id = null,
+            name = "Claude",
+            providerId = "anthropic",
+            apiUrl = "https://example.com/v1/chat/completions",
+            apiModel = "claude-sonnet-4-5",
+            apiKey = "sk-test",
+            maxTemperature = null
+        )
+        assertEquals(1.0, entry.maxTemperature, "预设 Claude 模型应自动套用 1.0 上限")
     }
 }

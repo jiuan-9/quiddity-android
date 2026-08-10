@@ -1,5 +1,7 @@
 package com.quiddity.app.ui.chat
 
+import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -19,7 +21,9 @@ import com.quiddity.app.domain.ApiCatalogManager
 import com.quiddity.app.domain.ChatError
 import com.quiddity.app.domain.GroupReplyQueue
 import com.quiddity.app.domain.TimeLibraryEngine
+import com.quiddity.app.domain.VisionOcrService
 import com.quiddity.app.util.IdGenerator
+import com.quiddity.app.util.ImageUtils
 import com.quiddity.app.util.QuiddityConstants
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -74,6 +78,7 @@ class ChatViewModel(
     private val chatRepository: ChatRepository,
     private val settingsRepository: SettingsRepository,
     private val apiCatalogManager: ApiCatalogManager,
+    private val visionOcrService: VisionOcrService,
     private val conversationId: String,
     /**
      * 任务全部完结（流式 / 压缩 / 发送延迟均空闲）时的回调。
@@ -100,6 +105,24 @@ class ChatViewModel(
     // Loading → Empty/Messages 的切换由 AnimatedContent 平滑过渡。
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
+
+    // ===== 图片发送（OCR 识图 → 聊天 API） =====
+    /** 待发送图片 URI（file:// 或 content://），null = 当前未挂载图片。 */
+    private val _pendingImageUri = MutableStateFlow<String?>(null)
+    val pendingImageUri: StateFlow<String?> = _pendingImageUri.asStateFlow()
+
+    /** OCR 识图进行中状态，驱动输入栏加载圈与防重复发送。 */
+    private val _ocrState = MutableStateFlow<OcrState>(OcrState.Idle)
+    val ocrState: StateFlow<OcrState> = _ocrState.asStateFlow()
+
+    fun setPendingImage(uri: String?) {
+        _pendingImageUri.value = uri
+        if (uri == null) {
+            _ocrState.value = OcrState.Idle
+        }
+    }
+
+    fun clearPendingImage() = setPendingImage(null)
 
     init {
         // 消息流生命周期管理：用单一 launch + collect 自动跟随 viewModelScope 生命周期，
@@ -375,14 +398,19 @@ class ChatViewModel(
      * - 延迟计时器通过 [sendDelayJob] 管理，用户发送新消息时自动重置
      * - 延迟结束后调用 [startApiStream] 发起 API 请求（此时才设置 _isGenerating）
      */
-    fun sendMessage(text: String) {
-        if (text.isBlank()) return
+    fun sendMessage(
+        text: String,
+        ocrText: String? = null,
+        imageUri: String? = null
+    ) {
+        // 纯图片消息允许内容为空（气泡用图片卡片展示，模型上下文由 ocrText 补充）
+        if (text.isBlank() && imageUri.isNullOrBlank()) return
         val conv = conversation.value ?: return
         // 群聊：只追加用户消息，不自动触发回复（回复靠点头像点名）；
         // 队列进行中仍可发送新消息（方案四.8），新消息不影响正在进行的回复
         if (isGroup()) {
             if (_compressionState.value is CompressionState.Compressing) return
-            sendGroupUserMessage(text, conv)
+            sendGroupUserMessage(text, conv, ocrText, imageUri)
             return
         }
         // 仅在 API 调用 / 压缩期间阻止发送；发送延迟期间允许继续发送
@@ -408,6 +436,8 @@ class ChatViewModel(
                     conversationId = conv.id,
                     role = Role.USER,
                     content = text,
+                    ocrText = ocrText?.trim()?.takeIf { it.isNotBlank() },
+                    imageUri = imageUri,
                     timestamp = now
                 )
                 conversationRepository.appendMessage(userMsg)
@@ -437,10 +467,96 @@ class ChatViewModel(
     }
 
     /**
+     * 发送带图片的消息：先 OCR 识图，再把识别文本交给聊天 API。
+     *
+     * 完整链路（对应"视觉 OCR 设置"）：
+     * 1. 解析识图模型——当前对话模型自带视觉则直接用对话模型，否则用视觉 OCR 名册兜底；
+     * 2. 纯文本模型且未开启 OCR 兜底时给出引导提示，不发起请求；
+     * 3. 识别成功后把用户消息组装为 `[图片] + OCR 识别结果 + 用户文字`，
+     *    走既有的 [sendMessage]（单聊）或 [sendGroupUserMessage]（群聊）流程。
+     *
+     * 识别失败时保留待发送图片，用户可调整配置后重试。
+     */
+    fun sendMessageWithImage(context: Context, text: String, imageUri: String) {
+        if (imageUri.isBlank()) return
+        if (_ocrState.value is OcrState.Recognizing) return
+        val conv = conversation.value ?: return
+        viewModelScope.launch {
+            _ocrState.value = OcrState.Recognizing
+            // 发送前置校验：失败时保留待发送图片，避免"OCR 白跑 + 图片被吞"
+            if (!isGroup()) {
+                if (conv.userPersona.name.isBlank()) {
+                    _ocrState.value = OcrState.Idle
+                    _errorEvent.value = "请先设置用户名"
+                    return@launch
+                }
+                if (_isGenerating.value || _compressionState.value is CompressionState.Compressing) {
+                    _ocrState.value = OcrState.Idle
+                    _errorEvent.value = "当前有回复进行中，请稍后再发"
+                    return@launch
+                }
+            }
+            val settings = settingsRepository.currentSnapshot()
+            val chatEntry = apiCatalogManager.resolveEntry(settings, conv)
+            // 纯文本模型 + 未开启 OCR 兜底：直接引导，不发请求
+            if (!apiCatalogManager.isVisionModel(
+                    chatEntry?.apiModel.orEmpty(),
+                    chatEntry?.providerId.orEmpty()
+                ) && !settings.ocrEnabled
+            ) {
+                _ocrState.value = OcrState.Idle
+                _errorEvent.value =
+                    "当前模型不支持看图，且未开启「视觉 OCR」兜底，请到总设置 → 视觉 OCR 中开启并配置视觉模型"
+                return@launch
+            }
+            val result = visionOcrService.recognizeImage(
+                context = context,
+                imageUri = Uri.parse(imageUri),
+                settings = settings,
+                chatEntry = chatEntry
+            )
+            _ocrState.value = OcrState.Idle
+            result.onSuccess { ocrText ->
+                // 图片从临时文件复制为持久化文件（msg_ 前缀），随消息长期保存；
+                // 临时文件（source_temp_ 前缀）在 pendingImageUri 清空后由界面层回收。
+                val persistentUri = runCatching {
+                    ImageUtils.copyToInternalStorage(
+                        context = context,
+                        sourceUri = Uri.parse(imageUri),
+                        subdir = "chat_images",
+                        fileNamePrefix = "msg_"
+                    ).toString()
+                }.getOrNull()
+                if (persistentUri == null) {
+                    _errorEvent.value = "图片保存失败，请重试"
+                    return@onSuccess
+                }
+                _pendingImageUri.value = null
+                // 界面可见内容 = 用户输入（图片以卡片形式展示，不再塞 "[图片]" 文本）；
+                // OCR 识别结果作为隐藏字段，仅注入发给模型的上下文。
+                val visibleContent = text.trim()
+                val ocr = ocrText.trim().takeIf { it.isNotBlank() }
+                if (isGroup()) {
+                    sendGroupUserMessage(visibleContent, conv, ocr, persistentUri)
+                } else {
+                    sendMessage(visibleContent, ocrText = ocr, imageUri = persistentUri)
+                }
+            }.onFailure { e ->
+                _errorEvent.value = "图片识别失败：${e.message ?: "未知错误"}"
+            }
+        }
+    }
+
+    /**
      * 群聊用户消息：直接追加进群聊记录（方案三.1/四.8），不触发自动回复。
      * 消息中带「@名字」点名时，被点名的成员自动入队回复（受队列容量限制）。
      */
-    private fun sendGroupUserMessage(text: String, conv: Conversation) {
+    private fun sendGroupUserMessage(
+        text: String,
+        conv: Conversation,
+        ocrText: String? = null,
+        imageUri: String? = null
+    ) {
         sendDelayJob?.cancel()
         sendDelayJob = viewModelScope.launch {
             withContext(NonCancellable) {
@@ -450,6 +566,8 @@ class ChatViewModel(
                     conversationId = conv.id,
                     role = Role.USER,
                     content = text,
+                    ocrText = ocrText?.trim()?.takeIf { it.isNotBlank() },
+                    imageUri = imageUri,
                     timestamp = now
                 )
                 conversationRepository.appendMessage(userMsg)
@@ -909,6 +1027,29 @@ class ChatViewModel(
                 accumulateTokenUsage(event.message.tokenCount)
             }
             is ChatRepository.Event.Done -> Unit
+            is ChatRepository.Event.Truncated -> {
+                // 回复被截断：不静默吞掉——群聊插入可见提示气泡，私聊弹提示
+                if (isGroup()) {
+                    val memberName = conversationRepository.observeMessages(conversationId).value
+                        .lastOrNull { it.role == Role.ASSISTANT && !it.isNotice && !it.isThinking }
+                        ?.senderId
+                        ?.let { conversationRepository.getConversation(it)?.persona?.name }
+                        ?.takeIf { it.isNotBlank() }
+                        ?: "成员"
+                    conversationRepository.appendMessage(
+                        Message(
+                            id = IdGenerator.newId(IdGenerator.Prefix.USER_MESSAGE),
+                            conversationId = conversationId,
+                            role = Role.SYSTEM,
+                            content = "「$memberName」的回复似乎被截断了，可能没说完",
+                            timestamp = System.currentTimeMillis(),
+                            isNotice = true
+                        )
+                    )
+                } else {
+                    _errorEvent.value = "回复可能被截断了，内容没显示完整"
+                }
+            }
             is ChatRepository.Event.Notice -> {
                 // 信息性提示（非错误）：如思考降级 / 未返回思考内容
                 _errorEvent.value = event.text
@@ -1274,6 +1415,16 @@ class ChatViewModel(
                 if (conv.quickSetupDraft == draft) return@withContext
                 conversationRepository.updateConversation(conv.copy(quickSetupDraft = draft))
             }
+        }
+    }
+
+    /**
+     * 设置快速设定的独立采样温度（全局设置，0～2）。
+     * 温度越高，每次生成的人设发散性越强，避免用户总是拿到同一个人设。
+     */
+    fun updateQuickSetupTemperature(value: Double) {
+        viewModelScope.launch {
+            settingsRepository.setQuickSetupTemperature(value)
         }
     }
 
@@ -2068,6 +2219,7 @@ class ChatViewModelFactory(
     private val chatRepository: ChatRepository,
     private val settingsRepository: SettingsRepository,
     private val apiCatalogManager: ApiCatalogManager,
+    private val visionOcrService: VisionOcrService,
     private val conversationId: String
 ) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
@@ -2077,6 +2229,7 @@ class ChatViewModelFactory(
             chatRepository,
             settingsRepository,
             apiCatalogManager,
+            visionOcrService,
             conversationId
         ) as T
     }
@@ -2088,4 +2241,12 @@ sealed interface CompressionState {
     data object Compressing : CompressionState
     data object Success : CompressionState
     data object Failed : CompressionState
+}
+
+/**
+ * 图片 OCR 识图状态：Idle = 空闲；Recognizing = 正在识图（输入栏显示加载圈）。
+ */
+sealed interface OcrState {
+    data object Idle : OcrState
+    data object Recognizing : OcrState
 }

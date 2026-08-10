@@ -160,7 +160,11 @@ object PromptBuilder {
                 Role.ASSISTANT -> "AI"
                 Role.SYSTEM -> "系统"
             }
-            sb.append("[").append(label).append("] ").append(msg.content).append("\n")
+            sb.append("[").append(label).append("] ").append(msg.content)
+            if (!msg.ocrText.isNullOrBlank()) {
+                sb.append("\n[图片 OCR 识别结果] ").append(msg.ocrText.trim())
+            }
+            sb.append("\n")
         }
         return sb.toString().trim()
     }
@@ -225,8 +229,50 @@ object PromptBuilder {
      * 精调 user 消息的尾部约束：要求按结构输出并限制长度。
      */
     fun buildPersonaRefineSuffix(maxOutputTokens: Int): String {
-        return "\n\n请在以上信息的基础上进行人设精调，输出一段结构清晰、不曲解原意的系统提示词。" +
-            "输出字数限制在 " + maxOutputTokens + " token 以内。"
+        return "\n\n请对以上信息进行人设精调，严格按以下四节输出（用户未填的字段省略对应章节）：\n" +
+            "【身份背景】\n<内容>\n" +
+            "【性格】\n<内容>\n" +
+            "【外观】\n<内容>\n" +
+            "【期望特质】\n<内容>\n" +
+            "不要输出「名字」「世界背景」以及任何解释性文字。输出字数限制在 " + maxOutputTokens + " token 以内。"
+    }
+
+    /**
+     * 人设精调的结构化结果，与四个人设填空项一一对应（名字除外）。
+     */
+    data class PersonaRefineResult(
+        val desired: String = "",
+        val persona: String = "",
+        val character: String = "",
+        val appearance: String = ""
+    )
+
+    /**
+     * 解析人设精调器的结构化输出为 [PersonaRefineResult]。
+     *
+     * 精调器按【身份背景】【性格】【外观】【期望特质】四个章节输出；
+     * 解析按章节标签切分，标签后到下一个章节标签（或结尾）为内容。
+     * 缺失章节返回空串——调用方合并时保留原字段，避免误清用户已填写的内容。
+     */
+    fun parsePersonaRefineResult(raw: String): PersonaRefineResult {
+        val text = raw.trim()
+        fun section(label: String): String {
+            val startIdx = text.indexOf(label)
+            if (startIdx < 0) return ""
+            val contentStart = startIdx + label.length
+            val nextIdx = sequenceOf("【身份背景】", "【性格】", "【外观】", "【期望特质】")
+                .map { text.indexOf(it, contentStart) }
+                .filter { it >= 0 }
+                .minOrNull() ?: -1
+            val content = if (nextIdx >= 0) text.substring(contentStart, nextIdx) else text.substring(contentStart)
+            return content.trim().trim('\n', '\r', '：', ':').trim()
+        }
+        return PersonaRefineResult(
+            desired = section("【期望特质】"),
+            persona = section("【身份背景】"),
+            character = section("【性格】"),
+            appearance = section("【外观】")
+        )
     }
 
     // ============================================================
@@ -437,7 +483,11 @@ object PromptBuilder {
             } else {
                 null
             }
-            result.add(ChatMessage(role = role, content = baseContent + marker.orEmpty()))
+            val ocrAppendix = msg.ocrText
+                ?.takeIf { it.isNotBlank() }
+                ?.let { "\n[图片 OCR 识别结果]\n${it.trim()}" }
+                .orEmpty()
+            result.add(ChatMessage(role = role, content = baseContent + marker.orEmpty() + ocrAppendix))
         }
         return result
     }
@@ -469,16 +519,27 @@ object PromptBuilder {
      *
      * system 消息不进入 input（由调用方作为 Responses 请求的 instructions 字段发送，
      * 服务端将其作为上下文中的第一条 system 消息）；其余消息按 role/content 原样映射。
+     * 历史中的非首条 system 消息（如小应用对局记录气泡）转为 user 角色并加【系统记录】前缀，
+     * 保证角色在 Responses 路径下同样能读到这些上下文。
      */
-    fun toResponsesInput(apiMessages: List<ChatMessage>): List<ResponsesInputItem> =
-        apiMessages
-            .filterNot { it.role == "system" }
-            .map { msg ->
-                ResponsesInputItem(
-                    role = msg.role,
-                    content = msg.content
-                )
+    fun toResponsesInput(apiMessages: List<ChatMessage>): List<ResponsesInputItem> {
+        var systemSeen = false
+        val out = mutableListOf<ResponsesInputItem>()
+        apiMessages.forEach { msg ->
+            if (msg.role == "system") {
+                if (systemSeen) {
+                    out += ResponsesInputItem(
+                        role = "user",
+                        content = "【系统记录】\n${msg.content}"
+                    )
+                }
+                systemSeen = true
+            } else {
+                out += ResponsesInputItem(role = msg.role, content = msg.content)
             }
+        }
+        return out
+    }
 
     /**
      * 把 OpenAI 兼容 function 工具定义转为 Responses API 工具声明。
@@ -565,7 +626,11 @@ $persona
                     Role.ASSISTANT -> "AI"
                     Role.SYSTEM -> "系统"
                 }
-                sb.append("[").append(label).append("] ").append(msg.content).append("\n")
+                sb.append("[").append(label).append("] ").append(msg.content)
+                if (!msg.ocrText.isNullOrBlank()) {
+                    sb.append("\n[图片 OCR 识别结果] ").append(msg.ocrText.trim())
+                }
+                sb.append("\n")
             }
         }
         sb.append("\n请决定此刻是否主动发消息。")
@@ -729,7 +794,11 @@ $persona
                 userName != null -> userName
                 else -> "未知成员"
             }
-            "$name：${msg.content}"
+            val ocr = msg.ocrText
+                ?.takeIf { it.isNotBlank() }
+                ?.let { "\n[图片 OCR 识别结果] ${it.trim()}" }
+                .orEmpty()
+            "$name：${msg.content}$ocr"
         }
     }
 

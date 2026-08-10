@@ -146,6 +146,14 @@ object TimeLibraryEngine {
         val trimmed = raw.trim()
         if (trimmed.isEmpty()) return null
         if (trimmed == "0") return null
+        // 部分模型会在消息末尾额外补一个决策用的"0"（如"想你了\n0"、"想你了 0"、"想你了。0"），
+        // 仅当 0 与正文之间存在换行 / 空白 / 全角句末标点分隔时剥离，
+        // 避免误删正文正常结尾的数字（如"10"、"0.0"、"密码 1230"）。
+        val strayZero = Regex("""(?:\r?\n|\s|[。！？])0$""").find(trimmed)
+        if (strayZero != null) {
+            val cleaned = trimmed.dropLast(1).trimEnd()
+            if (cleaned.isNotEmpty()) return cleaned
+        }
         return trimmed
     }
 

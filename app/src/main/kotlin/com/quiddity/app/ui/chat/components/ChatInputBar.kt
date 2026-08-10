@@ -21,7 +21,10 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.AddPhotoAlternate
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -46,6 +49,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
 
 /*
  * ============================================================================
@@ -105,6 +109,12 @@ fun ChatInputBar(
     transparent: Boolean = false,
     onTextChange: ((String) -> Unit)? = null,
     isCompressing: Boolean = false,
+    // 图片发送：待发送图片 URI（file:// 或 content://）+ 选择/移除回调
+    onPickImage: (() -> Unit)? = null,
+    pendingImageUri: String? = null,
+    onRemoveImage: (() -> Unit)? = null,
+    // 图片正在 OCR 识别中（按钮位置显示加载圈，阻止重复发送）
+    ocrBusy: Boolean = false,
     // 输入框容器内的顶部内容（群聊成员头像栏，随输入框一起动）
     header: (@Composable (MentionInputScope) -> Unit)? = null
 ) {
@@ -145,7 +155,11 @@ fun ChatInputBar(
     fun trySend() {
         if (!enabled) return
         val v = textFieldValue.text.trim()
-        if (v.isNotEmpty() && !isCompressing && (allowSendWhileGenerating || !isGenerating)) {
+        // 有文字或已挂载图片均可发送（图片会先 OCR 识图）
+        if ((v.isNotEmpty() || pendingImageUri != null) &&
+            !isCompressing &&
+            (allowSendWhileGenerating || !isGenerating)
+        ) {
             onSend(v)
             textFieldValue = TextFieldValue("")
             onTextChange?.invoke("")
@@ -197,6 +211,45 @@ fun ChatInputBar(
                     header(mentionScope)
                 }
             }
+            // 待发送图片预览（选中图片后显示，可移除）
+            if (pendingImageUri != null) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 8.dp, end = 8.dp, bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    AsyncImage(
+                        model = pendingImageUri,
+                        contentDescription = "待发送图片",
+                        modifier = Modifier
+                            .size(52.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                    )
+                    Spacer(modifier = Modifier.size(8.dp))
+                    Text(
+                        text = if (ocrBusy) "正在识别图片内容…" else "将识图后发送",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (onRemoveImage != null) {
+                        Icon(
+                            imageVector = Icons.Filled.Close,
+                            contentDescription = "移除图片",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .size(24.dp)
+                                .clip(CircleShape)
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null
+                                ) { onRemoveImage() }
+                                .padding(3.dp)
+                        )
+                    }
+                }
+            }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
@@ -238,13 +291,44 @@ fun ChatInputBar(
                     textStyle = MaterialTheme.typography.bodyMedium
                 )
 
+                // 图片附件按钮：点击选择图片；OCR 进行中显示加载圈
+                if (onPickImage != null) {
+                    Spacer(modifier = Modifier.size(2.dp))
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null
+                            ) {
+                                if (!ocrBusy) onPickImage()
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (ocrBusy) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Filled.AddPhotoAlternate,
+                                contentDescription = "选择图片",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                }
+
                 Spacer(modifier = Modifier.size(4.dp))
 
                 // ===== 发送按钮三态：isGenerating→停止(红)/isCompressing→置灰不可点/否则→正常发送 =====
                 val buttonColor = when {
                     isGenerating -> MaterialTheme.colorScheme.error
                     isCompressing -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
-                    text.isNotBlank() -> MaterialTheme.colorScheme.primary
+                    text.isNotBlank() || pendingImageUri != null -> MaterialTheme.colorScheme.primary
                     else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
                 }
                 Box(
@@ -278,7 +362,7 @@ fun ChatInputBar(
                             contentDescription = "发送",
                             tint = when {
                                 isCompressing -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
-                                text.isNotBlank() -> MaterialTheme.colorScheme.onPrimary
+                                text.isNotBlank() || pendingImageUri != null -> MaterialTheme.colorScheme.onPrimary
                                 else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                             },
                             modifier = Modifier.size(18.dp)

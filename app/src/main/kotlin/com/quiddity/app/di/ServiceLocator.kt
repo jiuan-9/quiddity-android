@@ -16,6 +16,7 @@ import com.quiddity.app.data.repo.SettingsRepository
 import com.quiddity.app.data.repo.TimeLibraryRepository
 import com.quiddity.app.domain.ApiCatalogManager
 import com.quiddity.app.domain.DocsProvider
+import com.quiddity.app.domain.VisionOcrService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -106,6 +107,12 @@ object ServiceLocator {
         private set
 
     /**
+     * 视觉识图服务（图片 → OCR → 文本），供聊天发图流程使用。
+     */
+    lateinit var visionOcrService: VisionOcrService
+        private set
+
+    /**
      * 应用文档内容提供者。
      * 集中维护设置页“文档”抽屉中的说明文档，避免在 UI 中硬编码大段文本。
      */
@@ -122,6 +129,7 @@ object ServiceLocator {
 
         settingsRepository = SettingsRepository(settingsStore)
         apiCatalogManager = ApiCatalogManager(chatApi)
+        visionOcrService = VisionOcrService(chatApi, apiCatalogManager)
         characterRepository = CharacterRepository(characterStore)
         // 用于新会话创建时按模型分级初始化 contextLimit，以及预填默认 AI 人设身份。
         conversationRepository = ConversationRepository(

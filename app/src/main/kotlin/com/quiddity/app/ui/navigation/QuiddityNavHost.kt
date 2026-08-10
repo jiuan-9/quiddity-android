@@ -16,6 +16,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.platform.LocalContext
+import android.os.SystemClock
 import android.widget.Toast
 import kotlinx.coroutines.launch
 import androidx.lifecycle.Lifecycle
@@ -80,6 +81,7 @@ import com.quiddity.app.ui.theme.Motion
 @Composable
 fun QuiddityNavHost() {
     val navController = rememberNavController()
+    val navigateThrottle = remember { NavigationThrottle() }
     val settingsRepo = remember { ServiceLocator.settingsRepository }
 
     // ===== 版本更新（每次进入前台自动检查，对应算法：检查时机 = 每次 ON_RESUME） =====
@@ -159,13 +161,13 @@ fun QuiddityNavHost() {
                 settingsViewModel = settingsVm,
                 userAvatarUri = settings.userAvatarUri,
                 onOpenMiniApps = {
-                    navController.navigate(QuiddityRoute.MiniApps.path)
+                    navigateThrottle.tryNavigate { navController.navigate(QuiddityRoute.MiniApps.path) }
                 },
                 onOpenConversation = { convId ->
-                    navController.navigate(QuiddityRoute.Chat.create(convId))
+                    navigateThrottle.tryNavigate { navController.navigate(QuiddityRoute.Chat.create(convId)) }
                 },
                 onOpenMessage = { convId, messageId ->
-                    navController.navigate(QuiddityRoute.Chat.create(convId, messageId))
+                    navigateThrottle.tryNavigate { navController.navigate(QuiddityRoute.Chat.create(convId, messageId)) }
                 }
             )
         }
@@ -197,7 +199,7 @@ fun QuiddityNavHost() {
                     }
                 },
                 onOpenApp = { appId ->
-                    navController.navigate(QuiddityRoute.MiniAppHost.create(appId))
+                    navigateThrottle.tryNavigate { navController.navigate(QuiddityRoute.MiniAppHost.create(appId)) }
                 },
                 onBack = { navController.popBackStack() }
             )
@@ -237,14 +239,14 @@ fun QuiddityNavHost() {
                     MiniAppHost(
                         onExit = { navController.popBackStack() },
                         onOpenConversation = { convId ->
-                            navController.navigate(QuiddityRoute.Chat.create(convId))
+                            navigateThrottle.tryNavigate { navController.navigate(QuiddityRoute.Chat.create(convId)) }
                         },
                         onToast = { message ->
                             Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
                         }
                     )
                 }
-                MiniAppLaunchGate(appName = app.name) {
+                MiniAppLaunchGate(app = app) {
                     app.Content(host)
                 }
             }
@@ -271,6 +273,7 @@ fun QuiddityNavHost() {
                             chatRepository = ServiceLocator.chatRepository,
                             settingsRepository = settingsRepo,
                             apiCatalogManager = ServiceLocator.apiCatalogManager,
+                            visionOcrService = ServiceLocator.visionOcrService,
                             conversationId = id,
                             onIdle = onIdle
                         )
@@ -283,6 +286,7 @@ fun QuiddityNavHost() {
                         chatRepository = ServiceLocator.chatRepository,
                         settingsRepository = settingsRepo,
                         apiCatalogManager = ServiceLocator.apiCatalogManager,
+                        visionOcrService = ServiceLocator.visionOcrService,
                         conversationId = id
                     )
                 }
@@ -303,7 +307,7 @@ fun QuiddityNavHost() {
                 onBack = { navController.popBackStack() },
                 onConversationExit = { chatHost.onScreenExit(convId) },
                 onOpenMiniApp = { appId ->
-                    navController.navigate(QuiddityRoute.MiniAppHost.create(appId))
+                    navigateThrottle.tryNavigate { navController.navigate(QuiddityRoute.MiniAppHost.create(appId)) }
                 }
             )
         }
@@ -344,5 +348,26 @@ sealed class QuiddityRoute(val path: String) {
                 nullable = true
             }
         )
+    }
+}
+
+// ===== 防多按 =====
+// 所有页面跳转统一走 NavigationThrottle：窗口期内重复跳转直接忽略，
+// 防止手快连点同一入口导致同一页面在返回栈中堆积，产生逻辑/视觉重复。
+private const val NAVIGATION_THROTTLE_MS = 600L
+
+internal class NavigationThrottle(
+    private val windowMs: Long = NAVIGATION_THROTTLE_MS,
+    private val clock: () -> Long = { SystemClock.uptimeMillis() }
+) {
+    private var lastNavigateAt = Long.MIN_VALUE
+
+    /** 窗口期内重复调用返回 false 并忽略；否则执行 action 并返回 true。 */
+    fun tryNavigate(action: () -> Unit): Boolean {
+        val now = clock()
+        if (lastNavigateAt != Long.MIN_VALUE && now - lastNavigateAt < windowMs) return false
+        lastNavigateAt = now
+        action()
+        return true
     }
 }

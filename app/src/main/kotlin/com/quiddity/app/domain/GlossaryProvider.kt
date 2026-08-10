@@ -124,7 +124,7 @@ class GlossaryProvider {
             pinyin = "shangxiawenjiyi lunshu",
             explanation = "AI 在回复时能记住的对话轮数。1 轮 = 1 次你说 + 1 次 AI 回。" +
                 "数值越大 AI 记得越多但 Token 消耗越高。" +
-                "默认根据模型分级自动设置：完全级 80 轮、进阶级 40 轮、基础级 12 轮。" +
+                "默认根据模型分级自动设置：完全级 40 轮、进阶级 20 轮、基础级 6 轮。" +
                 "切换模型时自动重置为该级别的默认值。",
             category = "Token 与上下文"
         ),
@@ -163,9 +163,8 @@ class GlossaryProvider {
         Term(
             name = "人设精调",
             pinyin = "renshejingdiao",
-            explanation = "把人设字段交给 AI 编译为结构化的系统提示词，让 AI 更精准地扮演角色。" +
-                "精调后的内容缓存在会话中，下次发送直接使用，无需重复编译。" +
-                "修改人设字段（除名字和头像外）会清空缓存，需要重新精调。",
+            explanation = "把人设字段交给 AI 精调，让 AI 更精准地扮演角色。" +
+                "精调结果会按身份背景、性格、外观、期望特质四个字段展示，确认后直接覆盖原人设（名字、世界背景、头像不变）。",
             category = "人设与精调"
         ),
         Term(
@@ -199,8 +198,8 @@ class GlossaryProvider {
         Term(
             name = "精调预览",
             pinyin = "jingdiaoyulan",
-            explanation = "精调完成后弹出的预览界面，显示 AI 编译后的系统提示词。" +
-                "你可以选择「采用」保存，「返回重调」则不保存。",
+            explanation = "精调完成后弹出的预览界面，按身份背景、性格、外观、期望特质四个字段展示精调结果。" +
+                "你可以选择「采用」直接覆盖人设字段，「返回重调」则不保存。",
             category = "人设与精调"
         ),
 
@@ -209,21 +208,21 @@ class GlossaryProvider {
             name = "完全级",
             pinyin = "wanquanjijixing",
             explanation = "能力最强的模型分级。所有人设字段可用，" +
-                "默认上下文记忆 80 轮。通常对应旗舰模型如 GPT-4、Claude 3.5 等。",
+                "默认上下文记忆 40 轮。通常对应旗舰模型如 GPT-4、Claude 3.5 等。",
             category = "模型分级"
         ),
         Term(
             name = "进阶级",
             pinyin = "jinjijijixing",
             explanation = "中等能力的模型分级。可用除「你希望 ta 是什么样的」" +
-                "外的所有人设字段，默认上下文记忆 40 轮。",
+                "外的所有人设字段，默认上下文记忆 20 轮。",
             category = "模型分级"
         ),
         Term(
             name = "基础级",
             pinyin = "jichujijixing",
             explanation = "能力较弱的模型分级。仅可编辑名字、身份、性格，" +
-                "默认上下文记忆 12 轮。适合轻量对话场景。",
+                "默认上下文记忆 6 轮。适合轻量对话场景。",
             category = "模型分级"
         ),
 

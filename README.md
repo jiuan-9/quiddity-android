@@ -18,7 +18,7 @@ Quiddity Android 是 Quiddity 移动端的独立产品（与 Quiddity-Chat、Qui
 - **11 家 AI 服务商**，60+ 模型可选（基础级 / 进阶级 / 完整级 / 视觉级）
 - **模型分配方案**：按场景自动匹配最优模型（写作 / 编程 / 翻译 / 视觉…）
 - **多轮对话 + 上下文记忆**：可配置上下文轮数（1-200）
-- **会话压缩（记忆库）**：进阶级模型默认每 40 轮自动压缩一次，节省 token
+- **会话压缩（记忆库）**：进阶级模型默认每 20 轮自动压缩一次，节省 token
 - **角色卡 / System Prompt**：完全自定义 AI 身份与人设
 - **Markdown 渲染 + 代码高亮**：内置语法高亮与数学公式
 - **图像识别（Vision 模型）**：上传图片自动调用多模态模型
@@ -196,9 +196,9 @@ keyPassword=xxx
 
 详见 [`docs/压缩会话流程说明.md`](docs/压缩会话流程说明.md)
 
-- **进阶级（ADVANCED）**：默认 40 轮触发一次
-- **完整级（FULL）**：默认 80 轮触发一次
-- **基础级（BASIC）**：默认 12 轮触发一次
+- **进阶级（ADVANCED）**：默认 20 轮触发一次
+- **完整级（FULL）**：默认 40 轮触发一次
+- **基础级（BASIC）**：默认 6 轮触发一次
 - **触发条件**：用户发送消息后，由 `ChatViewModel.checkMemoryBankCompression()` 检测
 
 ### 3. 上下文裁剪
@@ -211,10 +211,22 @@ keyPassword=xxx
 
 | 档位 | 默认上下文 | 压缩频率 | 典型模型 |
 |---|---|---|---|
-| 基础级（BASIC） | 12 轮 | 每 12 轮 | GPT-3.5、Qwen Turbo、Doubao Lite |
-| 进阶级（ADVANCED） | 40 轮 | 每 40 轮 | GPT-4、Qwen Max、Kimi、DeepSeek |
-| 完整级（FULL） | 80 轮 | 每 80 轮 | Claude 4、Gemini 2.5 Pro |
-| 视觉级（VISION） | 16 轮 | 每 16 轮 | GPT-4V、Gemini Vision、Qwen-VL |
+| 基础级（BASIC） | 6 轮 | 每 6 轮 | GPT-3.5、Qwen Turbo、Doubao Lite |
+| 进阶级（ADVANCED） | 20 轮 | 每 20 轮 | GPT-4、Qwen Max、Kimi、DeepSeek |
+| 完整级（FULL） | 40 轮 | 每 40 轮 | Claude 4、Gemini 2.5 Pro |
+| 视觉级（VISION） | 8 轮 | 每 8 轮 | GPT-4V、Gemini Vision、Qwen-VL |
+
+### 5. 小应用框架
+
+主页下拉进入"小应用中心"（收藏/全部），小应用通过模块化 `MiniApp` 接口接入，中心页、路由、收藏与邀请气泡自动生效。
+
+**新增一个小应用（一行命令）：**
+
+```
+.\new-miniapp.ps1 -Id dice -Name "骰子" -Description "随机掷骰子小游戏"
+```
+
+脚手架会生成可编译占位实现并自动注册到 `MiniAppRegistry`，随后把占位页替换成真实业务即可；复杂小应用参考棋盘小应用分层（`domain/` 纯逻辑 + `ViewModel` 状态机 + `MiniAppInviteManager` 复用邀请流程）。详见 [`new-miniapp.ps1`](new-miniapp.ps1)。
 
 ## 数据存储
 

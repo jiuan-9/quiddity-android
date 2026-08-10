@@ -86,4 +86,12 @@ class QuiddityConstantsTest {
         assertTrue(QuiddityConstants.GROUP_DEFAULT_CONTEXT_LIMIT in
             QuiddityConstants.GROUP_MIN_CONTEXT_LIMIT..QuiddityConstants.GROUP_MAX_CONTEXT_LIMIT)
     }
+
+    @Test
+    fun `clampTemperature respects model specific max`() {
+        assertEquals(1.0, QuiddityConstants.clampTemperature(1.5, max = 1.0), "超过模型上限应钳制到上限")
+        assertEquals(0.8, QuiddityConstants.clampTemperature(0.8, max = 1.0), "范围内原样返回")
+        assertEquals(2.0, QuiddityConstants.clampTemperature(2.5), "未指定上限时按全局 2.0 钳制")
+        assertEquals(0.0, QuiddityConstants.clampTemperature(-0.5, max = 1.0), "低于下限应钳制到 0")
+    }
 }

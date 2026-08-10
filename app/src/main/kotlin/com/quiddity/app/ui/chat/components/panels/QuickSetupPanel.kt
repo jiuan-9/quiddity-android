@@ -57,6 +57,7 @@ import com.quiddity.app.domain.QuickSetupTier
 import com.quiddity.app.domain.missingRequiredFieldKeys
 import com.quiddity.app.ui.components.ConfirmDialog
 import com.quiddity.app.ui.components.QuiddityTextField
+import com.quiddity.app.ui.components.TemperatureSlider
 import com.quiddity.app.ui.theme.Motion
 import kotlinx.coroutines.launch
 /*
@@ -100,6 +101,8 @@ import kotlinx.coroutines.launch
 @Composable
 fun QuickSetupPanel(
     currentTier: ApiCatalogManager.ModelTier,
+    quickSetupTemperature: Double = com.quiddity.app.util.QuiddityConstants.DEFAULT_QUICK_SETUP_TEMPERATURE,
+    onTemperatureChange: (Double) -> Unit = {},
     hasExistingContent: Boolean,
     hasMessages: Boolean = false,
     initialDraft: String = "",
@@ -267,6 +270,18 @@ fun QuickSetupPanel(
             onTierSelected = { newTier ->
                 if (newTier in availableTiers) selectedTier = newTier
             }
+        )
+        Spacer(modifier = Modifier.size(12.dp))
+
+        // 独立温度：温度越高发散性越强，避免每次生成同一套人设
+        Text(
+            text = "温度越高，每次生成的人设差异越大（0～2）。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+        )
+        TemperatureSlider(
+            value = quickSetupTemperature,
+            onValueChangeFinished = onTemperatureChange
         )
         Spacer(modifier = Modifier.size(16.dp))
 

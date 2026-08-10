@@ -145,6 +145,14 @@ class SettingsRepository(private val store: SettingsStore) {
             )
         )
     }
+    suspend fun setQuickSetupTemperature(value: Double) = update {
+        it.copy(
+            quickSetupTemperature = value.coerceIn(
+                QuiddityConstants.MIN_TEMPERATURE,
+                QuiddityConstants.MAX_TEMPERATURE
+            )
+        )
+    }
     suspend fun setContextLimit(value: Int) = update { it.copy(globalContextLimit = value) }
     /**
      * 与其他 setter 保持一致：仅走 update {} 流程（DataStore.edit 原子事务）。
@@ -234,8 +242,16 @@ class SettingsRepository(private val store: SettingsStore) {
     }
 
     suspend fun upsertCatalog(entry: ApiCatalogEntry): Boolean = update { s ->
-        val list = s.catalog.filterNot { it.id == entry.id } + entry
-        s.copy(catalog = list, activeCatalogId = s.activeCatalogId ?: entry.id)
+        // 防覆盖兜底：编辑时若上层传入空密钥（例如内存快照尚未就绪导致"留空保留旧密钥"
+        // 判定失效），不允许把已保存的密文覆盖为空。
+        val existing = s.catalog.firstOrNull { it.id == entry.id }
+        val merged = if (entry.apiKeyEnc.isEmpty() && existing?.apiKeyEnc?.isNotEmpty() == true) {
+            entry.copy(apiKeyEnc = existing.apiKeyEnc)
+        } else {
+            entry
+        }
+        val list = s.catalog.filterNot { it.id == merged.id } + merged
+        s.copy(catalog = list, activeCatalogId = s.activeCatalogId ?: merged.id)
     }
 
     suspend fun removeCatalog(entryId: String): Boolean = update { s ->
@@ -249,6 +265,55 @@ class SettingsRepository(private val store: SettingsStore) {
     fun getCatalogEntry(id: String?): ApiCatalogEntry? {
         if (id == null) return null
         return _snapshot.value.catalog.firstOrNull { it.id == id }
+    }
+
+    /**
+     * 视觉 OCR 兜底总开关。
+     * 仅影响"聊天模型本身不支持图片"时的兜底路径；自带视觉的模型不受此开关限制。
+     */
+    suspend fun setOcrEnabled(enabled: Boolean) = update { it.copy(ocrEnabled = enabled) }
+
+    /**
+     * 新增 / 更新视觉 OCR 模型配置（结构同普通模型配置）。
+     * 首次新增时自动设为当前启用的视觉模型。
+     */
+    suspend fun upsertVisionCatalog(entry: ApiCatalogEntry): Boolean = update { s ->
+        // 防覆盖兜底：与 [upsertCatalog] 一致，空密钥不允许覆盖已保存密文。
+        val existing = s.visionCatalog.firstOrNull { it.id == entry.id }
+        val merged = if (entry.apiKeyEnc.isEmpty() && existing?.apiKeyEnc?.isNotEmpty() == true) {
+            entry.copy(apiKeyEnc = existing.apiKeyEnc)
+        } else {
+            entry
+        }
+        val list = s.visionCatalog.filterNot { it.id == merged.id } + merged
+        s.copy(visionCatalog = list, activeVisionCatalogId = s.activeVisionCatalogId ?: merged.id)
+    }
+
+    /**
+     * 删除视觉 OCR 模型配置；删除的是当前项时自动切换到剩余第一条。
+     */
+    suspend fun removeVisionCatalog(entryId: String): Boolean = update { s ->
+        val list = s.visionCatalog.filterNot { it.id == entryId }
+        val active = if (s.activeVisionCatalogId == entryId) list.firstOrNull()?.id else s.activeVisionCatalogId
+        s.copy(visionCatalog = list, activeVisionCatalogId = active)
+    }
+
+    suspend fun setActiveVisionCatalog(id: String?): Boolean = update { it.copy(activeVisionCatalogId = id) }
+
+    fun getVisionCatalogEntry(id: String?): ApiCatalogEntry? {
+        if (id == null) return null
+        return _snapshot.value.visionCatalog.firstOrNull { it.id == id }
+    }
+
+    /**
+     * 从磁盘强制重读指定视觉 OCR 配置（绕过内存快照）。
+     *
+     * 用于保存后的写后自检：确认密钥密文确实已落盘，避免"界面提示成功、实际未保存"
+     * 的静默不一致。
+     */
+    suspend fun readVisionCatalogEntryFromDisk(id: String): ApiCatalogEntry? {
+        ensureInitialized()
+        return store.data.first().visionCatalog.firstOrNull { it.id == id }
     }
 
     companion object {

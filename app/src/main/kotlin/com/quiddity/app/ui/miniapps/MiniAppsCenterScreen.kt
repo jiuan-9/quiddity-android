@@ -5,7 +5,6 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -51,12 +50,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
@@ -337,16 +331,7 @@ private fun RoundAppIcon(
                     .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)),
                 contentAlignment = Alignment.Center
             ) {
-                if (app.id == "board") {
-                    BoardAppIcon(modifier = Modifier.size(50.dp))
-                } else {
-                    Icon(
-                        imageVector = app.icon,
-                        contentDescription = app.name,
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.size(30.dp)
-                    )
-                }
+                MiniAppAppIcon(app = app, modifier = Modifier.size(50.dp))
             }
             // 收藏星标：圆形图标右上角的小徽章
             Box(
@@ -387,61 +372,6 @@ private fun RoundAppIcon(
             color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
-        )
-    }
-}
-
-@Composable
-private fun BoardAppIcon(modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier) {
-        val side = minOf(size.width, size.height)
-        val pad = side * 0.10f
-        val inner = side - pad * 2f
-        val cell = inner / 4f
-        drawRoundRect(
-            brush = Brush.linearGradient(
-                colors = listOf(Color(0xFFE8C894), Color(0xFFC89A5C)),
-                start = Offset.Zero,
-                end = Offset(size.width, size.height)
-            ),
-            cornerRadius = CornerRadius(side * 0.18f, side * 0.18f),
-            size = Size(size.width, size.height)
-        )
-        for (i in 0..4) {
-            val p = pad + i * cell
-            drawLine(
-                color = Color(0xFF7A5A32).copy(alpha = 0.75f),
-                start = Offset(pad, p),
-                end = Offset(pad + inner, p),
-                strokeWidth = side * 0.025f
-            )
-            drawLine(
-                color = Color(0xFF7A5A32).copy(alpha = 0.75f),
-                start = Offset(p, pad),
-                end = Offset(p, pad + inner),
-                strokeWidth = side * 0.025f
-            )
-        }
-        drawCircle(
-            color = Color(0xFF7A5A32),
-            radius = side * 0.035f,
-            center = Offset(pad + 2 * cell, pad + 2 * cell)
-        )
-        drawCircle(
-            color = Color(0xFF1B1B1F),
-            radius = side * 0.16f,
-            center = Offset(pad + 1 * cell, pad + 1 * cell)
-        )
-        drawCircle(
-            color = Color(0xFFF7F3EA),
-            radius = side * 0.16f,
-            center = Offset(pad + 3 * cell, pad + 3 * cell),
-            style = Stroke(width = side * 0.04f)
-        )
-        drawCircle(
-            color = Color(0xFF1B1B1F),
-            radius = side * 0.10f,
-            center = Offset(pad + 3 * cell, pad + 1 * cell)
         )
     }
 }

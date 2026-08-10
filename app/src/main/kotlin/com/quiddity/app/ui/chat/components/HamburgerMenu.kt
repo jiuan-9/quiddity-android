@@ -11,6 +11,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -589,6 +590,10 @@ fun HamburgerMenu(
                                     conv.memory.isNotBlank()
                                 QuickSetupPanel(
                                     currentTier = tier,
+                                    quickSetupTemperature = settings.quickSetupTemperature,
+                                    onTemperatureChange = { value ->
+                                        viewModel.updateQuickSetupTemperature(value)
+                                    },
                                     hasExistingContent = hasExisting,
                                     hasMessages = messages.any { !it.isNotice },
                                     initialDraft = conv.quickSetupDraft,
@@ -695,7 +700,8 @@ fun HamburgerMenu(
                                         providerId = state.providerId,
                                         apiUrl = state.apiUrl,
                                         apiModel = state.apiModel,
-                                        apiKey = state.apiKey
+                                        apiKey = state.apiKey,
+                                        maxTemperature = state.maxTemperature
                                     )
                                 },
                                 onUpdateCatalog = { state ->
@@ -708,7 +714,8 @@ fun HamburgerMenu(
                                             providerId = state.providerId,
                                             apiUrl = state.apiUrl,
                                             apiModel = state.apiModel,
-                                            apiKey = state.apiKey
+                                            apiKey = state.apiKey,
+                                            maxTemperature = state.maxTemperature
                                         )
                                     }
                                 },
@@ -1649,22 +1656,21 @@ private fun MainMenuContent(
                 onThinkingChange = onThinkingEnabledChange,
                 onDepthChange = onThinkingDepthChange
             )
-            }
-
-            // DeepSeek 专属：温度 / 官方联网搜索（其他模型暂未支持）
-            MenuSectionCard(title = "DeepSeek 专属") {
+            Spacer(modifier = Modifier.size(4.dp))
+            // 会话级温度：控制本会话回复的随机性/创造性（跟随全局默认）
             val temperatureSubtitle = if (conversation?.temperature != null) {
                 "本会话 " + String.format(java.util.Locale.US, "%.1f", conversation.temperature) +
                     " · 默认 " + String.format(java.util.Locale.US, "%.1f", settings.globalTemperature)
             } else {
-                "跟随默认（" + String.format(java.util.Locale.US, "%.1f", settings.globalTemperature) + "）"
+                "跟随默认（" + String.format(java.util.Locale.US, "%.1f", settings.globalTemperature) +
+                    "）· 控制回复的发散程度"
             }
-            MenuRow(
+            ExpandableMenuGroup(
                 title = "温度",
                 subtitle = temperatureSubtitle,
+                expanded = showTemperatureEditor,
                 onClick = { showTemperatureEditor = !showTemperatureEditor }
-            )
-            if (showTemperatureEditor) {
+            ) {
                 TemperatureEditorPanel(
                     current = conversation?.temperature,
                     globalDefault = settings.globalTemperature,
@@ -1677,12 +1683,6 @@ private fun MainMenuContent(
                 supported = webSearchSupported,
                 currentModelId = currentModelId,
                 onWebSearchChange = onWebSearchChange
-            )
-            Text(
-                text = "DeepSeek 模型可用功能（其他模型暂未支持）",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
             )
             }
 
@@ -1824,6 +1824,82 @@ private fun MenuSectionCard(
         }
         content()
         Spacer(modifier = Modifier.height(4.dp))
+    }
+}
+
+/**
+ * 可展开菜单组：把「设置行 + 展开的子面板」框进同一个容器，
+ * 用连续边框表明子面板归属于上方这一行（母设置框），避免展开面板看起来是独立悬浮卡片。
+ */
+@Composable
+private fun ExpandableMenuGroup(
+    title: String,
+    subtitle: String = "",
+    expanded: Boolean,
+    onClick: () -> Unit,
+    content: @Composable () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(com.quiddity.app.ui.components.glassCardColor())
+            .border(
+                width = 1.dp,
+                color = com.quiddity.app.ui.components.glassCardBorderColor(),
+                shape = RoundedCornerShape(12.dp)
+            )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onClick
+                )
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                if (subtitle.isNotEmpty()) {
+                    Text(
+                        subtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                    )
+                }
+            }
+            Icon(
+                imageVector = Icons.Filled.ChevronRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                modifier = Modifier.size(20.dp)
+            )
+        }
+        AnimatedVisibility(visible = expanded) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 12.dp, end = 12.dp, bottom = 12.dp)
+            ) {
+                // 行与子面板之间的连接线：强调两者同属一个设置框
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(1.dp)
+                        .background(com.quiddity.app.ui.components.glassCardBorderColor())
+                )
+                Spacer(modifier = Modifier.size(10.dp))
+                content()
+            }
+        }
     }
 }
 
@@ -2280,9 +2356,9 @@ private fun GroupBackgroundPanel(
             placeholder = {
                 Text(
                     if (isScene) {
-                        "例如：你们几个朋友正在一场篝火晚会上，夜空晴朗，周围是树林"
+                        "例如：用户和小A、小B正在一场篝火晚会上，夜空晴朗，周围是树林"
                     } else {
-                        "例如：大学同学群，关系很熟，说话随意，偶尔互怼"
+                        "例如：大学同学群，成员有用户、小A、小B，关系很熟，说话随意，偶尔互怼"
                     }
                 )
             },
@@ -2293,9 +2369,9 @@ private fun GroupBackgroundPanel(
         Spacer(modifier = Modifier.size(8.dp))
         Text(
             text = if (isScene) {
-                "多人场景的情境描述，会注入到每个成员回复时的提示词里；清空后保存即移除。"
+                "多人场景的情境描述，会注入到每个成员回复时的提示词里；提到成员时请写大名（如「用户」「小A」），不要用「你」「我」等称呼；清空后保存即移除。"
             } else {
-                "氛围与群规描述，会注入到每个成员回复时的提示词里；清空后保存即移除。"
+                "氛围与群规描述，会注入到每个成员回复时的提示词里；提到成员时请写大名（如「用户」「小A」），不要用「你」「我」等称呼；清空后保存即移除。"
             },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -2974,7 +3050,7 @@ private fun ToggleMenuRow(
 
 /**
  * 会话级采样温度编辑面板：预设快捷档 + 0～2 滑杆 + 跟随默认重置。
- * 官方文档：DeepSeek 思考模式下 temperature 不生效。
+ * 由 [ExpandableMenuGroup] 承载，不再自带外层卡片，避免双重边框。
  */
 @Composable
 private fun TemperatureEditorPanel(
@@ -2983,59 +3059,52 @@ private fun TemperatureEditorPanel(
     onTemperatureChange: (Double?) -> Unit
 ) {
     val effective = current ?: globalDefault
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 3.dp),
-        shape = RoundedCornerShape(14.dp),
-        color = com.quiddity.app.ui.components.glassCardColor()
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "温度",
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                if (current != null) {
-                    TextButton(onClick = { onTemperatureChange(null) }) {
-                        Text("跟随默认")
-                    }
-                }
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                temperaturePresets.forEach { (value, label) ->
-                    TemperaturePresetChip(
-                        value = value,
-                        label = label,
-                        selected = kotlin.math.abs(effective - value) < 0.001,
-                        onClick = { onTemperatureChange(value) },
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-            }
-            TemperatureSlider(
-                value = effective,
-                onValueChangeFinished = { onTemperatureChange(it) }
-            )
             Text(
-                text = "范围 0～2，DeepSeek 官方默认 1.0；思考模式下温度不生效。\n" +
-                    "0.0 代码/数学 · 1.0 数据抽取 · 1.3 通用对话/翻译 · 1.5 创意写作",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                text = "本会话采样温度",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary
             )
+            if (current != null) {
+                TextButton(onClick = { onTemperatureChange(null) }) {
+                    Text("跟随默认")
+                }
+            }
         }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            temperaturePresets.forEach { (value, label) ->
+                TemperaturePresetChip(
+                    value = value,
+                    label = label,
+                    selected = kotlin.math.abs(effective - value) < 0.001,
+                    onClick = { onTemperatureChange(value) },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+        TemperatureSlider(
+            value = effective,
+            onValueChangeFinished = { onTemperatureChange(it) }
+        )
+        Text(
+            text = "控制本会话回复的随机与创造性：越高越发散，越低越稳定。\n" +
+                "部分模型最高只支持 1.0，超出会自动收敛。\n" +
+                "场景建议：0.0 严谨 · 1.0 均衡 · 1.3 对话 · 1.5 创意",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+        )
     }
 }
 
@@ -3111,13 +3180,13 @@ private fun WebSearchMenuRow(
         title = "官方联网搜索",
         subtitle = if (supported) {
             if (enabled) {
-                "已开启：DeepSeek 服务端搜索，无需第三方引擎"
+                "已开启：AI 会先联网搜索最新信息再回复（服务端搜索）"
             } else {
-                "DeepSeek 官方服务端联网搜索"
+                "开启后 AI 会先联网搜索最新信息再回复"
             }
         } else {
-            "仅 DeepSeek 官方 " + QuiddityConstants.DEEPSEEK_RESPONSES_MODEL +
-                " 支持（当前：$currentModelId）"
+            "需要 DeepSeek 官方服务商 + " + QuiddityConstants.DEEPSEEK_RESPONSES_MODEL +
+                "；当前配置（$currentModelId）无法使用"
         },
         checked = enabled,
         enabled = supported,

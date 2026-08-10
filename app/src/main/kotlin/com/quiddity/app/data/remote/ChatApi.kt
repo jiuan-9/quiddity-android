@@ -83,6 +83,8 @@ open class ChatApi {
         data class Content(val text: String) : StreamEvent()
         /** DeepSeek 思考内容片段（reasoning_content，先于普通内容到达）。 */
         data class Reasoning(val text: String) : StreamEvent()
+        /** 流以"被截断"结束（finish_reason=length / response.incomplete），内容不完整。 */
+        data object Truncated : StreamEvent()
         /** 流结束（[DONE] 或连接关闭）时聚合出的完整工具调用列表，无工具调用时为空列表。 */
         data class ToolCalls(val calls: List<ChatStreamParser.AggregatedToolCall>) : StreamEvent()
     }
@@ -153,6 +155,14 @@ open class ChatApi {
             }
         }
 
+        fun emitTruncated() {
+            runCatching {
+                kotlinx.coroutines.runBlocking { channel.send(StreamEvent.Truncated) }
+            }
+        }
+
+        // finish_reason=length：输出达到 max_tokens 上限，回复被截断（部分网关也会用此信号）
+        var truncated = false
         val eventSourceListener = object : EventSourceListener() {
             override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
                 if (closed.get()) return
@@ -160,9 +170,11 @@ open class ChatApi {
                 if (parsed == null) {
                     // [DONE] —— 结束流：先下发聚合完成的工具调用
                     emitToolCalls(parser.takeToolCalls())
+                    if (truncated) emitTruncated()
                     safeClose()
                     return
                 }
+                if (parsed.finishReason == "length") truncated = true
                 val content = parsed.content
                 if (!content.isNullOrEmpty()) {
                     emitContent(content)
@@ -176,6 +188,7 @@ open class ChatApi {
             override fun onClosed(eventSource: EventSource) {
                 // 服务端未发 [DONE] 直接关闭：仍把已聚合的工具调用下发，避免丢失
                 emitToolCalls(parser.takeToolCalls())
+                if (truncated) emitTruncated()
                 safeClose()
             }
 
@@ -267,6 +280,12 @@ open class ChatApi {
             }
         }
 
+        fun emitTruncated() {
+            runCatching {
+                kotlinx.coroutines.runBlocking { channel.send(StreamEvent.Truncated) }
+            }
+        }
+
         val eventSourceListener = object : EventSourceListener() {
             override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
                 if (closed.get()) return
@@ -274,6 +293,9 @@ open class ChatApi {
                 if (parsed == null) {
                     // 终态事件（completed/incomplete/failed）：下发聚合完成的函数调用后结束
                     emitToolCalls(parser.takeToolCalls())
+                    // response.incomplete = 输出被截断（如达到 max_output_tokens），
+                    // 单独下发 Truncated 事件，避免上层静默吞掉未说完的回复
+                    if (parser.terminatedIncomplete) emitTruncated()
                     val error = parser.terminalError
                     if (error != null) {
                         safeClose(ChatException(error))
@@ -427,6 +449,86 @@ open class ChatApi {
             }.getOrNull()
             val result = (parsed?.trim() ?: "").ifEmpty {
                 throw ChatException(emptyError)
+            }
+            result
+        }
+    }
+
+    /**
+     * 视觉识图（非流式多模态请求）。
+     *
+     * 供图片 → OCR → 聊天 API 流程使用：
+     * - 请求体为 OpenAI 兼容的 content 块数组，图片以 base64 data URL 内嵌；
+     * - 响应解析 `choices[0].message.content`，兼容字符串与内容块数组两种返回；
+     * - 失败或返回空时抛 [ChatException]，由上层提示用户检查视觉模型配置。
+     *
+     * @param imageData 已编码的 data URL（如 `data:image/jpeg;base64,...`）
+     * @param prompt 识图指令（OCR / 图片描述）
+     */
+    open suspend fun completeVisionNonStreaming(
+        apiUrl: String,
+        apiKey: String,
+        model: String,
+        prompt: String,
+        imageData: String,
+        maxTokens: Int,
+        temperature: Double
+    ): String = withContext(Dispatchers.IO) {
+        val request = VisionCompletionRequest(
+            model = model,
+            messages = listOf(
+                VisionChatMessage(
+                    role = "user",
+                    content = listOf(
+                        // 图片块在前、文字块在后：与智谱/硅基流动/月之暗面等
+                        // OpenAI 兼容视觉接口的官方示例一致，兼容性最好。
+                        VisionContentPart(
+                            type = "image_url",
+                            image_url = VisionImageUrl(url = imageData)
+                        ),
+                        VisionContentPart(type = "text", text = prompt),
+                    )
+                )
+            ),
+            max_tokens = maxTokens,
+            temperature = temperature,
+            stream = false
+        )
+        val body = json.encodeToString(VisionCompletionRequest.serializer(), request)
+            .toRequestBody(mediaType)
+        val requestBuilder = Request.Builder()
+            .url(apiUrl)
+            .post(body)
+            .header("Accept", "application/json")
+        if (apiKey.isNotEmpty()) {
+            requestBuilder.header("Authorization", "Bearer $apiKey")
+        }
+        client.newCall(requestBuilder.build()).execute().use { resp ->
+            if (!resp.isSuccessful) {
+                val errBody = runCatching { resp.peekBody(2 * 1024)?.string().orEmpty() }
+                    .getOrDefault("")
+                throw ChatException(
+                    "HTTP ${resp.code}: ${resp.message}${if (errBody.isNotBlank()) " - $errBody" else ""}"
+                )
+            }
+            val raw = resp.body?.string().orEmpty()
+            // 兼容 content 为字符串或内容块数组两种响应格式
+            val parsed = runCatching {
+                val root = json.parseToJsonElement(raw) as? JsonObject
+                val choices = root?.get("choices") as? JsonArray
+                val firstChoice = choices?.firstOrNull() as? JsonObject
+                val message = firstChoice?.get("message") as? JsonObject
+                val content = message?.get("content")
+                when (content) {
+                    is JsonPrimitive -> content.contentOrNull
+                    is JsonArray -> content.mapNotNull { part ->
+                        (part as? JsonObject)?.get("text")?.jsonPrimitive?.contentOrNull
+                    }.joinToString("\n")
+                    else -> null
+                }
+            }.getOrNull()
+            val result = (parsed?.trim() ?: "").ifEmpty {
+                throw ChatException("视觉模型未返回识别内容，请检查模型是否支持图片输入")
             }
             result
         }
