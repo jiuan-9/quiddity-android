@@ -48,7 +48,7 @@ enum class Role {
  */
 @Serializable
 enum class ConversationType {
-    SOLO, GROUP
+    SOLO, GROUP, AGENT
 }
 
 /**

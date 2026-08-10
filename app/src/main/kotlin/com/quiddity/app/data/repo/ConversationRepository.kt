@@ -56,6 +56,11 @@ class ConversationRepository(
     private val characterRepository: CharacterRepository? = null
 ) {
 
+    companion object {
+        /** Fixed title for Agent conversations. */
+        private const val AGENT_DEFAULT_TITLE = "Agent"
+    }
+
     val conversations: StateFlow<List<Conversation>> = store.conversations
 
     val sortedConversations: Flow<List<Conversation>> = store.conversations.map { list ->
@@ -109,6 +114,28 @@ class ConversationRepository(
             contextLimit = resolveDefaultContextLimit()
         ).let {
             // 压缩轮数默认与上下文记忆轮数一致
+            it.copy(memoryBankRounds = it.contextLimit)
+        }
+        store.createConversation(conv)
+        return conv
+    }
+
+    /**
+     * Create an Agent-mode conversation (type = AGENT).
+     * Reuses the shared Conversation/Message storage; fixed title "Agent".
+     */
+    suspend fun createAgentConversation(): Conversation {
+        val now = System.currentTimeMillis()
+        val conv = Conversation(
+            id = IdGenerator.newId(IdGenerator.Prefix.CONVERSATION),
+            title = AGENT_DEFAULT_TITLE,
+            createdAt = now,
+            updatedAt = now,
+            persona = com.quiddity.app.data.model.Persona.Empty,
+            userPersona = com.quiddity.app.data.model.UserPersona.Empty,
+            type = com.quiddity.app.data.model.ConversationType.AGENT,
+            contextLimit = resolveDefaultContextLimit()
+        ).let {
             it.copy(memoryBankRounds = it.contextLimit)
         }
         store.createConversation(conv)
