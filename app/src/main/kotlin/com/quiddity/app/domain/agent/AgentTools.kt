@@ -118,7 +118,7 @@ class AgentToolRegistry(
          * 读取类执行器在 P0 由 AgentExecutors 提供；写入类依赖 Shizuku（P1）。
          * 此处 execute 为占位实现，后续任务接入真实执行器。
          */
-        fun defaultRegistry(): AgentToolRegistry {
+        fun defaultRegistry(executors: AgentExecutors? = null): AgentToolRegistry {
             val tools = listOf(
                 AgentTool(
                     name = "list_apps",
@@ -132,7 +132,10 @@ class AgentToolRegistry(
                     level = AgentPermissionLevel.BASIC,
                     confirm = AgentConfirmPolicy.AUTO,
                     enabledByDefault = true,
-                    execute = { _, _ -> "list_apps 执行器未接入（P0 占位）" }
+                    execute = { _, args ->
+                        executors?.listApps(argString(args, "query"))
+                            ?: "list_apps 执行器未接入（P0 占位）"
+                    }
                 ),
                 AgentTool(
                     name = "read_screen",
@@ -146,7 +149,10 @@ class AgentToolRegistry(
                     level = AgentPermissionLevel.BASIC,
                     confirm = AgentConfirmPolicy.AUTO,
                     enabledByDefault = true,
-                    execute = { _, _ -> "read_screen 执行器未接入（P0 占位）" }
+                    execute = { _, args ->
+                        executors?.readScreen(argInt(args, "maxChars"))
+                            ?: "read_screen 执行器未接入（P0 占位）"
+                    }
                 ),
                 AgentTool(
                     name = "read_notifications",
@@ -160,7 +166,10 @@ class AgentToolRegistry(
                     level = AgentPermissionLevel.BASIC,
                     confirm = AgentConfirmPolicy.AUTO,
                     enabledByDefault = true,
-                    execute = { _, _ -> "read_notifications 执行器未接入（P0 占位）" }
+                    execute = { _, args ->
+                        executors?.readNotifications(argString(args, "since"))
+                            ?: "read_notifications 执行器未接入（P0 占位）"
+                    }
                 ),
                 AgentTool(
                     name = "usage_stats",
@@ -174,7 +183,10 @@ class AgentToolRegistry(
                     level = AgentPermissionLevel.BASIC,
                     confirm = AgentConfirmPolicy.AUTO,
                     enabledByDefault = true,
-                    execute = { _, _ -> "usage_stats 执行器未接入（P0 占位）" }
+                    execute = { _, args ->
+                        executors?.usageStats(argInt(args, "days") ?: 1)
+                            ?: "usage_stats 执行器未接入（P0 占位）"
+                    }
                 ),
                 AgentTool(
                     name = "foreground_app",
@@ -186,7 +198,10 @@ class AgentToolRegistry(
                     level = AgentPermissionLevel.BASIC,
                     confirm = AgentConfirmPolicy.AUTO,
                     enabledByDefault = true,
-                    execute = { _, _ -> "foreground_app 执行器未接入（P0 占位）" }
+                    execute = { _, _ ->
+                        executors?.foregroundApp()
+                            ?: "foreground_app 执行器未接入（P0 占位）"
+                    }
                 ),
                 AgentTool(
                     name = "disable_app",
@@ -300,5 +315,11 @@ class AgentToolRegistry(
                 "description" to JsonPrimitive(description)
             )
         )
+
+        private fun argString(args: JsonObject, key: String): String? =
+            (args[key] as? JsonPrimitive)?.content
+
+        private fun argInt(args: JsonObject, key: String): Int? =
+            (args[key] as? JsonPrimitive)?.content?.toIntOrNull()
     }
 }
