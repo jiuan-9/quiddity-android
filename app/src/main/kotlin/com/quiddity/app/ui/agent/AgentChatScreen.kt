@@ -560,7 +560,8 @@ private fun AgentMessageLine(
                 scaleY = entryScale.value
             },
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
-        verticalAlignment = Alignment.Bottom
+        // 头像与第一行文字顶部齐平（无气泡直排风格）
+        verticalAlignment = Alignment.Top
     ) {
         if (!isUser) {
             AiAvatar(
