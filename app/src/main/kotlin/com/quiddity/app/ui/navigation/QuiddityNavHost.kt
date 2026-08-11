@@ -376,7 +376,16 @@ fun QuiddityNavHost() {
         }
 
         composable(QuiddityRoute.AgentSettings.path) {
+            val settingsVm: SettingsViewModel = viewModel(
+                factory = SettingsViewModelFactory(
+                    settingsRepo,
+                    ServiceLocator.conversationRepository,
+                    ServiceLocator.apiCatalogManager,
+                    ServiceLocator.characterRepository
+                )
+            )
             AgentSettingsScreen(
+                settingsViewModel = settingsVm,
                 onBack = { navController.popBackStack() },
                 onOpenGuide = {
                     navigateThrottle.tryNavigate { navController.navigate(QuiddityRoute.AgentGuide.path) }

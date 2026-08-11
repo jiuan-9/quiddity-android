@@ -43,18 +43,21 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
@@ -77,6 +80,8 @@ import com.quiddity.app.ui.chat.components.ChatInputBar
 import com.quiddity.app.ui.chat.components.HamburgerMenu
 import com.quiddity.app.ui.chat.components.StreamingCursor
 import com.quiddity.app.ui.chat.components.TypingIndicator
+import com.quiddity.app.ui.chat.gesture.ChatDragController
+import com.quiddity.app.ui.chat.gesture.detectNativeHorizontalSwipe
 import com.quiddity.app.ui.settings.SettingsViewModel
 import com.quiddity.app.ui.theme.Motion
 import com.quiddity.app.util.DateUtils
@@ -132,9 +137,26 @@ fun AgentChatScreen(
     val context = LocalContext.current
     val listState = rememberLazyListState()
     var showHamburger by rememberSaveable { mutableStateOf(false) }
-    val menuAlphaState = remember { mutableFloatStateOf(1f) }
     // 会话打开时刻：只有此后新到达的消息播放入场动画（历史消息滚动回来不重放）
     val openedAtMs = rememberSaveable { System.currentTimeMillis() }
+
+    // ===== 滑动手势：与私聊/群聊同一套 ChatDragController =====
+    // 右滑 1:1 跟手滑出会话（松手判定返回），左滑淡入菜单；菜单打开后右滑跟手关闭。
+    val configuration = LocalConfiguration.current
+    val scope = rememberCoroutineScope()
+    val screenWidthPx = with(LocalDensity.current) {
+        configuration.screenWidthDp.dp.toPx()
+    }
+    val swipeEnabled = !isGenerating
+    val swipeEnabledState = rememberUpdatedState(swipeEnabled)
+    val dragController = remember(screenWidthPx) {
+        ChatDragController(
+            scope = scope,
+            screenWidthPx = screenWidthPx,
+            onBack = onBack,
+            onMenuVisibilityChange = { open -> showHamburger = open }
+        )
+    }
 
     DisposableEffect(Unit) {
         onDispose { onConversationExit() }
@@ -152,80 +174,98 @@ fun AgentChatScreen(
         if (messages.any { !it.isNotice }) listState.animateScrollToItem(0)
     }
 
-    BackHandler(enabled = showHamburger) {
-        showHamburger = false
+    BackHandler(enabled = !isGenerating && !showHamburger) {
+        dragController.animateBackAndExit()
     }
 
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .windowInsetsPadding(WindowInsets.statusBars)
-            .imePadding()
+            .pointerInput(Unit) {
+                detectNativeHorizontalSwipe(
+                    enabled = { swipeEnabledState.value },
+                    onDrag = { totalDx, _ -> dragController.onDrag(totalDx) },
+                    onDragEnd = { totalDx, velocityDx ->
+                        dragController.onDragEnd(totalDx, velocityDx)
+                    },
+                    onDragCancel = { dragController.onDragCancel() }
+                )
+            }
+            .graphicsLayer {
+                translationX = dragController.contentOffsetXState.floatValue
+            }
+            .background(MaterialTheme.colorScheme.background)
     ) {
-        // ===== 顶栏：返回 + 标题 + 汉堡（人设） =====
-        Row(
+        Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .height(56.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .fillMaxSize()
+                .windowInsetsPadding(WindowInsets.statusBars)
+                .imePadding()
         ) {
-            Box(
+            // ===== 顶栏：返回 + 标题 + 汉堡（会话设置） =====
+            Row(
                 modifier = Modifier
-                    .size(48.dp)
-                    .clip(RoundedCornerShape(50))
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = onBack
-                    ),
-                contentAlignment = Alignment.Center
+                    .fillMaxWidth()
+                    .height(56.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "返回",
-                    tint = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.size(24.dp)
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(RoundedCornerShape(50))
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = { dragController.animateBackAndExit() }
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "返回",
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+                Text(
+                    text = conversation?.persona?.name?.takeIf { it.isNotBlank() }
+                        ?: conversation?.title
+                        ?: "Agent",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.weight(1f)
                 )
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(RoundedCornerShape(50))
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = { dragController.toggleMenu() }
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Menu,
+                        contentDescription = "菜单",
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
             }
-            Text(
-                text = conversation?.persona?.name?.takeIf { it.isNotBlank() }
-                    ?: conversation?.title
-                    ?: "Agent",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.weight(1f)
-            )
-            Box(
-                modifier = Modifier
-                    .size(48.dp)
-                    .clip(RoundedCornerShape(50))
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = { showHamburger = true }
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Menu,
-                    contentDescription = "菜单",
-                    tint = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.size(24.dp)
-                )
-            }
-        }
 
-        // ===== 消息列表（纯文本直排） =====
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-        ) {
-            when {
+            // ===== 消息列表（纯文本直排） =====
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+            ) {
+                when {
                 conversation == null -> {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator(modifier = Modifier.size(28.dp))
@@ -326,14 +366,15 @@ fun AgentChatScreen(
             enabled = conversation != null
         )
     }
+    }
 
     // ===== 汉堡菜单：与私聊/群聊同一套（会话设置/人设/模型配置） =====
     HamburgerMenu(
         visible = showHamburger,
-        menuAlphaState = menuAlphaState,
+        menuAlphaState = dragController.menuAlphaState,
         viewModel = viewModel,
         settingsViewModel = settingsViewModel,
-        onDismiss = { showHamburger = false },
+        onDismiss = { dragController.closeMenu() },
         onDeleteConversation = {
             viewModel.deleteCurrentConversation()
             onBack()

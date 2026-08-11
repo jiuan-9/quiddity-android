@@ -53,6 +53,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.quiddity.app.active.NotificationBridge
 import com.quiddity.app.active.ScreenReaderService
 import com.quiddity.app.di.ServiceLocator
+import com.quiddity.app.ui.settings.SettingsBottomSheet
+import com.quiddity.app.ui.settings.SettingsViewModel
 import kotlinx.coroutines.launch
 
 /*
@@ -92,6 +94,7 @@ import kotlinx.coroutines.launch
  */
 @Composable
 fun AgentSettingsScreen(
+    settingsViewModel: SettingsViewModel,
     onBack: () -> Unit,
     onOpenGuide: () -> Unit
 ) {
@@ -102,6 +105,7 @@ fun AgentSettingsScreen(
     var showAddWhitelist by rememberSaveable { mutableStateOf(false) }
     var showPrivacy by rememberSaveable { mutableStateOf(false) }
     var showClearSessions by rememberSaveable { mutableStateOf(false) }
+    var showGlobalSettings by rememberSaveable { mutableStateOf(false) }
 
     val accessibilityEnabled = remember { ScreenReaderService.isServiceEnabled(context) }
     val notificationEnabled = remember { NotificationBridge.isServiceEnabled(context) }
@@ -296,6 +300,9 @@ fun AgentSettingsScreen(
 
             // ===== 6. 支持 =====
             SettingsSection(title = "支持") {
+                TextButton(onClick = { showGlobalSettings = true }) {
+                    Text("总设置（全局：主题/字体/Markdown 等）")
+                }
                 TextButton(onClick = onOpenGuide) {
                     Text("开启教程（按系统版本路由）")
                 }
@@ -362,6 +369,14 @@ fun AgentSettingsScreen(
             dismissButton = {
                 TextButton(onClick = { showClearSessions = false }) { Text("取消") }
             }
+        )
+    }
+
+    // ===== 总设置（与私聊/群聊同款全局设置弹层） =====
+    if (showGlobalSettings) {
+        SettingsBottomSheet(
+            viewModel = settingsViewModel,
+            onDismiss = { showGlobalSettings = false }
         )
     }
 }
