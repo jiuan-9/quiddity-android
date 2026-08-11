@@ -22,6 +22,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -702,12 +703,17 @@ private fun AgentMarkdownText(
             }
         }
         if (isListLike) {
-            // 列表内容放入专用纯文本框（与网页版 DeepSeek 等 AI 聊天软件一致）
+            // 列表内容放入专用纯文本框：细边框 + 很淡背景 + 小圆角（方框样式，非聊天气泡）
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(colorScheme.surfaceVariant.copy(alpha = 0.32f))
+                    .border(
+                        width = 1.dp,
+                        color = colorScheme.onSurfaceVariant.copy(alpha = 0.12f),
+                        shape = RoundedCornerShape(8.dp)
+                    )
                     .padding(horizontal = 12.dp, vertical = 10.dp)
             ) {
                 rendered()
