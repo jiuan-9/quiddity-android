@@ -1603,39 +1603,55 @@ private fun MainMenuContent(
             // 人设
             }
             MenuSectionCard(title = "人设") {
-            MenuRow(
-                title = "快速设定",
-                subtitle = "描述你想要的人设，AI 一次性生成并填入",
-                onClick = { onPanelSelected(HamburgerPanel.QuickSetup) },
-                expandableSubtitle = true
-            )
-            val aiPersonaName = conversation?.persona?.name
-            val aiPersonaSet = !aiPersonaName.isNullOrBlank()
-            MenuRow(
-                title = "AI 人设",
-                subtitle = if (aiPersonaSet) "AI: $aiPersonaName" else "未设置",
-                onClick = onPersonaClick,
-                expandableSubtitle = true,
-                subtitleColor = if (aiPersonaSet) {
-                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                if (conversation?.type == ConversationType.AGENT) {
+                    // Agent：人设栏只有一个「选择角色」框（角色 = AI 人设 + 用户人设，点选即用）
+                    val aiName = conversation?.persona?.name
+                    MenuRow(
+                        title = "选择角色",
+                        subtitle = if (!aiName.isNullOrBlank()) "当前：$aiName" else "从角色库点选",
+                        onClick = onPersonaClick,
+                        expandableSubtitle = true,
+                        subtitleColor = if (!aiName.isNullOrBlank()) {
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+                        }
+                    )
                 } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+                    MenuRow(
+                        title = "快速设定",
+                        subtitle = "描述你想要的人设，AI 一次性生成并填入",
+                        onClick = { onPanelSelected(HamburgerPanel.QuickSetup) },
+                        expandableSubtitle = true
+                    )
+                    val aiPersonaName = conversation?.persona?.name
+                    val aiPersonaSet = !aiPersonaName.isNullOrBlank()
+                    MenuRow(
+                        title = "AI 人设",
+                        subtitle = if (aiPersonaSet) "AI: $aiPersonaName" else "未设置",
+                        onClick = onPersonaClick,
+                        expandableSubtitle = true,
+                        subtitleColor = if (aiPersonaSet) {
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+                        }
+                    )
+                    MenuRow(
+                        title = "用户人设",
+                        subtitle = if (conversation?.userPersona?.name?.isNotBlank() == true)
+                            "用户: ${conversation.userPersona.name}" else "未设置",
+                        onClick = { onPanelSelected(HamburgerPanel.UserPersona) },
+                        expandableSubtitle = true
+                    )
+                    MenuRow(
+                        title = "场景设置",
+                        subtitle = if (conversation?.scene?.isNotBlank() == true)
+                            conversation.scene.trim() else "未设置",
+                        onClick = { onPanelSelected(HamburgerPanel.Scene) },
+                        expandableSubtitle = true
+                    )
                 }
-            )
-            MenuRow(
-                title = "用户人设",
-                subtitle = if (conversation?.userPersona?.name?.isNotBlank() == true)
-                    "用户: ${conversation.userPersona.name}" else "未设置",
-                onClick = { onPanelSelected(HamburgerPanel.UserPersona) },
-                expandableSubtitle = true
-            )
-            MenuRow(
-                title = "场景设置",
-                subtitle = if (conversation?.scene?.isNotBlank() == true)
-                    conversation.scene.trim() else "未设置",
-                onClick = { onPanelSelected(HamburgerPanel.Scene) },
-                expandableSubtitle = true
-            )
             // 模型配置
             }
             MenuSectionCard(title = "模型配置") {
