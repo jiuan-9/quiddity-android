@@ -862,7 +862,7 @@ private fun ToolUseShimmerLine(toolName: String) {
         )
         Spacer(modifier = Modifier.size(8.dp))
         Text(
-            text = "$toolName --- ${AgentToolRegistry.actionFor(toolName)}",
+            text = "${AgentToolRegistry.displayName(toolName)} --- ${AgentToolRegistry.actionFor(toolName)}",
             style = MaterialTheme.typography.bodySmall,
             fontWeight = FontWeight.Medium,
             color = colorScheme.onSurfaceVariant

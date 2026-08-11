@@ -58,7 +58,7 @@ object AgentSecurity {
         "MANAGE_EXTERNAL_STORAGE"
     )
 
-    private val APP_OPS_MODES = setOf("允许", "拒绝", "忽略", "恢复默认", "询问")
+    private val APP_OPS_MODES = setOf("allow", "deny", "ignore", "default", "ask")
 
     /** 屏幕文本不可信包装：提示模型这是数据而非指令。 */
     fun wrapUntrustedScreen(text: String): String = "$UNTRUSTED_SCREEN_PREFIX\n$text"
@@ -73,17 +73,17 @@ object AgentSecurity {
     fun isSwitchEnabled(tool: AgentTool, switches: AgentToolSwitches): Boolean {
         val name = tool.name
         val raw = when (name) {
-            "列出应用" -> switches.read_apps
-            "读取屏幕" -> switches.sense_screen
-            "读取通知" -> switches.sense_notifications
-            "用量统计" -> switches.sense_usage
-            "前台应用" -> switches.sense_usage
+            "list_apps" -> switches.read_apps
+            "read_screen" -> switches.sense_screen
+            "read_notifications" -> switches.sense_notifications
+            "usage_stats" -> switches.sense_usage
+            "foreground_app" -> switches.sense_usage
             "read_system" -> switches.read_system
-            "停用应用" -> switches.write_disable
-            "启用应用" -> switches.write_disable
-            "设置应用权限" -> switches.write_appops
-            "强制停止" -> switches.write_force_stop
-            "卸载应用" -> switches.write_uninstall
+            "disable_app" -> switches.write_disable
+            "enable_app" -> switches.write_disable
+            "set_appops" -> switches.write_appops
+            "force_stop" -> switches.write_force_stop
+            "uninstall_app" -> switches.write_uninstall
             else -> return true
         }
         return raw
@@ -108,31 +108,31 @@ object AgentSecurity {
                 continue
             }
             when (name) {
-                "包名" -> {
+                "pkg" -> {
                     val value = (present as? JsonPrimitive)?.content.orEmpty()
                     if (!PKG_REGEX.matches(value)) {
                         return "参数「包名」非法：仅允许字母、数字、点、下划线"
                     }
                 }
-                "操作" -> {
+                "op" -> {
                     val value = (present as? JsonPrimitive)?.content.orEmpty()
                     if (value !in APP_OPS) {
                         return "参数「操作」非法：不在支持的操作白名单内"
                     }
                 }
-                "模式" -> {
+                "mode" -> {
                     val value = (present as? JsonPrimitive)?.content.orEmpty()
                     if (value !in APP_OPS_MODES) {
                         return "参数「模式」非法：仅允许 允许 / 拒绝 / 忽略 / 恢复默认 / 询问"
                     }
                 }
-                "最大字数" -> {
+                "maxChars" -> {
                     val num = (present as? JsonPrimitive)?.content?.toIntOrNull()
                     if (num == null || num <= 0) {
                         return "参数「最大字数」必须为正整数"
                     }
                 }
-                "天数" -> {
+                "days" -> {
                     val num = (present as? JsonPrimitive)?.content?.toIntOrNull()
                     if (num == null || num <= 0 || num > 90) {
                         return "参数「天数」必须为一到九十的整数"
@@ -150,7 +150,7 @@ object AgentSecurity {
      */
     fun whitelistGate(tool: AgentTool, args: JsonObject, whitelist: Set<String>): String? {
         if (tool.level != AgentPermissionLevel.ADVANCED) return null
-        val pkg = (args["包名"] as? JsonPrimitive)?.content.orEmpty()
+        val pkg = (args["pkg"] as? JsonPrimitive)?.content.orEmpty()
         if (pkg !in whitelist) {
             return "拒绝执行：$pkg 不在白名单内，请先在 Agent 设置中添加"
         }
@@ -205,7 +205,7 @@ object AgentSecurity {
     }
 
     private fun confirmed(args: JsonObject): Boolean =
-        (args["已确认"] as? JsonPrimitive)?.content?.toBooleanStrictOrNull() == true
+        (args["confirmed"] as? JsonPrimitive)?.content?.toBooleanStrictOrNull() == true
 
     private suspend fun appendAudit(
         ctx: AgentContext,
