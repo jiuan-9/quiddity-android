@@ -10,8 +10,6 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -40,12 +38,12 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -72,15 +70,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.quiddity.app.data.model.Message
-import com.quiddity.app.data.model.Persona
 import com.quiddity.app.data.model.Role
-import com.quiddity.app.di.ServiceLocator
 import com.quiddity.app.ui.components.AiAvatar
 import com.quiddity.app.ui.chat.ChatViewModel
 import com.quiddity.app.ui.chat.components.ChatInputBar
+import com.quiddity.app.ui.chat.components.HamburgerMenu
 import com.quiddity.app.ui.chat.components.StreamingCursor
 import com.quiddity.app.ui.chat.components.TypingIndicator
-import com.quiddity.app.ui.chat.components.panels.PersonaPanel
 import com.quiddity.app.ui.settings.SettingsViewModel
 import com.quiddity.app.ui.theme.Motion
 import com.quiddity.app.util.DateUtils
@@ -118,7 +114,7 @@ import kotlinx.coroutines.launch
  *
  * - 用户消息右对齐、AI 消息左对齐，时间戳小号灰色；
  * - Markdown 行内样式与代码块保留，但不套气泡容器；
- * - 汉堡菜单仅保留人设卡（复用 [PersonaPanel]），模型/上下文跟随全局；
+ * - 汉堡菜单与私聊/群聊同一套 [HamburgerMenu]（会话设置/人设/模型配置）；
  * - 输入栏复用 [ChatInputBar]。
  */
 @Composable
@@ -135,7 +131,8 @@ fun AgentChatScreen(
     val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val listState = rememberLazyListState()
-    var showPersona by rememberSaveable { mutableStateOf(false) }
+    var showHamburger by rememberSaveable { mutableStateOf(false) }
+    val menuAlphaState = remember { mutableFloatStateOf(1f) }
     // 会话打开时刻：只有此后新到达的消息播放入场动画（历史消息滚动回来不重放）
     val openedAtMs = rememberSaveable { System.currentTimeMillis() }
 
@@ -155,8 +152,8 @@ fun AgentChatScreen(
         if (messages.any { !it.isNotice }) listState.animateScrollToItem(0)
     }
 
-    BackHandler(enabled = showPersona) {
-        showPersona = false
+    BackHandler(enabled = showHamburger) {
+        showHamburger = false
     }
 
     Column(
@@ -209,7 +206,7 @@ fun AgentChatScreen(
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
-                        onClick = { showPersona = true }
+                        onClick = { showHamburger = true }
                     ),
                 contentAlignment = Alignment.Center
             ) {
@@ -330,54 +327,19 @@ fun AgentChatScreen(
         )
     }
 
-    // ===== 汉堡菜单：仅人设卡（复用 PersonaPanel） =====
-    AnimatedVisibility(
-        visible = showPersona,
-        enter = slideInHorizontally(
-            initialOffsetX = { it },
-            animationSpec = tween(Motion.DurationPageTransition, easing = Motion.EasingStandard)
-        ) + fadeIn(tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedDecelerate)),
-        exit = slideOutHorizontally(
-            targetOffsetX = { it },
-            animationSpec = tween(Motion.DurationPageTransition, easing = Motion.EasingStandard)
-        ) + fadeOut(tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate))
-    ) {
-        val conv = conversation
-        if (conv != null) {
-            Surface(modifier = Modifier.fillMaxSize()) {
-                PersonaPanel(
-                    initial = conv.persona.ifEmptyDefault(),
-                    ownerId = conv.id,
-                    compileEnabled = conv.compileEnabled,
-                    modelTier = viewModel.resolveCurrentTier(),
-                    catalogManager = ServiceLocator.apiCatalogManager,
-                    onBack = { showPersona = false },
-                    onSave = { persona, compileEnabled ->
-                        viewModel.updatePersona(persona, compileEnabled)
-                        showPersona = false
-                    },
-                    onCompile = { persona, maxTokens -> viewModel.compilePersona(persona, maxTokens) },
-                    onSaveAndExit = { persona, compileEnabled ->
-                        viewModel.updatePersona(persona, compileEnabled)
-                        showPersona = false
-                    },
-                    onAutoSave = { persona, compileEnabled ->
-                        viewModel.updatePersona(persona, compileEnabled)
-                    }
-                )
-            }
+    // ===== 汉堡菜单：与私聊/群聊同一套（会话设置/人设/模型配置） =====
+    HamburgerMenu(
+        visible = showHamburger,
+        menuAlphaState = menuAlphaState,
+        viewModel = viewModel,
+        settingsViewModel = settingsViewModel,
+        onDismiss = { showHamburger = false },
+        onDeleteConversation = {
+            viewModel.deleteCurrentConversation()
+            onBack()
         }
-    }
+    )
 }
-
-private fun Persona.ifEmptyDefault(): Persona =
-    if (name.isBlank() && persona.isBlank() && character.isBlank() && desired.isBlank() &&
-        appearance.isBlank() && worldBackground.isBlank()
-    ) {
-        Persona.Empty
-    } else {
-        this
-    }
 
 /** 单条 Agent 消息：无气泡容器，用户右对齐 / AI 左对齐，时间戳小号灰色。 */
 @Composable
