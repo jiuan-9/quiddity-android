@@ -144,7 +144,7 @@ fun BoardGameScreen(
             .imePadding()
     ) {
         BoardTopBar(
-            title = "${session.gameType.displayName} · ${session.opponentName}",
+            title = "${session.gameType.displayName} ${session.board.size}×${session.board.size} · ${session.opponentName}",
             onBack = {
                 if (session.status == BoardStatus.Playing) showExitConfirm = true else onBack()
             },
@@ -284,7 +284,7 @@ fun BoardGameScreen(
         if (showResult) {
             BoardResultDialog(
                 result = result,
-                gameName = session.gameType.displayName,
+                gameName = "${session.gameType.displayName} ${session.board.size}×${session.board.size}",
                 onDismiss = { showResult = false },
                 onRematch = onRematch,
                 onExit = onBack,

@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
@@ -64,6 +65,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -83,6 +85,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import com.quiddity.app.data.model.Character
 import com.quiddity.app.domain.spy.SpyGameState
 import com.quiddity.app.domain.spy.SpyPhase
@@ -116,6 +119,7 @@ fun SpySetupScreen(
 ) {
     BackHandler(onBack = onBack)
     var showRules by remember { mutableStateOf(false) }
+    var showCharacterPicker by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -138,7 +142,11 @@ fun SpySetupScreen(
         SpyEntrance(0) { SpyHeroHeader() }
         Spacer(Modifier.size(14.dp))
         SpyEntrance(1) {
-            SpySetupSeatRow(userAvatarUri = userAvatarUri, llmCharacters = setup.llmCharacters)
+            SpySetupSeatRow(
+                userAvatarUri = userAvatarUri,
+                llmCharacters = setup.llmCharacters,
+                onAddClick = { showCharacterPicker = true }
+            )
         }
         Spacer(Modifier.size(14.dp))
         SpyEntrance(2) {
@@ -215,6 +223,85 @@ fun SpySetupScreen(
     }
     if (showRules) {
         SpyRulesDialog(onDismiss = { showRules = false })
+    }
+    if (showCharacterPicker) {
+        SpyCharacterPickerDialog(
+            characters = characters,
+            selectedIds = setup.llmCharacters.mapTo(mutableSetOf()) { it.id },
+            onPick = { character ->
+                showCharacterPicker = false
+                onToggleLlm(character)
+            },
+            onDismiss = { showCharacterPicker = false }
+        )
+    }
+}
+
+@Composable
+private fun SpyCharacterPickerDialog(
+    characters: List<Character>,
+    selectedIds: Set<String>,
+    onPick: (Character) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val available = characters.filter { it.id !in selectedIds }
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            tonalElevation = 8.dp
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 560.dp)
+                    .padding(horizontal = 20.dp, vertical = 18.dp)
+            ) {
+                Text(
+                    text = "选择 LLM 角色",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(Modifier.size(4.dp))
+                Text(
+                    text = if (available.isEmpty()) {
+                        if (characters.isEmpty()) "角色库为空，请先到主应用创建角色"
+                        else "可选角色已全部加入（$MAX_LLM/$MAX_LLM）"
+                    } else {
+                        "点击角色卡即可加入牌局（已选 ${selectedIds.size}/$MAX_LLM）"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.size(14.dp))
+                if (available.isEmpty()) {
+                    EmptyCharactersCard()
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.weight(1f, fill = false),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        items(available, key = { it.id }) { character ->
+                            SpySelectCard(
+                                title = character.persona.name.ifBlank { "未命名角色" },
+                                subtitle = character.persona.character.ifBlank { "点击加入牌局" },
+                                avatarUri = character.aiAvatarUri ?: character.persona.aiAvatarUri,
+                                selected = false,
+                                enabled = true,
+                                onClick = { onPick(character) }
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.size(14.dp))
+                TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.align(Alignment.End)
+                ) {
+                    Text("取消")
+                }
+            }
+        }
     }
 }
 

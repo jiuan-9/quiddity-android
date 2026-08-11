@@ -3,8 +3,8 @@ package com.quiddity.app.domain.board
 /*
  * 棋盘对局领域层（纯 Kotlin，无 Android 依赖，可单测）。
  *
- * - 五子棋：15×15，先连成五子者胜。
- * - 围棋：9×9 简化规则——提子、禁着（自杀）、位置超 ko（棋盘全局面指纹去重）、
+ * - 五子棋：默认 15×15，先连成五子者胜。
+ * - 围棋：默认 19×19 简化规则——提子、禁着（自杀）、位置超 ko（棋盘全局面指纹去重）、
  *   停一手（双方连停结束）、认输；结束用简化数子计分（黑子+黑空 vs 白子+白空+贴目）。
  */
 
@@ -29,10 +29,10 @@ enum class Stone(val code: Int, val label: String) {
     }
 }
 
-/** 棋种：五子棋 / 围棋（含棋盘尺寸）。 */
-enum class BoardGameType(val size: Int, val displayName: String) {
-    GOMOKU(15, "五子棋"),
-    GO(9, "围棋");
+/** 棋种：五子棋 / 围棋（含默认棋盘尺寸，对局尺寸可自选）。 */
+enum class BoardGameType(val displayName: String, val defaultSize: Int) {
+    GOMOKU("五子棋", 15),
+    GO("围棋", 19);
 
     val isGo: Boolean get() = this == GO
 }
@@ -84,7 +84,8 @@ data class GoScore(val black: Double, val white: Double, val winner: Stone?)
  */
 data class BoardState(
     val gameType: BoardGameType,
-    val grid: List<Int> = List(gameType.size * gameType.size) { Stone.EMPTY.code },
+    val size: Int = gameType.defaultSize,
+    val grid: List<Int> = List(size * size) { Stone.EMPTY.code },
     val current: Stone = Stone.BLACK,
     val lastMove: Move? = null,
     val consecutivePasses: Int = 0,
@@ -94,9 +95,6 @@ data class BoardState(
     val winner: Stone? = null,
     val endReason: String = ""
 ) {
-
-    val size: Int get() = gameType.size
-
     fun stoneAt(row: Int, col: Int): Stone {
         if (row !in 0 until size || col !in 0 until size) return Stone.EMPTY
         return Stone.fromCode(grid[row * size + col])
