@@ -356,7 +356,7 @@ class ApiCatalogManager(
      */
     val providers: List<Provider> = listOf(
         Provider(
-            "alibaba", "阿里云（通义千问）\nAlibaba Qwen",
+            "alibaba", "通义千问",
             "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
             "https://dashscope.aliyun.com",
             listOf(
@@ -370,7 +370,7 @@ class ApiCatalogManager(
             )
         ),
         Provider(
-            "baidu", "百度（文心一言）\nBaidu ERNIE",
+            "baidu", "文心一言",
             "https://qianfan.baidubce.com/v2/chat/completions",
             "https://qianfan.cloud.baidu.com",
             listOf(
@@ -381,7 +381,7 @@ class ApiCatalogManager(
             )
         ),
         Provider(
-            "siliconflow", "硅基流动（聚合平台）\nSiliconFlow",
+            "siliconflow", "硅基流动",
             "https://api.siliconflow.cn/v1/chat/completions",
             "https://cloud.siliconflow.cn",
             listOf(
@@ -400,7 +400,7 @@ class ApiCatalogManager(
             )
         ),
         Provider(
-            "stepfun", "阶跃星辰\nStepFun",
+            "stepfun", "阶跃星辰",
             "https://api.stepfun.com/v1/chat/completions",
             "https://platform.stepfun.com",
             listOf(
@@ -409,7 +409,7 @@ class ApiCatalogManager(
             )
         ),
         Provider(
-            "iflytek", "科大讯飞（星火）\niFlytek Spark",
+            "iflytek", "讯飞星火",
             "https://spark-api-open.xf-yun.com/v1/chat/completions",
             "https://xinghuo.xfyun.cn",
             listOf(
@@ -421,7 +421,7 @@ class ApiCatalogManager(
             )
         ),
         Provider(
-            "minimax", "MiniMax（海螺AI）",
+            "minimax", "MiniMax",
             "https://api.minimax.chat/v1/openai/chat/completions",
             "https://platform.minimaxi.com",
             listOf(
@@ -432,7 +432,7 @@ class ApiCatalogManager(
             )
         ),
         Provider(
-            "deepseek", "深度求索\nDeepSeek",
+            "deepseek", "DeepSeek",
             "https://api.deepseek.com/v1/chat/completions",
             "https://platform.deepseek.com",
             responsesUrl = QuiddityConstants.DEEPSEEK_RESPONSES_URL,
@@ -442,7 +442,7 @@ class ApiCatalogManager(
             )
         ),
         Provider(
-            "tencent", "腾讯（混元）\nTencent Hunyuan",
+            "tencent", "腾讯混元",
             "https://api.hunyuan.cloud.tencent.com/v1/chat/completions",
             "https://console.cloud.tencent.com/hunyuan",
             listOf(
@@ -451,7 +451,7 @@ class ApiCatalogManager(
             )
         ),
         Provider(
-            "moonshot", "月之暗面\nMoonshot Kimi",
+            "moonshot", "Kimi",
             "https://api.moonshot.cn/v1/chat/completions",
             "https://platform.moonshot.cn",
             listOf(
@@ -462,7 +462,7 @@ class ApiCatalogManager(
             )
         ),
         Provider(
-            "bytedance", "字节跳动（豆包）\nByteDance Doubao",
+            "bytedance", "豆包",
             "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
             "https://console.volcengine.com/ark",
             listOf(
@@ -475,7 +475,7 @@ class ApiCatalogManager(
             )
         ),
         Provider(
-            "zhipu", "智谱\nZhipu GLM",
+            "zhipu", "智谱",
             "https://open.bigmodel.cn/api/paas/v4/chat/completions",
             "https://open.bigmodel.cn",
             listOf(

@@ -32,8 +32,6 @@ import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -127,12 +125,8 @@ fun ApiEditForm(
     }
     // 安全规则：密钥明文仅存在于组合内存（remember），不进 rememberSaveable，避免进程回收后落盘
     var apiKey by remember { mutableStateOf(initial?.apiKey ?: "") }
-    // 最高温度（可选）：留空 = 不限制（按全局 2.0）；部分模型仅支持 0～1.0
-    var maxTemperatureInput by rememberSaveable(initial?.maxTemperature) {
-        mutableStateOf(initial?.maxTemperature?.toString() ?: "")
-    }
-    var providerMenuExpanded by remember { mutableStateOf(false) }
-    var modelMenuExpanded by remember { mutableStateOf(false) }
+    var providerPickerVisible by remember { mutableStateOf(false) }
+    var modelPickerVisible by remember { mutableStateOf(false) }
     // 新增时 Key 可见（鼓励用户核对），编辑时默认隐藏
     var keyVisible by rememberSaveable { mutableStateOf(initial == null) }
     var testing by remember { mutableStateOf(false) }
@@ -175,71 +169,10 @@ fun ApiEditForm(
 
         // 服务商选择
         FieldLabel("服务商")
-        Box {
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) { providerMenuExpanded = true },
-                shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerLow
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = selectedProvider.name.replace('\n', ' '),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Icon(
-                        imageVector = Icons.Filled.ArrowDropDown,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-            DropdownMenu(
-                expanded = providerMenuExpanded,
-                onDismissRequest = { providerMenuExpanded = false }
-            ) {
-                // 自定义服务商与预设服务商之间加入分隔，避免混淆。
-                val customIndex = providers.indexOfLast { it.id == "custom" }
-                providers.forEachIndexed { index, provider ->
-                    if (index == customIndex && index > 0) {
-                        HorizontalDivider(
-                            thickness = 1.dp,
-                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-                        )
-                    }
-                    val isCustom = provider.id == "custom"
-                    DropdownMenuItem(
-                        text = {
-                            Text(
-                                text = provider.name.replace('\n', ' '),
-                                color = if (isCustom) {
-                                    MaterialTheme.colorScheme.primary
-                                } else {
-                                    MaterialTheme.colorScheme.onSurface
-                                }
-                            )
-                        },
-                        onClick = {
-                            selectedProviderId = provider.id
-                            apiUrl = provider.defaultUrl
-                            apiModel = if (provider.id == "custom") "" else provider.models.firstOrNull().orEmpty()
-                            providerMenuExpanded = false
-                        }
-                    )
-                }
-            }
-        }
+        ApiOptionField(
+            text = selectedProvider.name,
+            onClick = { providerPickerVisible = true }
+        )
 
         QuiddityTextField(
             value = name,
@@ -313,65 +246,12 @@ fun ApiEditForm(
             )
         } else {
             FieldLabel("模型")
-            Box {
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null
-                        ) { modelMenuExpanded = true },
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerLow
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = apiModel.ifEmpty { "请选择模型" },
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = if (apiModel.isEmpty())
-                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                            else MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Icon(
-                            imageVector = Icons.Filled.ArrowDropDown,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-                DropdownMenu(
-                    expanded = modelMenuExpanded,
-                    onDismissRequest = { modelMenuExpanded = false }
-                ) {
-                    selectedProvider.models.forEach { m ->
-                        DropdownMenuItem(
-                            text = { Text(m) },
-                            onClick = {
-                                apiModel = m
-                                modelMenuExpanded = false
-                            }
-                        )
-                    }
-                }
-            }
+            ApiOptionField(
+                text = apiModel.ifEmpty { "请选择模型" },
+                placeholder = apiModel.isEmpty(),
+                onClick = { modelPickerVisible = true }
+            )
         }
-
-        // 最高温度（可选）：部分模型仅支持 0～1.0，超出范围会被服务端拒绝
-        OutlinedTextField(
-            value = maxTemperatureInput,
-            onValueChange = { maxTemperatureInput = it.filter { c -> c.isDigit() || c == '.' } },
-            label = { Text("最高温度（可选）") },
-            placeholder = { Text("默认 2.0，如 1.0") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(modifier = Modifier.size(12.dp))
 
         // 接口密钥（带可见切换；编辑时可留空保持原密钥）
         OutlinedTextField(
@@ -526,7 +406,6 @@ fun ApiEditForm(
                                 apiUrl = apiUrl.trim(),
                                 apiModel = apiModel.trim(),
                                 apiKey = apiKey.trim(),
-                                maxTemperature = parseMaxTemperatureInput(maxTemperatureInput)
                             )
                         )
                     }
@@ -540,6 +419,36 @@ fun ApiEditForm(
         ApiKeyHelpDialog(
             catalogManager = catalogManager,
             onDismiss = { showHelpDialog = false }
+        )
+    }
+
+    if (providerPickerVisible) {
+        ApiOptionPickerDialog(
+            title = "选择服务商",
+            options = providers.map { PickerOption(it.id, it.name) },
+            selectedId = selectedProviderId,
+            onSelect = { providerId ->
+                selectedProviderId = providerId
+                val provider = providers.firstOrNull { it.id == providerId }
+                    ?: catalogManager.customProvider
+                apiUrl = provider.defaultUrl
+                apiModel = if (provider.id == "custom") "" else provider.models.firstOrNull().orEmpty()
+                providerPickerVisible = false
+            },
+            onDismiss = { providerPickerVisible = false }
+        )
+    }
+
+    if (modelPickerVisible) {
+        ApiOptionPickerDialog(
+            title = "选择模型",
+            options = selectedProvider.models.map { PickerOption(it, it) },
+            selectedId = apiModel,
+            onSelect = { model ->
+                apiModel = model
+                modelPickerVisible = false
+            },
+            onDismiss = { modelPickerVisible = false }
         )
     }
 }
@@ -556,15 +465,129 @@ data class ApiCatalogEditFormState(
     val maxTemperature: Double? = null
 )
 
-/** 解析"最高温度"输入：空白返回 null（不限制），非法/超范围按 0～2 钳制。 */
-private fun parseMaxTemperatureInput(raw: String): Double? {
-    val trimmed = raw.trim()
-    if (trimmed.isEmpty()) return null
-    val parsed = trimmed.toDoubleOrNull() ?: return null
-    return parsed.coerceIn(
-        com.quiddity.app.util.QuiddityConstants.MIN_TEMPERATURE,
-        com.quiddity.app.util.QuiddityConstants.MAX_TEMPERATURE
-    )
+@Composable
+private fun ApiOptionField(
+    text: String,
+    placeholder: Boolean = false,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick
+            ),
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = text,
+                style = MaterialTheme.typography.bodyLarge,
+                color = if (placeholder) {
+                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
+                modifier = Modifier.weight(1f)
+            )
+            Icon(
+                imageVector = Icons.Filled.ArrowDropDown,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+private data class PickerOption(val id: String, val label: String)
+
+/** 选择弹窗：选项列表每项之间用横线分割，当前选中项高亮并打勾。 */
+@Composable
+private fun ApiOptionPickerDialog(
+    title: String,
+    options: List<PickerOption>,
+    selectedId: String,
+    onSelect: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp)
+                .heightIn(max = 460.dp),
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 4.dp
+        ) {
+            Column(modifier = Modifier.padding(vertical = 12.dp)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp)
+                )
+                HorizontalDivider(
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.22f)
+                )
+                LazyColumn(modifier = Modifier.heightIn(max = 380.dp)) {
+                    options.forEachIndexed { index, option ->
+                        item(key = option.id) {
+                            val selected = option.id == selectedId
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        indication = null
+                                    ) { onSelect(option.id) }
+                                    .padding(horizontal = 20.dp, vertical = 14.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = option.label,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                    color = if (selected) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurface
+                                    },
+                                    modifier = Modifier.weight(1f)
+                                )
+                                if (selected) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Check,
+                                        contentDescription = "已选择",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            if (index < options.lastIndex) {
+                                HorizontalDivider(
+                                    modifier = Modifier.padding(horizontal = 20.dp),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.22f)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
