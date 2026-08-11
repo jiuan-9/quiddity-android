@@ -540,7 +540,7 @@ private fun ApiOptionPickerDialog(
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp)
                 )
                 HorizontalDivider(
-                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.22f)
                 )
                 LazyColumn(modifier = Modifier.heightIn(max = 380.dp)) {
                     options.forEachIndexed { index, option ->
@@ -579,7 +579,7 @@ private fun ApiOptionPickerDialog(
                             if (index < options.lastIndex) {
                                 HorizontalDivider(
                                     modifier = Modifier.padding(horizontal = 20.dp),
-                                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.22f)
                                 )
                             }
                         }
