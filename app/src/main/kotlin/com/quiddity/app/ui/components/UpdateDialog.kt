@@ -200,19 +200,13 @@ fun UpdateDialog(
                 if (result.releaseNotes.isNotBlank()) {
                     Spacer(modifier = Modifier.size(12.dp))
                     Surface(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(160.dp),
                         shape = RoundedCornerShape(12.dp),
                         color = MaterialTheme.colorScheme.surfaceContainerLow
                     ) {
-                        Text(
-                            text = result.releaseNotes,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier
-                                .padding(12.dp)
-                                .verticalScroll(rememberScrollState())
-                                .height(maxOf(80.dp, 0.dp))
-                        )
+                        ReleaseNotesContent(releaseNotes = result.releaseNotes)
                     }
                 }
 
@@ -464,6 +458,73 @@ fun UpdateDialog(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/** 更新说明条目。 */
+internal sealed interface ReleaseNoteItem {
+    data class Section(val title: String) : ReleaseNoteItem
+    data class Bullet(val text: String) : ReleaseNoteItem
+    data class Plain(val text: String) : ReleaseNoteItem
+}
+
+/** 把远程更新说明按行拆成「小节标题 / 列表项 / 正文」，空行忽略。 */
+internal fun parseReleaseNotes(raw: String): List<ReleaseNoteItem> {
+    val items = mutableListOf<ReleaseNoteItem>()
+    raw.lineSequence().forEach { rawLine ->
+        val line = rawLine.trim()
+        when {
+            line.startsWith("**") -> {
+                val title = line.trim('*').trim()
+                if (title.isNotBlank()) items += ReleaseNoteItem.Section(title)
+            }
+            line.startsWith("- ") || line.startsWith("• ") ->
+                items += ReleaseNoteItem.Bullet(line.removePrefix("- ").removePrefix("• "))
+            line.isNotBlank() -> items += ReleaseNoteItem.Plain(line)
+        }
+    }
+    return items
+}
+
+/** 更新内容展示：小节标题 + 列表项，超过高度可上下滚动。 */
+@Composable
+private fun ReleaseNotesContent(releaseNotes: String) {
+    val items = remember(releaseNotes) { parseReleaseNotes(releaseNotes) }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        items.forEach { item ->
+            when (item) {
+                is ReleaseNoteItem.Section -> Text(
+                    text = item.title,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                is ReleaseNoteItem.Bullet -> Row {
+                    Text(
+                        text = "•",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.size(6.dp))
+                    Text(
+                        text = item.text,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                is ReleaseNoteItem.Plain -> Text(
+                    text = item.text,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }
