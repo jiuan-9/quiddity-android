@@ -310,27 +310,34 @@ class ConversationRepository(
     /**
      * 删除级联（角色删除 / 会话删除）：
      *
-     * - 被删会话绑定的角色卡从角色库移除，不再残存；
-     * - 仍引用该角色卡的其他会话（如 Agent 会话）重置为默认人设（无人设），
-     *   避免悬空引用影响角色卡数据。
+     * - 角色卡的「所有者」是创建它的私聊（SOLO）会话：仅当所有者被删除时，
+     *   才从角色库移除该卡，并把仍引用它的其他会话（如 Agent 会话）重置为
+     *   默认人设（无人设），避免悬空引用影响角色卡数据；
+     * - 仅删除消费方（如 Agent 会话）时保留角色卡，不影响私聊所有者的引用。
      */
     private suspend fun cascadeDeleteCharacters(deleted: List<Conversation>) {
         val removedIds = deleted.mapNotNull { it.characterId }.toSet()
         if (removedIds.isEmpty()) return
         val repo = characterRepository ?: return
-        removedIds.forEach { repo.deleteCharacter(it) }
-        store.conversations.value
-            .filter { it.characterId in removedIds }
-            .forEach { conv ->
-                store.updateConversation(
-                    conv.copy(
-                        characterId = null,
-                        persona = Persona.Empty,
-                        userPersona = UserPersona.Empty,
-                        memory = ""
-                    )
-                )
+        val remaining = store.conversations.value
+        removedIds.forEach { id ->
+            val ownerDeleted = deleted.any { it.type == ConversationType.SOLO && it.characterId == id }
+            if (ownerDeleted) {
+                repo.deleteCharacter(id)
+                remaining
+                    .filter { it.characterId == id }
+                    .forEach { conv ->
+                        store.updateConversation(
+                            conv.copy(
+                                characterId = null,
+                                persona = Persona.Empty,
+                                userPersona = UserPersona.Empty,
+                                memory = ""
+                            )
+                        )
+                    }
             }
+        }
     }
 
     suspend fun appendMessage(message: Message): Boolean = store.appendMessage(message)
