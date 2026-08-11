@@ -641,7 +641,7 @@ private fun AgentMessageLine(
     }
 }
 
-/** Agent 消息正文：Markdown 行内样式 + 代码块 + 列表专用文本框，无气泡容器。 */
+/** Agent 消息正文：Markdown 行内样式 + 代码块；仅列表部分进专用方框，其余正文保持普通样式。 */
 @Composable
 private fun AgentMarkdownText(
     content: String,
@@ -650,76 +650,23 @@ private fun AgentMarkdownText(
     color: Color
 ) {
     val colorScheme = MaterialTheme.colorScheme
-    val parsed by androidx.compose.runtime.produceState(
-        initialValue = MarkdownParser.ParsedMarkdown(content, emptyList()),
-        key1 = content
-    ) {
-        // 流式期间也渲染 Markdown，避免 ** 等标记原样显示（如 08:03 那条回复）
-        value = if (content.isEmpty()) {
-            MarkdownParser.ParsedMarkdown("", emptyList())
-        } else {
-            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-                MarkdownParser.parseMarkdown(content)
-            }
-        }
-    }
-    val annotated = remember(parsed, color) {
-        agentApplyMarkdownStyles(parsed, color, colorScheme.primary, colorScheme.onSurfaceVariant)
-    }
     val blocks = remember(content) { MarkdownParser.parse(content) }
-    // 列表判定：包含 - / * / + / • / 数字序号 开头的行 → 放入专用纯文本框
-    val isListLike = remember(content) {
-        content.lines().any { line ->
-            val t = line.trim()
-            t.isNotEmpty() && (
-                t.startsWith("- ") || t.startsWith("* ") || t.startsWith("+ ") ||
-                    t.startsWith("• ") || Regex("^\\d+[.)] ").containsMatchIn(t)
-                )
-        }
-    }
     if (markdownEnabled) {
-        val rendered: @Composable () -> Unit = {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                blocks.forEach { block ->
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            blocks.forEach { block ->
                 when (block) {
-                    is MarkdownParser.Block.Text -> {
-                        Text(
-                            text = annotated,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = color
-                        )
-                    }
-                    is MarkdownParser.Block.CodeBlock -> {
+                    is MarkdownParser.Block.Text ->
+                        AgentMixedText(block.content, color)
+                    is MarkdownParser.Block.CodeBlock ->
                         AgentCodeBlock(language = block.language, code = block.code)
-                    }
                 }
             }
-                if (isStreaming && content.isNotEmpty()) {
-                    Row(verticalAlignment = Alignment.Bottom) {
-                        Spacer(modifier = Modifier.size(2.dp))
-                        StreamingCursor()
-                    }
+            if (isStreaming && content.isNotEmpty()) {
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Spacer(modifier = Modifier.size(2.dp))
+                    StreamingCursor()
                 }
             }
-        }
-        if (isListLike) {
-            // 列表内容放入专用纯文本框：细边框 + 很淡背景 + 小圆角（方框样式，非聊天气泡）
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(colorScheme.surfaceVariant.copy(alpha = 0.32f))
-                    .border(
-                        width = 1.dp,
-                        color = colorScheme.onSurfaceVariant.copy(alpha = 0.12f),
-                        shape = RoundedCornerShape(8.dp)
-                    )
-                    .padding(horizontal = 12.dp, vertical = 10.dp)
-            ) {
-                rendered()
-            }
-        } else {
-            rendered()
         }
     } else {
         Row(verticalAlignment = Alignment.Bottom) {
@@ -868,6 +815,75 @@ private fun AgentActionButton(
             modifier = Modifier.size(17.dp)
         )
     }
+}
+
+/** 文本块按行拆分：连续列表行合成“列表段”进方框，其余行合成“正文段”普通显示。 */
+@Composable
+private fun AgentMixedText(content: String, baseColor: Color) {
+    val colorScheme = MaterialTheme.colorScheme
+    val segments = remember(content) { splitListSegments(content) }
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        segments.forEach { (isList, text) ->
+            val parsed = remember(text) { MarkdownParser.parseMarkdown(text) }
+            val styled = remember(parsed, baseColor) {
+                agentApplyMarkdownStyles(
+                    parsed,
+                    baseColor,
+                    colorScheme.primary,
+                    colorScheme.onSurfaceVariant
+                )
+            }
+            if (isList) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(colorScheme.surfaceVariant.copy(alpha = 0.32f))
+                        .border(
+                            width = 1.dp,
+                            color = colorScheme.onSurfaceVariant.copy(alpha = 0.12f),
+                            shape = RoundedCornerShape(8.dp)
+                        )
+                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                ) {
+                    Text(
+                        text = styled,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = baseColor
+                    )
+                }
+            } else {
+                Text(
+                    text = styled,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = baseColor
+                )
+            }
+        }
+    }
+}
+
+/** 把文本拆成 (是否列表段, 文本) 序列：列表 = 连续以 - / * / + / • / 数字序号 开头的行。 */
+private fun splitListSegments(content: String): List<Pair<Boolean, String>> {
+    if (content.isBlank()) return emptyList()
+    val segments = mutableListOf<Pair<Boolean, MutableList<String>>>()
+    content.lines().forEach { rawLine ->
+        val line = rawLine.trimEnd()
+        val t = line.trim()
+        val isList = t.isNotEmpty() && (
+            t.startsWith("- ") || t.startsWith("* ") || t.startsWith("+ ") ||
+                t.startsWith("• ") || Regex("^\\d+[.)] ").containsMatchIn(t)
+            )
+        val last = segments.lastOrNull()
+        if (last != null && last.first == isList) {
+            last.second.add(line)
+        } else {
+            segments.add(isList to mutableListOf(line))
+        }
+    }
+    return segments.map { (isList, lines) ->
+        isList to lines.joinToString("\n").trim()
+    }.filter { it.second.isNotEmpty() }
 }
 
 /** 工具使用报告条：图标 + 工具名 + 正在做的事；滑动高亮只作用于文字本身。 */
