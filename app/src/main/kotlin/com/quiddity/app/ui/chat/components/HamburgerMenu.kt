@@ -167,7 +167,9 @@ fun HamburgerMenu(
     onDismiss: () -> Unit,
     // 群聊菜单「删除该会话」确认后回调（由 ChatScreen 执行删除并返回首页）
     onDeleteConversation: () -> Unit = {},
-    onJumpToMessage: ((String) -> Unit)? = null
+    onJumpToMessage: ((String) -> Unit)? = null,
+    // Agent 模式：AI 人设行改为「选择角色」（角色库点选），不进入 PersonaPanel 编辑表单
+    onPersonaOverride: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -507,6 +509,8 @@ fun HamburgerMenu(
                                     currentTier = currentTier,
                                     settings = settings,
                                     onPanelSelected = { currentPanel = it },
+                                    onPersonaClick = onPersonaOverride
+                                        ?: { currentPanel = HamburgerPanel.Persona },
                                     onDismiss = onDismiss,
                                     darkMode = settings.darkMode,
                                     onDarkModeChange = { settingsViewModel.setDarkMode(it) },
@@ -1509,6 +1513,7 @@ private fun MainMenuContent(
     currentTier: com.quiddity.app.domain.ApiCatalogManager.ModelTier,
     settings: com.quiddity.app.data.model.AppSettings,
     onPanelSelected: (HamburgerPanel) -> Unit,
+    onPersonaClick: () -> Unit,
     onDismiss: () -> Unit,
     darkMode: Boolean,
     onDarkModeChange: (Boolean) -> Unit,
@@ -1609,7 +1614,7 @@ private fun MainMenuContent(
             MenuRow(
                 title = "AI 人设",
                 subtitle = if (aiPersonaSet) "AI: $aiPersonaName" else "未设置",
-                onClick = { onPanelSelected(HamburgerPanel.Persona) },
+                onClick = onPersonaClick,
                 expandableSubtitle = true,
                 subtitleColor = if (aiPersonaSet) {
                     MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)

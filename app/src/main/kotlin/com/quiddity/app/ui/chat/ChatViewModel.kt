@@ -1186,7 +1186,7 @@ class ChatViewModel(
         }
     }
 
-    /** 选择角色库角色应用到当前会话（写入角色引用与人设副本，标题跟随角色名）。 */
+    /** 选择角色库角色应用到当前会话：写入 AI 人设 + 用户人设 + 固定记忆 + 角色引用，标题跟随角色名。 */
     fun bindCharacter(character: com.quiddity.app.data.model.Character) {
         viewModelScope.launch {
             val conv = conversation.value ?: return@launch
@@ -1198,6 +1198,8 @@ class ChatViewModel(
             conversationRepository.updateConversation(
                 conv.copy(
                     persona = character.persona.copy(compiledPersona = null),
+                    userPersona = character.userPersona,
+                    memory = character.memory,
                     characterId = character.id,
                     title = newTitle
                 )

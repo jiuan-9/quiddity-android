@@ -50,12 +50,10 @@ import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -104,6 +102,7 @@ import com.quiddity.app.ui.components.AiAvatar
 import com.quiddity.app.ui.chat.ChatViewModel
 import com.quiddity.app.ui.chat.OcrState
 import com.quiddity.app.ui.chat.components.ChatInputBar
+import com.quiddity.app.ui.chat.components.HamburgerMenu
 import com.quiddity.app.ui.chat.components.StreamingCursor
 import com.quiddity.app.ui.chat.components.TypingIndicator
 import com.quiddity.app.ui.chat.gesture.ChatDragController
@@ -167,7 +166,8 @@ fun AgentChatScreen(
     val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val listState = rememberLazyListState()
-    var showPersona by rememberSaveable { mutableStateOf(false) }
+    var showHamburger by rememberSaveable { mutableStateOf(false) }
+    var showCharacterPicker by rememberSaveable { mutableStateOf(false) }
     // 会话打开时刻：只有此后新到达的消息播放入场动画（历史消息滚动回来不重放）
     val openedAtMs = rememberSaveable { System.currentTimeMillis() }
 
@@ -209,7 +209,7 @@ fun AgentChatScreen(
             scope = scope,
             screenWidthPx = screenWidthPx,
             onBack = onBack,
-            onMenuVisibilityChange = { open -> showPersona = open }
+            onMenuVisibilityChange = { open -> showHamburger = open }
         )
     }
 
@@ -229,11 +229,11 @@ fun AgentChatScreen(
         if (messages.any { !it.isNotice }) listState.animateScrollToItem(0)
     }
 
-    BackHandler(enabled = showPersona) {
-        showPersona = false
+    BackHandler(enabled = showCharacterPicker) {
+        showCharacterPicker = false
     }
 
-    BackHandler(enabled = !isGenerating && !showPersona) {
+    BackHandler(enabled = !isGenerating && !showHamburger) {
         dragController.animateBackAndExit()
     }
 
@@ -305,7 +305,7 @@ fun AgentChatScreen(
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
-                            onClick = { showPersona = true }
+                            onClick = { dragController.toggleMenu() }
                         ),
                     contentAlignment = Alignment.Center
                 ) {
@@ -466,9 +466,24 @@ fun AgentChatScreen(
     }
     }
 
-    // ===== 会话内设置：选择角色（角色库点选，与群聊同款角色列表 UI） =====
+    // ===== 会话内设置：与私聊/群聊同一套完整汉堡菜单 =====
+    HamburgerMenu(
+        visible = showHamburger,
+        menuAlphaState = dragController.menuAlphaState,
+        viewModel = viewModel,
+        settingsViewModel = settingsViewModel,
+        onDismiss = { dragController.closeMenu() },
+        onDeleteConversation = {
+            viewModel.deleteCurrentConversation()
+            onBack()
+        },
+        // Agent 的「AI 人设」行 = 选择角色（角色库点选），不进入从零编辑表单
+        onPersonaOverride = { showCharacterPicker = true }
+    )
+
+    // ===== 选择角色浮层（角色库点选） =====
     AnimatedVisibility(
-        visible = showPersona,
+        visible = showCharacterPicker,
         enter = slideInHorizontally(
             initialOffsetX = { it },
             animationSpec = tween(Motion.DurationPageTransition, easing = Motion.EasingStandard)
@@ -481,7 +496,7 @@ fun AgentChatScreen(
         AgentCharacterPicker(
             conversation = conversation,
             viewModel = viewModel,
-            onDismiss = { showPersona = false }
+            onDismiss = { showCharacterPicker = false }
         )
     }
 }
@@ -587,13 +602,13 @@ private fun AgentMessageLine(
                 ) {
                     AgentActionButton(
                         icon = Icons.Filled.ContentCopy,
-                        label = "复制",
+                        contentDescription = "复制",
                         onClick = { onCopy(message.content) }
                     )
                     if (isLatestAi) {
                         AgentActionButton(
                             icon = Icons.Filled.Refresh,
-                            label = "重说",
+                            contentDescription = "重说",
                             onClick = onRegenerate
                         )
                     }
@@ -774,36 +789,29 @@ private fun agentApplyMarkdownStyles(
     return builder
 }
 
-/** AI 消息下方的简单操作按钮（图标 + 文字，无容器）。 */
+/** AI 消息下方的简单操作按钮：仅图标，无文字（与私聊操作一致的轻量样式）。 */
 @Composable
 private fun AgentActionButton(
     icon: ImageVector,
-    label: String,
+    contentDescription: String,
     onClick: () -> Unit
 ) {
-    val color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f)
-    Row(
+    Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
+            .size(32.dp)
+            .clip(RoundedCornerShape(50))
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
                 onClick = onClick
-            )
-            .padding(horizontal = 8.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(3.dp)
+            ),
+        contentAlignment = Alignment.Center
     ) {
         Icon(
             imageVector = icon,
-            contentDescription = null,
-            tint = color,
-            modifier = Modifier.size(13.dp)
-        )
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = color
+            contentDescription = contentDescription,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
+            modifier = Modifier.size(17.dp)
         )
     }
 }
@@ -965,8 +973,16 @@ private fun AgentCharacterPicker(
                         val selected = conversation?.characterId == character.id
                         CharacterSelectRow(
                             name = character.persona.name.ifBlank { "未命名角色" },
-                            subtitle = character.persona.character.ifBlank {
-                                character.persona.persona.ifBlank { "点击选用" }
+                            subtitle = buildString {
+                                val aiDesc = character.persona.character
+                                    .ifBlank { character.persona.persona }
+                                if (aiDesc.isNotBlank()) append(aiDesc)
+                                val userName = character.userPersona.name
+                                if (userName.isNotBlank()) {
+                                    if (isNotEmpty()) append(" · ")
+                                    append("用户：$userName")
+                                }
+                                if (isEmpty()) append("点击选用")
                             },
                             avatarUri = character.aiAvatarUri ?: character.persona.aiAvatarUri,
                             selected = selected,

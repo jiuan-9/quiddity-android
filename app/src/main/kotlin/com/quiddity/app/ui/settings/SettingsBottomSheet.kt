@@ -1110,7 +1110,7 @@ private fun CenterGrabBar(
  * 与内部各行的小圆角框形成层级区分。
  */
 @Composable
-private fun SettingsSectionCard(
+internal fun SettingsSectionCard(
     title: String,
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit
@@ -1234,7 +1234,7 @@ private fun FontSizeRow(
 }
 
 @Composable
-private fun ToggleRow(
+internal fun ToggleRow(
     icon: ImageVector,
     title: String,
     subtitle: String = "",
@@ -1374,7 +1374,7 @@ private fun ExpandableSettingGroup(
 }
 
 @Composable
-private fun ClickableRow(
+internal fun ClickableRow(
     icon: ImageVector,
     title: String,
     subtitle: String = "",
