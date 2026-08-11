@@ -203,7 +203,7 @@ fun AgentSetupGuideSheet(onDismiss: () -> Unit) {
                         }
 
                         item(key = "permissions", contentType = { "section" }) {
-                            AccordionSection(title = "权限开启（屏幕、通知、用量、Shizuku）", defaultExpanded = true) {
+                            AccordionSection(title = "权限开启（屏幕、通知、用量、Shizuku）", defaultExpanded = false) {
                                 PermissionJumpRow(
                                     label = "无障碍（读屏）",
                                     desc = "Agent 读取屏幕文字的前提",
@@ -754,13 +754,6 @@ private fun GuideGrabBar(
             },
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(
-            modifier = Modifier
-                .width(32.dp)
-                .height(4.dp)
-                .clip(RoundedCornerShape(2.dp))
-                .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f))
-        )
         Text(
             text = "权限开启教程",
             style = MaterialTheme.typography.titleMedium,

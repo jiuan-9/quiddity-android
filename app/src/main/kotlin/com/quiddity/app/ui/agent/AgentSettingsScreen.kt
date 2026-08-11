@@ -322,7 +322,7 @@ fun AgentSettingsScreen(
                         item(key = "permissions", contentType = { "section" }) {
                             ExpandableSettingsSection(
                                 title = "权限状态",
-                                defaultExpanded = hasMissingPermissions
+                                defaultExpanded = false
                             ) {
                                 ClickableRow(
                                     icon = Icons.Filled.Visibility,
@@ -440,7 +440,7 @@ fun AgentSettingsScreen(
                         item(key = "tools", contentType = { "section" }) {
                             ExpandableSettingsSection(
                                 title = "工具使用权限",
-                                defaultExpanded = true
+                                defaultExpanded = false
                             ) {
                                 ToggleRow(
                                     icon = Icons.Filled.Visibility,
@@ -851,13 +851,6 @@ private fun AgentSheetGrabBar(
             },
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(
-            modifier = Modifier
-                .width(32.dp)
-                .height(4.dp)
-                .clip(RoundedCornerShape(2.dp))
-                .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f))
-        )
         Text(
             text = "Agent 设置",
             style = MaterialTheme.typography.titleMedium,
