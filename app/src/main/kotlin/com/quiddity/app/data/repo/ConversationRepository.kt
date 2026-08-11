@@ -7,6 +7,7 @@ import com.quiddity.app.data.model.ConversationType
 import com.quiddity.app.data.model.ImportMode
 import com.quiddity.app.data.model.Message
 import com.quiddity.app.data.model.Persona
+import com.quiddity.app.data.model.UserPersona
 import com.quiddity.app.domain.ApiCatalogManager
 import com.quiddity.app.domain.GroupChatRules
 import com.quiddity.app.util.IdGenerator
@@ -144,7 +145,7 @@ class ConversationRepository(
 
     /** 创建指定内容的会话（小应用邀请角色等场景使用）。 */
     suspend fun createConversation(conv: Conversation) {
-        store.createConversation(conv)
+        store.createConversation(syncCharacterFor(conv))
     }
 
     /**
@@ -228,11 +229,18 @@ class ConversationRepository(
     }
 
     /** @return 是否写盘成功（失败仅记录日志，调用方按需提示） */
-    suspend fun updateConversation(conv: Conversation): Boolean =
-        store.updateConversation(conv.copy(updatedAt = System.currentTimeMillis()))
+    suspend fun updateConversation(conv: Conversation): Boolean {
+        val resolved = syncCharacterFor(conv)
+        return store.updateConversation(resolved.copy(updatedAt = System.currentTimeMillis()))
+    }
 
     /** @return 是否写盘成功 */
-    suspend fun deleteConversation(convId: String): Boolean = store.deleteConversation(convId)
+    suspend fun deleteConversation(convId: String): Boolean {
+        val deleted = store.conversations.value.filter { it.id == convId }
+        val ok = store.deleteConversation(convId)
+        if (ok) cascadeDeleteCharacters(deleted)
+        return ok
+    }
 
     /**
      * 批量删除多个会话（多选用）。
@@ -245,7 +253,84 @@ class ConversationRepository(
     /** @return 是否写盘成功 */
     suspend fun deleteConversations(convIds: List<String>): Boolean {
         if (convIds.isEmpty()) return true
-        return store.deleteConversations(convIds)
+        val target = convIds.toSet()
+        val deleted = store.conversations.value.filter { it.id in target }
+        val ok = store.deleteConversations(convIds)
+        if (ok) cascadeDeleteCharacters(deleted)
+        return ok
+    }
+
+    /**
+     * 私聊人设 -> 角色库唯一角色卡（uid）同步。
+     *
+     * - 每个私聊（SOLO）会话只要存在人设内容（AI 人设 / 用户人设 / 固定记忆任一非空），
+     *   就在角色库中维护一张唯一角色卡，id 即 [Conversation.characterId]；
+     * - 群聊、Agent、小应用统一通过 characterId 直接引用这张卡，不再各自内嵌副本；
+     * - 人设内容未变化时不写盘，避免无谓重写。
+     */
+    suspend fun syncCharacterFor(conv: Conversation): Conversation {
+        if (conv.type != ConversationType.SOLO || !hasPersonaContent(conv)) return conv
+        val repo = characterRepository ?: return conv
+        val characterId = conv.characterId?.takeIf { it.isNotBlank() }
+            ?: IdGenerator.newId(IdGenerator.Prefix.CHARACTER)
+        val target = Character(
+            id = characterId,
+            persona = conv.persona,
+            userPersona = conv.userPersona,
+            memory = conv.memory,
+            aiAvatarUri = conv.persona.aiAvatarUri
+        )
+        val existing = repo.getCharacter(characterId)
+        if (existing == target && conv.characterId == characterId) return conv
+        repo.saveCharacter(target)
+        return if (conv.characterId == characterId) conv else conv.copy(characterId = characterId)
+    }
+
+    /** 启动迁移：为已有私聊补齐角色卡引用（历史数据一次性回填）。 */
+    suspend fun syncAllSoloCharacters() {
+        store.conversations.value
+            .filter { it.type == ConversationType.SOLO }
+            .forEach { conv ->
+                val resolved = syncCharacterFor(conv)
+                if (resolved.characterId != conv.characterId) {
+                    store.updateConversation(resolved)
+                }
+            }
+    }
+
+    private fun hasPersonaContent(conv: Conversation): Boolean {
+        val p = conv.persona
+        val u = conv.userPersona
+        return p.name.isNotBlank() || p.desired.isNotBlank() || p.persona.isNotBlank() ||
+            p.character.isNotBlank() || p.appearance.isNotBlank() || p.worldBackground.isNotBlank() ||
+            u.name.isNotBlank() || u.identity.isNotBlank() || u.gender.isNotBlank() ||
+            u.age.isNotBlank() || u.appearance.isNotBlank() || conv.memory.isNotBlank()
+    }
+
+    /**
+     * 删除级联（角色删除 / 会话删除）：
+     *
+     * - 被删会话绑定的角色卡从角色库移除，不再残存；
+     * - 仍引用该角色卡的其他会话（如 Agent 会话）重置为默认人设（无人设），
+     *   避免悬空引用影响角色卡数据。
+     */
+    private suspend fun cascadeDeleteCharacters(deleted: List<Conversation>) {
+        val removedIds = deleted.mapNotNull { it.characterId }.toSet()
+        if (removedIds.isEmpty()) return
+        val repo = characterRepository ?: return
+        removedIds.forEach { repo.deleteCharacter(it) }
+        store.conversations.value
+            .filter { it.characterId in removedIds }
+            .forEach { conv ->
+                store.updateConversation(
+                    conv.copy(
+                        characterId = null,
+                        persona = Persona.Empty,
+                        userPersona = UserPersona.Empty,
+                        memory = ""
+                    )
+                )
+            }
     }
 
     suspend fun appendMessage(message: Message): Boolean = store.appendMessage(message)
@@ -314,12 +399,14 @@ class ConversationRepository(
             ImportMode.REPLACE -> {
                 characterRepository?.replaceCharacters(characters)
                 store.replaceAll(conversations, messages)
+                syncAllSoloCharacters()
             }
             ImportMode.MERGE -> {
                 characterRepository?.mergeCharacters(characters)
                 if (!store.importAll(conversations, messages)) {
                     throw IllegalStateException("合并导入写盘失败")
                 }
+                syncAllSoloCharacters()
             }
             ImportMode.CHARACTERS_ONLY -> {
                 // 只登记 characters，其余不动（3.1）

@@ -1757,12 +1757,15 @@ private fun MainMenuContent(
                 trailingTint = MaterialTheme.colorScheme.primary
             )
             Spacer(modifier = Modifier.size(4.dp))
-            ExportImportCard(
-                title = "人设卡",
-                subtitle = "导出或导入当前会话的人设卡",
-                onExport = onExportPersona,
-                onImport = onImportPersona,
-            )
+            // Agent 模式不提供人设卡导出/导入：人设来自角色库唯一角色卡（uid）直接引用
+            if (conversation?.type != ConversationType.AGENT) {
+                ExportImportCard(
+                    title = "人设卡",
+                    subtitle = "导出或导入当前会话的人设卡",
+                    onExport = onExportPersona,
+                    onImport = onImportPersona,
+                )
+            }
             Spacer(modifier = Modifier.size(4.dp))
             ExportImportCard(
                 title = "对话记录",

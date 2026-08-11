@@ -184,6 +184,8 @@ object ServiceLocator {
                 settingsRepository.migrateLegacyApiKeysIfNeeded()
                 conversationRepository.loadAll()
                 characterRepository.loadAll()
+                // 历史私聊回填角色卡引用：每个私聊人设对应角色库唯一 uid
+                conversationRepository.syncAllSoloCharacters()
                 miniAppStore.load()
                 agentStore.load()
                 // 详见 ConversationStore.migrateDeduplicateMessageIds

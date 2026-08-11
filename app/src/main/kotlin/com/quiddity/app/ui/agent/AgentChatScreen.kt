@@ -25,6 +25,7 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -33,6 +34,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -40,6 +42,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -57,6 +60,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -81,6 +85,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
@@ -171,6 +176,11 @@ fun AgentChatScreen(
     val listState = rememberLazyListState()
     var showHamburger by rememberSaveable { mutableStateOf(false) }
     var showCharacterPicker by rememberSaveable { mutableStateOf(false) }
+    // 打开会话内设置 / 选择角色等覆盖层时立即收起输入法，焦点已不在输入框
+    val keyboardController = LocalSoftwareKeyboardController.current
+    LaunchedEffect(showHamburger, showCharacterPicker) {
+        if (showHamburger || showCharacterPicker) keyboardController?.hide()
+    }
     // 会话打开时刻：只有此后新到达的消息播放入场动画（历史消息滚动回来不重放）
     val openedAtMs = rememberSaveable { System.currentTimeMillis() }
 
@@ -236,7 +246,7 @@ fun AgentChatScreen(
         showCharacterPicker = false
     }
 
-    BackHandler(enabled = !isGenerating && !showHamburger) {
+    BackHandler(enabled = !isGenerating && !showHamburger && !showCharacterPicker) {
         dragController.animateBackAndExit()
     }
 
@@ -494,10 +504,13 @@ fun AgentChatScreen(
             onBack()
         },
         // Agent 的「AI 人设」行 = 选择角色（角色库点选），不进入从零编辑表单
-        onPersonaOverride = { showCharacterPicker = true }
+        onPersonaOverride = {
+            dragController.closeMenu()
+            showCharacterPicker = true
+        }
     )
 
-    // ===== 选择角色浮层（角色库点选） =====
+    // ===== 选择角色浮层（右侧滑入子面板：半透明遮罩 + 340dp 侧栏，与汉堡菜单一致） =====
     AnimatedVisibility(
         visible = showCharacterPicker,
         enter = slideInHorizontally(
@@ -509,11 +522,31 @@ fun AgentChatScreen(
             animationSpec = tween(Motion.DurationPageTransition, easing = Motion.EasingStandard)
         ) + fadeOut(tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate))
     ) {
-        AgentCharacterPicker(
-            conversation = conversation,
-            viewModel = viewModel,
-            onDismiss = { showCharacterPicker = false }
-        )
+        Box(modifier = Modifier.fillMaxSize()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.4f))
+                    .pointerInput(Unit) {
+                        detectTapGestures { showCharacterPicker = false }
+                    }
+            )
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .fillMaxHeight()
+                    .width(340.dp),
+                color = MaterialTheme.colorScheme.surface,
+                shape = RoundedCornerShape(20.dp, 0.dp, 0.dp, 20.dp),
+                shadowElevation = 8.dp
+            ) {
+                AgentCharacterPicker(
+                    conversation = conversation,
+                    viewModel = viewModel,
+                    onDismiss = { showCharacterPicker = false }
+                )
+            }
+        }
     }
 
     // ===== 危险工具确认弹窗：每次执行写入类工具前必须用户确认 =====
@@ -989,7 +1022,8 @@ private fun AgentCharacterPicker(
     val colorScheme = MaterialTheme.colorScheme
     var candidates by remember { mutableStateOf<List<AgentCharacterCandidate>?>(null) }
     LaunchedEffect(Unit) {
-        // 角色 = 角色库全部角色 + 全部私聊会话的人设（与群聊成员选择同一数据口径）
+        // 角色 = 角色库全部角色（每个私聊人设已同步为唯一角色卡 uid，直接引用）；
+        // 兜底：历史私聊尚未回填角色卡时仍按会话人设合成候选
         val library = runCatching {
             ServiceLocator.characterRepository.listCharacters()
         }.getOrDefault(emptyList())
@@ -1001,6 +1035,10 @@ private fun AgentCharacterPicker(
             }
         candidates = buildList {
             library.forEach { c ->
+                // 过滤无人设内容（仅用户昵称等）的角色卡，避免出现大量「未命名角色」
+                if (c.persona.name.isBlank() && c.persona.character.isBlank() && c.persona.persona.isBlank()) {
+                    return@forEach
+                }
                 add(
                     AgentCharacterCandidate(
                         id = c.id,
@@ -1057,7 +1095,6 @@ private fun AgentCharacterPicker(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(colorScheme.background)
             .windowInsetsPadding(WindowInsets.statusBars)
     ) {
         // ===== 顶栏：关闭 + 标题 =====

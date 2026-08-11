@@ -93,6 +93,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -216,6 +217,11 @@ fun ChatScreen(
     }
 
     var showHamburger by rememberSaveable { mutableStateOf(false) }
+    // 打开会话内设置（汉堡菜单）等覆盖层时立即收起输入法，焦点已不在输入框
+    val keyboardController = LocalSoftwareKeyboardController.current
+    LaunchedEffect(showHamburger) {
+        if (showHamburger) keyboardController?.hide()
+    }
     val listState = rememberLazyListState()
     // 会话打开时刻：只有此后新到达的消息播放入场动画（历史消息滚动回来不重放）
     val openedAtMs = rememberSaveable { System.currentTimeMillis() }
