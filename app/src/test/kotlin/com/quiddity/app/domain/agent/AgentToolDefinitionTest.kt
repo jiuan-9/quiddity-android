@@ -45,9 +45,9 @@ class AgentToolDefinitionTest {
 
     @Test
     fun toolToDefinition_mapsAllFields() {
-        val tool = registry["list_apps"]!!
+        val tool = registry["列出应用"]!!
         val def = tool.toToolDefinition()
-        assertEquals("list_apps", def.function.name)
+        assertEquals("列出应用", def.function.name)
         assertEquals(tool.description, def.function.description)
         val type = def.function.parameters["type"] as? JsonPrimitive
         assertEquals("object", type?.content)
@@ -58,7 +58,7 @@ class AgentToolDefinitionTest {
         val result = runBlocking {
             ChatRepository.dispatchAgentToolIfNeeded(
                 type = ConversationType.SOLO,
-                name = "list_apps",
+                name = "列出应用",
                 args = "{}",
                 registry = registry,
                 ctx = testContext()
@@ -72,7 +72,7 @@ class AgentToolDefinitionTest {
         val result = runBlocking {
             ChatRepository.dispatchAgentToolIfNeeded(
                 type = ConversationType.AGENT,
-                name = "list_apps",
+                name = "列出应用",
                 args = "{}",
                 registry = null,
                 ctx = testContext()

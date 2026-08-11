@@ -158,6 +158,10 @@ class ChatViewModel(
     private val _isGenerating = MutableStateFlow(false)
     val isGenerating: StateFlow<Boolean> = _isGenerating.asStateFlow()
 
+    /** 当前轮次 AI 使用的工具名（聊天页工具报告条展示，生成结束后清空）。 */
+    private val _toolUse = MutableStateFlow<String?>(null)
+    val toolUse: StateFlow<String?> = _toolUse.asStateFlow()
+
     // ===== 压缩状态机 =====
     // 与 isGenerating 解耦：压缩在 isGenerating 置 false 之后才启动，两者互斥。
     // Compressing 期间 UI 弹 loading 弹窗、发送按钮置灰、横滑禁用；
@@ -607,6 +611,7 @@ class ChatViewModel(
             val selfJob = kotlin.coroutines.coroutineContext[kotlinx.coroutines.Job]
             cleanupStaleStreamingMessages()
             _isGenerating.value = true
+            _toolUse.value = null
             try {
                 replyRunStart = System.currentTimeMillis()
                 replyRunChars = 0
@@ -637,6 +642,7 @@ class ChatViewModel(
             } finally {
                 if (streamJob === selfJob) {
                     _isGenerating.value = false
+                    _toolUse.value = null
                 }
                 settleInterruptedStreams()
                 notifyIdleIfNoWork()
@@ -1026,7 +1032,12 @@ class ChatViewModel(
                 // AI 消息完成时累加 token 用量
                 accumulateTokenUsage(event.message.tokenCount)
             }
-            is ChatRepository.Event.Done -> Unit
+            is ChatRepository.Event.ToolUse -> {
+                _toolUse.value = event.toolName
+            }
+            is ChatRepository.Event.Done -> {
+                _toolUse.value = null
+            }
             is ChatRepository.Event.Truncated -> {
                 // 回复被截断：不静默吞掉——群聊插入可见提示气泡，私聊弹提示
                 if (isGroup()) {
@@ -1055,6 +1066,7 @@ class ChatViewModel(
                 _errorEvent.value = event.text
             }
             is ChatRepository.Event.Error -> {
+                _toolUse.value = null
                 _errorEvent.value = event.throwable.message ?: "未知错误"
                 _chatError.value = chatRepository.classify(event.throwable)
             }
@@ -1171,6 +1183,33 @@ class ChatViewModel(
                     compileEnabled = compileEnabled
                 )
             )
+        }
+    }
+
+    /** 选择角色库角色应用到当前会话（写入角色引用与人设副本，标题跟随角色名）。 */
+    fun bindCharacter(character: com.quiddity.app.data.model.Character) {
+        viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
+            val newTitle = syncTitleWithPersonaName(
+                currentTitle = conv.title,
+                oldPersonaName = conv.persona.name,
+                newPersonaName = character.persona.name
+            )
+            conversationRepository.updateConversation(
+                conv.copy(
+                    persona = character.persona.copy(compiledPersona = null),
+                    characterId = character.id,
+                    title = newTitle
+                )
+            )
+        }
+    }
+
+    /** 清除当前会话的角色引用（保留已写入的人设副本）。 */
+    fun clearCharacter() {
+        viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
+            conversationRepository.updateConversation(conv.copy(characterId = null))
         }
     }
 

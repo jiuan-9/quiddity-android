@@ -193,6 +193,8 @@ class ChatRepository(
         data object Truncated : Event()
         /** 信息性提示（非错误）：如思考功能降级 / 未返回思考内容。 */
         data class Notice(val text: String) : Event()
+        /** Agent 工具使用报告：模型调用了哪个工具（聊天页显示使用中动画）。 */
+        data class ToolUse(val toolName: String) : Event()
         /** 错误。 */
         data class Error(val throwable: Throwable, val partialContent: String) : Event()
     }
@@ -288,7 +290,7 @@ class ChatRepository(
             coordinator = coordinatorFactory(
                 conv.id,
                 IdGenerator.newUuid(),
-                settings.multilineAutoSplit,
+                settings.multilineAutoSplit && !isAgent,
                 singleMsgTokens,
                 null,
                 thinkingActive
@@ -380,7 +382,7 @@ class ChatRepository(
             coordinator = coordinatorFactory(
                 conv.id,
                 IdGenerator.newUuid(),
-                settings.multilineAutoSplit,
+                settings.multilineAutoSplit && !isAgent,
                 singleMsgTokens,
                 null,
                 thinkingActive
@@ -451,6 +453,9 @@ class ChatRepository(
             api, apiUrl, apiKey, request, coordinator, onEvent, contentTransform, thinkingActive
         ) ?: return false
         if (firstRoundCalls.isNotEmpty()) {
+            firstRoundCalls.forEach { call ->
+                onEvent(Event.ToolUse(call.name))
+            }
             val secondRequest = try {
                 buildSecondRoundRequest(request, conv, firstRoundCalls)
             } catch (c: kotlinx.coroutines.CancellationException) {
@@ -935,6 +940,7 @@ class ChatRepository(
                 is Event.Done -> onEvent(event)
                 is Event.Error -> onEvent(event)
                 is Event.Notice -> onEvent(event)
+                is Event.ToolUse -> onEvent(event)
                 is Event.Truncated -> onEvent(event)
             }
         }

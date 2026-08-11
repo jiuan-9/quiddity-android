@@ -3,8 +3,16 @@ package com.quiddity.app.ui.agent
 import android.app.AppOpsManager
 import android.content.Context
 import android.os.Process
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -14,13 +22,19 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -37,7 +51,10 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableFloatState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -46,6 +63,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -53,6 +74,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.quiddity.app.active.NotificationBridge
 import com.quiddity.app.active.ScreenReaderService
 import com.quiddity.app.di.ServiceLocator
+import com.quiddity.app.ui.theme.Motion
 import com.quiddity.app.ui.settings.SettingsBottomSheet
 import com.quiddity.app.ui.settings.SettingsViewModel
 import kotlinx.coroutines.launch
@@ -113,204 +135,247 @@ fun AgentSettingsScreen(
     val shizukuInstalled = remember { isShizukuInstalled(context) }
     val shizukuGranted = false
 
-    Column(
+    var visible by remember { mutableStateOf(false) }
+    val configuration = LocalConfiguration.current
+    val screenHeight = configuration.screenHeightDp.dp
+    val screenHeightPx = with(LocalDensity.current) { screenHeight.toPx() }
+    val dragOffsetYState = remember { mutableFloatStateOf(0f) }
+    val dismissThreshold = screenHeightPx * 0.2f
+    LaunchedEffect(Unit) { visible = true }
+
+    fun dismissSheet() {
+        visible = false
+        scope.launch {
+            kotlinx.coroutines.delay(Motion.DurationShort.toLong())
+            onBack()
+        }
+    }
+
+    // 与总设置同款底部弹层：半透明遮罩 + 从底部滑入面板 + 顶部抓手拖拽关闭
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .windowInsetsPadding(WindowInsets.statusBars)
+            .imePadding()
     ) {
-        // ===== 顶栏 =====
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(56.dp),
-            verticalAlignment = Alignment.CenterVertically
+        AnimatedVisibility(
+            visible = visible,
+            enter = fadeIn(tween(Motion.DurationMedium)),
+            exit = fadeOut(tween(Motion.DurationShort)),
+            modifier = Modifier.fillMaxSize()
         ) {
             Box(
                 modifier = Modifier
-                    .size(48.dp)
-                    .clip(RoundedCornerShape(50))
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.45f))
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
-                        onClick = onBack
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "返回",
-                    tint = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.size(24.dp)
-                )
-            }
-            Text(
-                text = "Agent 设置",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.weight(1f)
+                        onClick = { dismissSheet() }
+                    )
             )
-            Spacer(modifier = Modifier.size(48.dp))
         }
 
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+        AnimatedVisibility(
+            visible = visible,
+            enter = slideInVertically(
+                initialOffsetY = { it },
+                animationSpec = tween(Motion.DurationXLong, easing = Motion.EasingEmphasizedDecelerate)
+            ) + fadeIn(tween(Motion.DurationLong)),
+            exit = slideOutVertically(
+                targetOffsetY = { it },
+                animationSpec = tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedAccelerate)
+            ) + fadeOut(tween(Motion.DurationShort)),
+            modifier = Modifier.align(Alignment.BottomCenter)
         ) {
-            // ===== 1. 权限状态 =====
-            SettingsSection(title = "权限状态") {
-                StatusRow(
-                    label = "无障碍（读屏）",
-                    status = if (accessibilityEnabled) "已开启" else "未开启",
-                    granted = accessibilityEnabled,
-                    onAction = onOpenGuide
-                )
-                StatusRow(
-                    label = "通知读取",
-                    status = if (notificationEnabled) "已开启" else "未开启",
-                    granted = notificationEnabled,
-                    onAction = onOpenGuide
-                )
-                StatusRow(
-                    label = "使用情况访问",
-                    status = if (usageEnabled) "已开启" else "未开启",
-                    granted = usageEnabled,
-                    onAction = onOpenGuide
-                )
-                StatusRow(
-                    label = "Shizuku（进阶）",
-                    status = when {
-                        shizukuGranted -> "已授权"
-                        shizukuInstalled -> "已安装，未授权"
-                        else -> "未安装"
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = screenHeight * 0.8f)
+                    .fillMaxHeight()
+                    .graphicsLayer {
+                        translationY = dragOffsetYState.floatValue.coerceAtLeast(0f)
                     },
-                    granted = shizukuGranted,
-                    onAction = onOpenGuide
-                )
-            }
-
-            // ===== 2. 工具使用权限 =====
-            SettingsSection(title = "工具使用权限") {
-                ToolGroupTitle("感知")
-                SwitchRow("读屏（read_screen）", settings.toolSwitches.sense_screen) { on ->
-                    scope.launch { store.setToolSwitch("sense_screen", on) }
-                }
-                SwitchRow("通知（read_notifications）", settings.toolSwitches.sense_notifications) { on ->
-                    scope.launch { store.setToolSwitch("sense_notifications", on) }
-                }
-                SwitchRow("用量（usage_stats / foreground_app）", settings.toolSwitches.sense_usage) { on ->
-                    scope.launch { store.setToolSwitch("sense_usage", on) }
-                }
-                ToolGroupTitle("读取")
-                SwitchRow("应用列表（list_apps）", settings.toolSwitches.read_apps) { on ->
-                    scope.launch { store.setToolSwitch("read_apps", on) }
-                }
-                SwitchRow("系统信息（read_system）", settings.toolSwitches.read_system) { on ->
-                    scope.launch { store.setToolSwitch("read_system", on) }
-                }
-                ToolGroupTitle("写入（需 Shizuku 授权）")
-                LockedSwitchRow("停用/启用应用", settings.toolSwitches.write_disable, shizukuGranted) { on ->
-                    scope.launch { store.setToolSwitch("write_disable", on) }
-                }
-                LockedSwitchRow("权限修改（appops）", settings.toolSwitches.write_appops, shizukuGranted) { on ->
-                    scope.launch { store.setToolSwitch("write_appops", on) }
-                }
-                LockedSwitchRow("强制停止", settings.toolSwitches.write_force_stop, shizukuGranted) { on ->
-                    scope.launch { store.setToolSwitch("write_force_stop", on) }
-                }
-                LockedSwitchRow("卸载应用", settings.toolSwitches.write_uninstall, shizukuGranted) { on ->
-                    scope.launch { store.setToolSwitch("write_uninstall", on) }
-                }
-            }
-
-            // ===== 3. 等级徽章 =====
-            SettingsSection(title = "等级徽章") {
-                BadgeRow(name = "基础", description = "只读能力（屏幕/通知/用量/应用列表）", unlocked = true)
-                BadgeRow(
-                    name = "进阶",
-                    description = "系统写入（停用/权限/强停/卸载）",
-                    unlocked = shizukuGranted
-                )
-            }
-
-            // ===== 4. 白名单 =====
-            SettingsSection(title = "白名单（写入工具门控）") {
-                if (settings.whitelist.isEmpty()) {
-                    Text(
-                        text = "暂无白名单，写入类工具将被拒绝执行。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.86f),
+                shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+                ),
+                tonalElevation = 3.dp,
+                shadowElevation = 8.dp
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .windowInsetsPadding(WindowInsets.navigationBars)
+                ) {
+                    AgentSheetGrabBar(
+                        dragOffsetYState = dragOffsetYState,
+                        dismissThreshold = dismissThreshold,
+                        onClose = { dismissSheet() }
                     )
-                }
-                settings.whitelist.forEach { pkg ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Text(
-                            text = pkg,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f)
-                        )
-                        IconButton(onClick = { scope.launch { store.removeWhitelist(pkg) } }) {
-                            Icon(
-                                imageVector = Icons.Filled.Close,
-                                contentDescription = "移除 $pkg",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(18.dp)
+                        // ===== 1. 权限状态 =====
+                        SettingsSection(title = "权限状态") {
+                            StatusRow(
+                                label = "无障碍（读屏）",
+                                status = if (accessibilityEnabled) "已开启" else "未开启",
+                                granted = accessibilityEnabled,
+                                onAction = onOpenGuide
+                            )
+                            StatusRow(
+                                label = "通知读取",
+                                status = if (notificationEnabled) "已开启" else "未开启",
+                                granted = notificationEnabled,
+                                onAction = onOpenGuide
+                            )
+                            StatusRow(
+                                label = "使用情况访问",
+                                status = if (usageEnabled) "已开启" else "未开启",
+                                granted = usageEnabled,
+                                onAction = onOpenGuide
+                            )
+                            StatusRow(
+                                label = "Shizuku（进阶）",
+                                status = when {
+                                    shizukuGranted -> "已授权"
+                                    shizukuInstalled -> "已安装，未授权"
+                                    else -> "未安装"
+                                },
+                                granted = shizukuGranted,
+                                onAction = onOpenGuide
+                            )
+                        }
+
+                        // ===== 2. 工具使用权限 =====
+                        SettingsSection(title = "工具使用权限") {
+                            ToolGroupTitle("感知")
+                            SwitchRow("读屏", settings.toolSwitches.sense_screen) { on ->
+                                scope.launch { store.setToolSwitch("sense_screen", on) }
+                            }
+                            SwitchRow("通知", settings.toolSwitches.sense_notifications) { on ->
+                                scope.launch { store.setToolSwitch("sense_notifications", on) }
+                            }
+                            SwitchRow("用量 / 前台应用", settings.toolSwitches.sense_usage) { on ->
+                                scope.launch { store.setToolSwitch("sense_usage", on) }
+                            }
+                            ToolGroupTitle("读取")
+                            SwitchRow("应用列表", settings.toolSwitches.read_apps) { on ->
+                                scope.launch { store.setToolSwitch("read_apps", on) }
+                            }
+                            SwitchRow("系统信息", settings.toolSwitches.read_system) { on ->
+                                scope.launch { store.setToolSwitch("read_system", on) }
+                            }
+                            ToolGroupTitle("写入（需授权）")
+                            LockedSwitchRow("停用/启用应用", settings.toolSwitches.write_disable, shizukuGranted) { on ->
+                                scope.launch { store.setToolSwitch("write_disable", on) }
+                            }
+                            LockedSwitchRow("权限修改", settings.toolSwitches.write_appops, shizukuGranted) { on ->
+                                scope.launch { store.setToolSwitch("write_appops", on) }
+                            }
+                            LockedSwitchRow("强制停止", settings.toolSwitches.write_force_stop, shizukuGranted) { on ->
+                                scope.launch { store.setToolSwitch("write_force_stop", on) }
+                            }
+                            LockedSwitchRow("卸载应用", settings.toolSwitches.write_uninstall, shizukuGranted) { on ->
+                                scope.launch { store.setToolSwitch("write_uninstall", on) }
+                            }
+                        }
+
+                        // ===== 3. 等级徽章 =====
+                        SettingsSection(title = "等级徽章") {
+                            BadgeRow(name = "基础", description = "只读能力（屏幕/通知/用量/应用列表）", unlocked = true)
+                            BadgeRow(
+                                name = "进阶",
+                                description = "系统写入（停用/权限/强停/卸载）",
+                                unlocked = shizukuGranted
+                            )
+                        }
+
+                        // ===== 4. 白名单 =====
+                        SettingsSection(title = "白名单（写入工具门控）") {
+                            if (settings.whitelist.isEmpty()) {
+                                Text(
+                                    text = "暂无白名单，写入类工具将被拒绝执行。",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            settings.whitelist.forEach { pkg ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = pkg,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    IconButton(onClick = { scope.launch { store.removeWhitelist(pkg) } }) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Close,
+                                            contentDescription = "移除 $pkg",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                            }
+                            TextButton(onClick = { showAddWhitelist = true }) {
+                                Icon(
+                                    imageVector = Icons.Filled.Add,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text("添加包名")
+                            }
+                        }
+
+                        // ===== 5. 数据与隐私 =====
+                        SettingsSection(title = "数据与隐私") {
+                            Text(
+                                text = "审计记录：${settings.audit.size} 条（最多保留 500 条）",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                TextButton(onClick = { scope.launch { store.clearAudit() } }) {
+                                    Text("清空审计")
+                                }
+                                TextButton(onClick = { showClearSessions = true }) {
+                                    Text("清空 Agent 会话")
+                                }
+                                TextButton(onClick = { showPrivacy = true }) {
+                                    Text("隐私声明")
+                                }
+                            }
+                        }
+
+                        // ===== 6. 支持 =====
+                        SettingsSection(title = "支持") {
+                            TextButton(onClick = { showGlobalSettings = true }) {
+                                Text("总设置（全局：主题/字体/Markdown 等）")
+                            }
+                            TextButton(onClick = onOpenGuide) {
+                                Text("开启教程（按系统版本路由）")
+                            }
+                            Text(
+                                text = "Quiddity Agent · 本地数据不上传",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                             )
                         }
                     }
                 }
-                TextButton(onClick = { showAddWhitelist = true }) {
-                    Icon(
-                        imageVector = Icons.Filled.Add,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Text("添加包名")
-                }
-            }
-
-            // ===== 5. 数据与隐私 =====
-            SettingsSection(title = "数据与隐私") {
-                Text(
-                    text = "审计记录：${settings.audit.size} 条（最多保留 500 条）",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(onClick = { scope.launch { store.clearAudit() } }) {
-                        Text("清空审计")
-                    }
-                    TextButton(onClick = { showClearSessions = true }) {
-                        Text("清空 Agent 会话")
-                    }
-                    TextButton(onClick = { showPrivacy = true }) {
-                        Text("隐私声明")
-                    }
-                }
-            }
-
-            // ===== 6. 支持 =====
-            SettingsSection(title = "支持") {
-                TextButton(onClick = { showGlobalSettings = true }) {
-                    Text("总设置（全局：主题/字体/Markdown 等）")
-                }
-                TextButton(onClick = onOpenGuide) {
-                    Text("开启教程（按系统版本路由）")
-                }
-                Text(
-                    text = "Quiddity Agent · 本地数据不上传",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                )
             }
         }
     }
@@ -562,3 +627,79 @@ private fun isShizukuInstalled(context: Context): Boolean = runCatching {
     context.packageManager.getPackageInfo("moe.shizuku.xyz", 0)
     true
 }.getOrDefault(false)
+
+/** 底部弹层顶部抓手：拖拽面板 1:1 跟随，超阈值关闭，否则回弹。 */
+@Composable
+private fun AgentSheetGrabBar(
+    dragOffsetYState: MutableFloatState,
+    dismissThreshold: Float,
+    onClose: () -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(48.dp)
+            .pointerInput(Unit) {
+                detectVerticalDragGestures(
+                    onVerticalDrag = { change, dragAmount ->
+                        change.consume()
+                        dragOffsetYState.floatValue =
+                            (dragOffsetYState.floatValue + dragAmount).coerceAtLeast(0f)
+                    },
+                    onDragEnd = {
+                        if (dragOffsetYState.floatValue > dismissThreshold) {
+                            onClose()
+                        } else {
+                            scope.launch {
+                                val anim = Animatable(dragOffsetYState.floatValue)
+                                anim.animateTo(
+                                    targetValue = 0f,
+                                    animationSpec = tween(
+                                        Motion.DurationShort,
+                                        easing = Motion.EasingEmphasizedDecelerate
+                                    )
+                                ) { dragOffsetYState.floatValue = this.value }
+                            }
+                        }
+                    }
+                )
+            },
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .width(32.dp)
+                .height(4.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f))
+        )
+        Text(
+            text = "Agent 设置",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier
+                .weight(1f)
+                .padding(start = 12.dp)
+        )
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onClose
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Close,
+                contentDescription = "关闭",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+    }
+}

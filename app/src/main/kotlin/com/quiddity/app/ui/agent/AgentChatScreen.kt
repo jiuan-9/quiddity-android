@@ -1,15 +1,27 @@
 package com.quiddity.app.ui.agent
 
+import android.net.Uri
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FiniteAnimationSpec
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -34,11 +46,18 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -52,8 +71,12 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -72,16 +95,21 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.quiddity.app.data.model.Character
+import com.quiddity.app.data.model.Conversation
 import com.quiddity.app.data.model.Message
 import com.quiddity.app.data.model.Role
+import com.quiddity.app.di.ServiceLocator
 import com.quiddity.app.ui.components.AiAvatar
 import com.quiddity.app.ui.chat.ChatViewModel
+import com.quiddity.app.ui.chat.OcrState
 import com.quiddity.app.ui.chat.components.ChatInputBar
-import com.quiddity.app.ui.chat.components.HamburgerMenu
 import com.quiddity.app.ui.chat.components.StreamingCursor
 import com.quiddity.app.ui.chat.components.TypingIndicator
 import com.quiddity.app.ui.chat.gesture.ChatDragController
 import com.quiddity.app.ui.chat.gesture.detectNativeHorizontalSwipe
+import com.quiddity.app.domain.agent.AgentToolRegistry
+import com.quiddity.app.util.ImageUtils
 import com.quiddity.app.ui.settings.SettingsViewModel
 import com.quiddity.app.ui.theme.Motion
 import com.quiddity.app.util.DateUtils
@@ -119,8 +147,8 @@ import kotlinx.coroutines.launch
  *
  * - 用户消息右对齐、AI 消息左对齐，时间戳小号灰色；
  * - Markdown 行内样式与代码块保留，但不套气泡容器；
- * - 汉堡菜单与私聊/群聊同一套 [HamburgerMenu]（会话设置/人设/模型配置）；
- * - 输入栏复用 [ChatInputBar]。
+ * - 会话内设置仅角色卡（选择角色：从角色库点选，复用群聊同款角色列表 UI）；
+ * - 输入栏复用 [ChatInputBar]，支持发图（选图 → OCR → 发送）。
  */
 @Composable
 fun AgentChatScreen(
@@ -133,15 +161,42 @@ fun AgentChatScreen(
     val messages by viewModel.messages.collectAsStateWithLifecycle()
     val isGenerating by viewModel.isGenerating.collectAsStateWithLifecycle()
     val chatError by viewModel.chatError.collectAsStateWithLifecycle()
+    val toolUseName by viewModel.toolUse.collectAsStateWithLifecycle()
+    val pendingImageUri by viewModel.pendingImageUri.collectAsStateWithLifecycle()
+    val ocrState by viewModel.ocrState.collectAsStateWithLifecycle()
     val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val listState = rememberLazyListState()
-    var showHamburger by rememberSaveable { mutableStateOf(false) }
+    var showPersona by rememberSaveable { mutableStateOf(false) }
     // 会话打开时刻：只有此后新到达的消息播放入场动画（历史消息滚动回来不重放）
     val openedAtMs = rememberSaveable { System.currentTimeMillis() }
 
+    // ===== 发图：选图 → 复制到内部存储（规避临时授权丢失） → 挂载待发送 =====
+    val imagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            val copied = runCatching {
+                ImageUtils.copyToInternalStorage(context, uri, "chat_images")
+            }.getOrNull()
+            if (copied != null) {
+                viewModel.setPendingImage(copied.toString())
+            } else {
+                Toast.makeText(context, "图片读取失败，请重新选择", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+    var lastAttachedImageUri by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(pendingImageUri) {
+        val previous = lastAttachedImageUri
+        lastAttachedImageUri = pendingImageUri
+        if (pendingImageUri == null && previous != null) {
+            ImageUtils.deleteTempFile(Uri.parse(previous))
+        }
+    }
+
     // ===== 滑动手势：与私聊/群聊同一套 ChatDragController =====
-    // 右滑 1:1 跟手滑出会话（松手判定返回），左滑淡入菜单；菜单打开后右滑跟手关闭。
+    // 右滑 1:1 跟手滑出会话（松手判定返回），左滑淡入角色卡；角色卡打开后右滑跟手关闭。
     val configuration = LocalConfiguration.current
     val scope = rememberCoroutineScope()
     val screenWidthPx = with(LocalDensity.current) {
@@ -154,7 +209,7 @@ fun AgentChatScreen(
             scope = scope,
             screenWidthPx = screenWidthPx,
             onBack = onBack,
-            onMenuVisibilityChange = { open -> showHamburger = open }
+            onMenuVisibilityChange = { open -> showPersona = open }
         )
     }
 
@@ -174,7 +229,11 @@ fun AgentChatScreen(
         if (messages.any { !it.isNotice }) listState.animateScrollToItem(0)
     }
 
-    BackHandler(enabled = !isGenerating && !showHamburger) {
+    BackHandler(enabled = showPersona) {
+        showPersona = false
+    }
+
+    BackHandler(enabled = !isGenerating && !showPersona) {
         dragController.animateBackAndExit()
     }
 
@@ -246,7 +305,7 @@ fun AgentChatScreen(
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
-                            onClick = { dragController.toggleMenu() }
+                            onClick = { showPersona = true }
                         ),
                     contentAlignment = Alignment.Center
                 ) {
@@ -340,14 +399,42 @@ fun AgentChatScreen(
                                 }
                             }
                         }
+                        // 工具使用报告条：AI 调用工具时显示（图标 + 工具名 + 在干的事，滑动高亮）
+                        item(key = "agent_tool_use", contentType = { "tool_use" }) {
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                AnimatedVisibility(
+                                    visible = toolUseName != null,
+                                    enter = fadeIn(
+                                        tween(Motion.DurationShort, easing = Motion.EasingEmphasizedDecelerate)
+                                    ) + expandVertically(
+                                        tween(Motion.DurationShort, easing = Motion.EasingEmphasizedDecelerate)
+                                    ),
+                                    exit = fadeOut(
+                                        tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate)
+                                    ) + shrinkVertically(
+                                        tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate)
+                                    )
+                                ) {
+                                    toolUseName?.let { name ->
+                                        ToolUseShimmerLine(toolName = name)
+                                    }
+                                }
+                            }
+                        }
                         items(messages.reversed(), key = { it.id }) { message ->
+                            val latestAi = messages.lastOrNull {
+                                !it.isNotice && it.role == Role.ASSISTANT && !it.isThinking
+                            }
                             AgentMessageLine(
                                 message = message,
                                 markdownEnabled = settings.markdownEnabled,
                                 userAvatarUri = settings.userAvatarUri,
                                 aiAvatarUri = conversation?.persona?.aiAvatarUri,
                                 aiName = conversation?.persona?.name.orEmpty(),
-                                animateEntry = message.timestamp >= openedAtMs
+                                animateEntry = message.timestamp >= openedAtMs,
+                                isLatestAi = message.id == latestAi?.id,
+                                onCopy = { text -> copyToClipboard(context, text) },
+                                onRegenerate = { viewModel.regenerate() }
                             )
                         }
                     }
@@ -359,27 +446,44 @@ fun AgentChatScreen(
         ChatInputBar(
             enterToSend = settings.enterToSend,
             isGenerating = isGenerating,
-            onSend = { text -> viewModel.sendMessage(text) },
+            onSend = { text ->
+                val imageUri = pendingImageUri
+                if (imageUri != null) {
+                    viewModel.sendMessageWithImage(context, text, imageUri)
+                } else {
+                    viewModel.sendMessage(text)
+                }
+            },
             onStop = { viewModel.stopGeneration() },
             onTextChange = { text -> viewModel.updateInputText(text) },
             transparent = conversation?.wallpaperUri != null,
-            enabled = conversation != null
+            enabled = conversation != null,
+            onPickImage = { imagePickerLauncher.launch("image/*") },
+            pendingImageUri = pendingImageUri,
+            onRemoveImage = { viewModel.clearPendingImage() },
+            ocrBusy = ocrState is OcrState.Recognizing
         )
     }
     }
 
-    // ===== 汉堡菜单：与私聊/群聊同一套（会话设置/人设/模型配置） =====
-    HamburgerMenu(
-        visible = showHamburger,
-        menuAlphaState = dragController.menuAlphaState,
-        viewModel = viewModel,
-        settingsViewModel = settingsViewModel,
-        onDismiss = { dragController.closeMenu() },
-        onDeleteConversation = {
-            viewModel.deleteCurrentConversation()
-            onBack()
-        }
-    )
+    // ===== 会话内设置：选择角色（角色库点选，与群聊同款角色列表 UI） =====
+    AnimatedVisibility(
+        visible = showPersona,
+        enter = slideInHorizontally(
+            initialOffsetX = { it },
+            animationSpec = tween(Motion.DurationPageTransition, easing = Motion.EasingStandard)
+        ) + fadeIn(tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedDecelerate)),
+        exit = slideOutHorizontally(
+            targetOffsetX = { it },
+            animationSpec = tween(Motion.DurationPageTransition, easing = Motion.EasingStandard)
+        ) + fadeOut(tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate))
+    ) {
+        AgentCharacterPicker(
+            conversation = conversation,
+            viewModel = viewModel,
+            onDismiss = { showPersona = false }
+        )
+    }
 }
 
 /** 单条 Agent 消息：无气泡容器，用户右对齐 / AI 左对齐，时间戳小号灰色。 */
@@ -390,6 +494,9 @@ private fun AgentMessageLine(
     userAvatarUri: String?,
     aiAvatarUri: String?,
     aiName: String,
+    isLatestAi: Boolean = false,
+    onCopy: (String) -> Unit = {},
+    onRegenerate: () -> Unit = {},
     animateEntry: Boolean = true
 ) {
     val colorScheme = MaterialTheme.colorScheme
@@ -472,6 +579,26 @@ private fun AgentMessageLine(
                 style = MaterialTheme.typography.labelSmall,
                 color = colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
             )
+            // AI 消息操作：复制 / 重说（仅简单按钮；重说只出现在最新一条 AI 消息）
+            if (!isUser && !message.isThinking && !message.isStreaming) {
+                Row(
+                    modifier = Modifier.padding(top = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    AgentActionButton(
+                        icon = Icons.Filled.ContentCopy,
+                        label = "复制",
+                        onClick = { onCopy(message.content) }
+                    )
+                    if (isLatestAi) {
+                        AgentActionButton(
+                            icon = Icons.Filled.Refresh,
+                            label = "重说",
+                            onClick = onRegenerate
+                        )
+                    }
+                }
+            }
         }
         if (isUser) {
             Spacer(modifier = Modifier.size(10.dp))
@@ -645,4 +772,272 @@ private fun agentApplyMarkdownStyles(
         }
     }
     return builder
+}
+
+/** AI 消息下方的简单操作按钮（图标 + 文字，无容器）。 */
+@Composable
+private fun AgentActionButton(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit
+) {
+    val color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f)
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick
+            )
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(3.dp)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = color,
+            modifier = Modifier.size(13.dp)
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = color
+        )
+    }
+}
+
+/** 工具使用报告条：图标 + 工具名 + 正在做的事，背景滑动高亮（加载效果）。 */
+@Composable
+private fun ToolUseShimmerLine(toolName: String) {
+    val colorScheme = MaterialTheme.colorScheme
+    val transition = rememberInfiniteTransition(label = "tool_use_shimmer")
+    val progress by transition.animateFloat(
+        initialValue = -1f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1400, easing = LinearEasing)
+        ),
+        label = "tool_use_progress"
+    )
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            .drawWithCache {
+                onDrawBehind {
+                    val p = progress
+                    drawRect(
+                        brush = Brush.linearGradient(
+                            colors = listOf(
+                                Color.Transparent,
+                                colorScheme.primary.copy(alpha = 0.35f),
+                                Color.Transparent
+                            ),
+                            start = Offset(size.width * (p - 0.6f), 0f),
+                            end = Offset(size.width * (p + 0.6f), size.height)
+                        )
+                    )
+                }
+            }
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = Icons.Filled.Build,
+            contentDescription = null,
+            tint = colorScheme.primary,
+            modifier = Modifier.size(15.dp)
+        )
+        Spacer(modifier = Modifier.size(8.dp))
+        Text(
+            text = "$toolName --- ${AgentToolRegistry.actionFor(toolName)}",
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Medium,
+            color = colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+private fun copyToClipboard(context: Context, text: String) {
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    clipboard.setPrimaryClip(ClipData.newPlainText("消息", text))
+    Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
+}
+
+/** 选择角色卡：角色库头像列表，点选即应用到当前 Agent 会话（与群聊同款角色选择 UI）。 */
+@Composable
+private fun AgentCharacterPicker(
+    conversation: Conversation?,
+    viewModel: ChatViewModel,
+    onDismiss: () -> Unit
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    var characters by remember { mutableStateOf<List<Character>?>(null) }
+    LaunchedEffect(Unit) {
+        characters = runCatching {
+            ServiceLocator.characterRepository.listCharacters()
+        }.getOrDefault(emptyList())
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(colorScheme.background)
+            .windowInsetsPadding(WindowInsets.statusBars)
+    ) {
+        // ===== 顶栏：关闭 + 标题 =====
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(RoundedCornerShape(50))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = onDismiss
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "返回",
+                    tint = colorScheme.onSurface,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+            Text(
+                text = "选择角色",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = colorScheme.onSurface,
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(modifier = Modifier.size(48.dp))
+        }
+
+        when {
+            characters == null -> {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                }
+            }
+            characters.orEmpty().isEmpty() -> {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(
+                        text = "角色库为空",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    )
+                }
+            }
+            else -> {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                        horizontal = 16.dp,
+                        vertical = 8.dp
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    if (conversation?.characterId != null) {
+                        item(key = "clear_character") {
+                            CharacterSelectRow(
+                                name = "清除角色",
+                                subtitle = "移除角色绑定（保留已写入的人设）",
+                                avatarUri = null,
+                                selected = false,
+                                onClick = {
+                                    viewModel.clearCharacter()
+                                    onDismiss()
+                                }
+                            )
+                        }
+                    }
+                    items(characters.orEmpty(), key = { it.id }) { character ->
+                        val selected = conversation?.characterId == character.id
+                        CharacterSelectRow(
+                            name = character.persona.name.ifBlank { "未命名角色" },
+                            subtitle = character.persona.character.ifBlank {
+                                character.persona.persona.ifBlank { "点击选用" }
+                            },
+                            avatarUri = character.aiAvatarUri ?: character.persona.aiAvatarUri,
+                            selected = selected,
+                            onClick = {
+                                viewModel.bindCharacter(character)
+                                onDismiss()
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 角色选择行：头像 + 名字 + 简介，选中打勾。 */
+@Composable
+private fun CharacterSelectRow(
+    name: String,
+    subtitle: String,
+    avatarUri: String?,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick
+            )
+            .background(
+                if (selected) colorScheme.primaryContainer.copy(alpha = 0.45f)
+                else colorScheme.surfaceContainerLow
+            )
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        AiAvatar(
+            avatarUri = avatarUri,
+            name = if (selected) name else name,
+            size = 44.dp
+        )
+        Spacer(modifier = Modifier.size(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = name,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        if (selected) {
+            Icon(
+                imageVector = Icons.Filled.Check,
+                contentDescription = "已选用",
+                tint = colorScheme.primary,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+    }
 }

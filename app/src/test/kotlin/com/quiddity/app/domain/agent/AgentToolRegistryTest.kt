@@ -37,8 +37,8 @@ class AgentToolRegistryTest {
     fun defaultRegistry_containsAllTenToolsWithMetadata() {
         assertEquals(10, registry.tools().size)
 
-        val basic = listOf("list_apps", "read_screen", "read_notifications", "usage_stats", "foreground_app")
-        val advanced = listOf("disable_app", "enable_app", "set_appops", "force_stop", "uninstall_app")
+        val basic = listOf("列出应用", "读取屏幕", "读取通知", "用量统计", "前台应用")
+        val advanced = listOf("停用应用", "启用应用", "设置应用权限", "强制停止", "卸载应用")
 
         basic.forEach { name ->
             val tool = registry[name]
@@ -65,41 +65,41 @@ class AgentToolRegistryTest {
     @Test
     fun dispatch_disabledTool_returnsDisabledMessage() {
         val switches = AgentToolSwitches().copy(sense_screen = false)
-        val result = runBlockingTest { registry.dispatch("read_screen", "{}", context(switches = switches)) }
+        val result = runBlockingTest { registry.dispatch("读取屏幕", "{}", context(switches = switches)) }
         assertTrue(result.contains("未启用") || result.contains("disabled"))
     }
 
     @Test
     fun dispatch_validReadTool_executesPlaceholder() {
-        val result = runBlockingTest { registry.dispatch("list_apps", "{}", context()) }
+        val result = runBlockingTest { registry.dispatch("列出应用", "{}", context()) }
         assertTrue(result.isNotBlank())
     }
 
     @Test
     fun validateArgs_rejectsInvalidPkg_acceptsValidPkg() {
-        val tool = registry["disable_app"]!!
-        assertNull(AgentSecurity.validateArgs(tool, parse("""{"pkg":"com.tencent.mm"}""")))
-        assertNotNull(AgentSecurity.validateArgs(tool, parse("""{"pkg":"com.a_b"}""")))
-        assertNotNull(AgentSecurity.validateArgs(tool, parse("""{"pkg":"evil app"}""")))
-        assertNotNull(AgentSecurity.validateArgs(tool, parse("""{"pkg":""}""")))
+        val tool = registry["停用应用"]!!
+        assertNull(AgentSecurity.validateArgs(tool, parse("""{"包名":"com.tencent.mm"}""")))
+        assertNotNull(AgentSecurity.validateArgs(tool, parse("""{"包名":"com.a_b"}""")))
+        assertNotNull(AgentSecurity.validateArgs(tool, parse("""{"包名":"evil app"}""")))
+        assertNotNull(AgentSecurity.validateArgs(tool, parse("""{"包名":""}""")))
         assertNotNull(AgentSecurity.validateArgs(tool, parse("""{}""")))
     }
 
     @Test
     fun validateArgs_rejectsInvalidAppOpsModeAndOp() {
-        val tool = registry["set_appops"]!!
-        assertNull(AgentSecurity.validateArgs(tool, parse("""{"pkg":"com.a","op":"VIBRATE","mode":"allow"}""")))
-        assertNotNull(AgentSecurity.validateArgs(tool, parse("""{"pkg":"com.a","op":"NOT_A_REAL_OP","mode":"allow"}""")))
-        assertNotNull(AgentSecurity.validateArgs(tool, parse("""{"pkg":"com.a","op":"VIBRATE","mode":"sometimes"}""")))
-        assertNotNull(AgentSecurity.validateArgs(tool, parse("""{"pkg":"com.a","op":"VIBRATE"}""")))
+        val tool = registry["设置应用权限"]!!
+        assertNull(AgentSecurity.validateArgs(tool, parse("""{"包名":"com.a","操作":"VIBRATE","模式":"允许"}""")))
+        assertNotNull(AgentSecurity.validateArgs(tool, parse("""{"包名":"com.a","操作":"NOT_A_REAL_OP","模式":"允许"}""")))
+        assertNotNull(AgentSecurity.validateArgs(tool, parse("""{"包名":"com.a","操作":"VIBRATE","模式":"偶尔"}""")))
+        assertNotNull(AgentSecurity.validateArgs(tool, parse("""{"包名":"com.a","操作":"VIBRATE"}""")))
     }
 
     @Test
     fun dispatch_advancedToolWithoutWhitelist_denied() {
         val result = runBlockingTest {
             registry.dispatch(
-                "disable_app",
-                """{"pkg":"com.tencent.mm","confirmed":true}""",
+                "停用应用",
+                """{"包名":"com.tencent.mm","已确认":true}""",
                 context(switches = AgentToolSwitches().copy(write_disable = true))
             )
         }
@@ -111,8 +111,8 @@ class AgentToolRegistryTest {
         val audit = mutableListOf<AgentAuditEntry>()
         val result = runBlockingTest {
             registry.dispatch(
-                "disable_app",
-                """{"pkg":"com.tencent.mm","confirmed":true}""",
+                "停用应用",
+                """{"包名":"com.tencent.mm","已确认":true}""",
                 context(
                     switches = AgentToolSwitches().copy(write_disable = true),
                     whitelist = setOf("com.tencent.mm"),
@@ -122,7 +122,7 @@ class AgentToolRegistryTest {
         }
         assertTrue(result.isNotBlank())
         assertEquals(1, audit.size)
-        assertEquals("disable_app", audit[0].tool)
+        assertEquals("停用应用", audit[0].tool)
         assertEquals(true, audit[0].ok)
         assertEquals(true, audit[0].confirmed)
     }
@@ -132,8 +132,8 @@ class AgentToolRegistryTest {
         val audit = mutableListOf<AgentAuditEntry>()
         val result = runBlockingTest {
             registry.dispatch(
-                "disable_app",
-                """{"pkg":"com.tencent.mm"}""",
+                "停用应用",
+                """{"包名":"com.tencent.mm"}""",
                 context(
                     switches = AgentToolSwitches().copy(write_disable = true),
                     whitelist = setOf("com.tencent.mm"),
@@ -151,8 +151,8 @@ class AgentToolRegistryTest {
         val audit = mutableListOf<AgentAuditEntry>()
         val result = runBlockingTest {
             registry.dispatch(
-                "force_stop",
-                """{"pkg":"bad pkg","confirmed":true}""",
+                "强制停止",
+                """{"包名":"bad pkg","已确认":true}""",
                 context(
                     switches = AgentToolSwitches().copy(write_force_stop = true),
                     whitelist = setOf("bad pkg"),
@@ -168,7 +168,7 @@ class AgentToolRegistryTest {
     @Test
     fun dispatch_respectsStoreSwitchState() {
         val switches = AgentToolSwitches().copy(read_apps = false)
-        val result = runBlockingTest { registry.dispatch("list_apps", "{}", context(switches = switches)) }
+        val result = runBlockingTest { registry.dispatch("列出应用", "{}", context(switches = switches)) }
         assertTrue(result.contains("未启用") || result.contains("disabled"))
     }
 
@@ -176,8 +176,8 @@ class AgentToolRegistryTest {
     fun auditEntry_serializableShape() {
         val entry = AgentAuditEntry(
             ts = "2026-08-10T12:00:00",
-            tool = "disable_app",
-            args = """{"pkg":"com.x"}""",
+            tool = "停用应用",
+            args = """{"包名":"com.x"}""",
             ok = true,
             confirmed = true
         )
