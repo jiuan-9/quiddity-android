@@ -175,17 +175,6 @@ fun AgentSettingsScreen(
     val usageEnabled = remember(refreshTick) { hasUsageAccess(context) }
     val shizukuInstalled = remember(refreshTick) { isShizukuInstalled(context) }
     val shizukuGranted = false
-    // 未开启的权限清单（用于教程前置与对应设置置灰）
-    val missingPermissions = remember(refreshTick, accessibilityEnabled, notificationEnabled, usageEnabled) {
-        buildList {
-            if (!accessibilityEnabled) add("无障碍（读屏）" to Settings.ACTION_ACCESSIBILITY_SETTINGS)
-            if (!notificationEnabled) add("通知读取" to Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
-            if (!usageEnabled) add("使用情况访问" to Settings.ACTION_USAGE_ACCESS_SETTINGS)
-        }
-    }
-    // 基础权限未开齐 → 教程前置；基础权限给全 → 教程放最后（顶部引导块消失）
-    val hasMissingPermissions = missingPermissions.isNotEmpty()
-
     var visible by remember { mutableStateOf(false) }
     val configuration = LocalConfiguration.current
     val screenHeight = configuration.screenHeightDp.dp
@@ -269,56 +258,6 @@ fun AgentSettingsScreen(
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 32.dp)
                     ) {
-                        // ===== 权限未开齐：教程前置 =====
-                        if (hasMissingPermissions) {
-                            item(key = "tutorial_first", contentType = { "section" }) {
-                                SettingsSectionCard(title = "先完成授权（教程在前）") {
-                                    missingPermissions.forEach { (label, action) ->
-                                        ClickableRow(
-                                            icon = Icons.Filled.Info,
-                                            title = label,
-                                            subtitle = "未开启",
-                                            onClick = { openSystemSettings(context, action) },
-                                            trailingContent = {
-                                                Text(
-                                                    text = "去开启",
-                                                    style = MaterialTheme.typography.labelMedium,
-                                                    color = MaterialTheme.colorScheme.primary
-                                                )
-                                            }
-                                        )
-                                    }
-                                    if (!shizukuGranted) {
-                                        ClickableRow(
-                                            icon = Icons.Filled.Settings,
-                                            title = "Shizuku（进阶）",
-                                            subtitle = if (shizukuInstalled) "已安装，未授权" else "未安装",
-                                            onClick = {
-                                                if (shizukuInstalled) {
-                                                    launchShizukuApp(context)
-                                                } else {
-                                                    openUrl(context, SHIZUKU_DOWNLOAD_URL)
-                                                }
-                                            },
-                                            trailingContent = {
-                                                Text(
-                                                    text = if (shizukuInstalled) "去开启" else "去下载",
-                                                    style = MaterialTheme.typography.labelMedium,
-                                                    color = MaterialTheme.colorScheme.primary
-                                                )
-                                            }
-                                        )
-                                    }
-                                    ClickableRow(
-                                        icon = Icons.Filled.HelpOutline,
-                                        title = "打开完整教程",
-                                        subtitle = "按系统分类，一步步开启",
-                                        onClick = { showGuide = true }
-                                    )
-                                }
-                            }
-                        }
-
                         item(key = "permissions", contentType = { "section" }) {
                             ExpandableSettingsSection(
                                 title = "权限状态",

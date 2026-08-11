@@ -1,6 +1,8 @@
 package com.quiddity.app.ui.agent
 
 import android.content.Context
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
@@ -193,6 +195,15 @@ fun AgentSetupGuideSheet(onDismiss: () -> Unit) {
                         ),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
+                        item(key = "assistant_download", contentType = { "section" }) {
+                            CopyLinkRow(
+                                title = "Quiddity 授权助手（电脑端）",
+                                desc = "Android 8 到 10 一键授权工具：点「复制」拿到下载链接，到电脑浏览器打开即可",
+                                url = "https://jiuan-9.github.io/Quiddity-website/#/assistant",
+                                context = context
+                            )
+                        }
+
                         // ===== 按系统一条龙：每个系统 = 适用/开发者选项/USB调试/启动Shizuku/常见错误 =====
                         systemTutorials.forEach { system ->
                             item(key = system.title, contentType = { "system" }) {
@@ -544,6 +555,58 @@ private fun UrlJumpRow(
                 }
                 .padding(horizontal = 8.dp, vertical = 6.dp)
         )
+    }
+}
+
+/** 复制链接行：只复制，不跳转。 */
+@Composable
+private fun CopyLinkRow(
+    title: String,
+    desc: String,
+    url: String,
+    context: Context
+) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = desc,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Text(
+                text = "复制",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE)
+                            as ClipboardManager
+                        clipboard.setPrimaryClip(ClipData.newPlainText("下载链接", url))
+                        Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
+                    }
+                    .padding(horizontal = 10.dp, vertical = 6.dp)
+            )
+        }
     }
 }
 
