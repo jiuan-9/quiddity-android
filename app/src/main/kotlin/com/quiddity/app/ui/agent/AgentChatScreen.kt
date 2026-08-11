@@ -75,6 +75,7 @@ import com.quiddity.app.data.model.Message
 import com.quiddity.app.data.model.Persona
 import com.quiddity.app.data.model.Role
 import com.quiddity.app.di.ServiceLocator
+import com.quiddity.app.ui.components.AiAvatar
 import com.quiddity.app.ui.chat.ChatViewModel
 import com.quiddity.app.ui.chat.components.ChatInputBar
 import com.quiddity.app.ui.chat.components.StreamingCursor
@@ -190,7 +191,9 @@ fun AgentChatScreen(
                 )
             }
             Text(
-                text = conversation?.title ?: "Agent",
+                text = conversation?.persona?.name?.takeIf { it.isNotBlank() }
+                    ?: conversation?.title
+                    ?: "Agent",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Medium,
                 color = MaterialTheme.colorScheme.onSurface,
@@ -240,12 +243,21 @@ fun AgentChatScreen(
                                     tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedDecelerate)
                                 )
                             ) {
-                                Text(
-                                    text = "Agent 会话已就绪\n输入指令开始（只读工具默认开启）",
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                                    textAlign = TextAlign.Center
-                                )
+                                // 与私聊空态同款圆角胶囊：浅色容器 + labelLarge 文案
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(24.dp))
+                                        .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                                        .padding(horizontal = 28.dp, vertical = 14.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = "输入指令开始（只读工具默认开启）",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
                             }
                         }
                     }
@@ -259,7 +271,7 @@ fun AgentChatScreen(
                             horizontal = 16.dp,
                             vertical = 12.dp
                         ),
-                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         // 生成中且尚无流式内容时，底部显示打字指示（紧贴输入栏）
                         val lastMsg = messages.lastOrNull { !it.isNotice }
@@ -295,6 +307,9 @@ fun AgentChatScreen(
                             AgentMessageLine(
                                 message = message,
                                 markdownEnabled = settings.markdownEnabled,
+                                userAvatarUri = settings.userAvatarUri,
+                                aiAvatarUri = conversation?.persona?.aiAvatarUri,
+                                aiName = conversation?.persona?.name.orEmpty(),
                                 animateEntry = message.timestamp >= openedAtMs
                             )
                         }
@@ -309,6 +324,8 @@ fun AgentChatScreen(
             isGenerating = isGenerating,
             onSend = { text -> viewModel.sendMessage(text) },
             onStop = { viewModel.stopGeneration() },
+            onTextChange = { text -> viewModel.updateInputText(text) },
+            transparent = conversation?.wallpaperUri != null,
             enabled = conversation != null
         )
     }
@@ -367,6 +384,9 @@ private fun Persona.ifEmptyDefault(): Persona =
 private fun AgentMessageLine(
     message: Message,
     markdownEnabled: Boolean,
+    userAvatarUri: String?,
+    aiAvatarUri: String?,
+    aiName: String,
     animateEntry: Boolean = true
 ) {
     val colorScheme = MaterialTheme.colorScheme
@@ -407,6 +427,7 @@ private fun AgentMessageLine(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .padding(vertical = 4.dp)
             .graphicsLayer {
                 alpha = entryAlpha.value
                 translationY = entryOffsetY.value
@@ -416,8 +437,16 @@ private fun AgentMessageLine(
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
         verticalAlignment = Alignment.Bottom
     ) {
+        if (!isUser) {
+            AiAvatar(
+                avatarUri = aiAvatarUri,
+                name = aiName,
+                size = 40.dp
+            )
+            Spacer(modifier = Modifier.size(10.dp))
+        }
         Column(
-            modifier = Modifier.widthIn(max = 520.dp),
+            modifier = Modifier.widthIn(max = 460.dp),
             horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
         ) {
             if (message.isThinking) {
@@ -439,6 +468,14 @@ private fun AgentMessageLine(
                 text = DateUtils.formatTime(message.timestamp),
                 style = MaterialTheme.typography.labelSmall,
                 color = colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+            )
+        }
+        if (isUser) {
+            Spacer(modifier = Modifier.size(10.dp))
+            AiAvatar(
+                avatarUri = userAvatarUri,
+                name = "",
+                size = 40.dp
             )
         }
     }
