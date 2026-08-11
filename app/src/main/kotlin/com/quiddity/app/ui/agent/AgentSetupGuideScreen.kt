@@ -203,7 +203,7 @@ fun AgentSetupGuideSheet(onDismiss: () -> Unit) {
                         }
 
                         item(key = "permissions", contentType = { "section" }) {
-                            AccordionSection(title = "权限开启（屏幕 / 通知 / 用量 / Shizuku）", defaultExpanded = true) {
+                            AccordionSection(title = "权限开启（屏幕、通知、用量、Shizuku）", defaultExpanded = true) {
                                 PermissionJumpRow(
                                     label = "无障碍（读屏）",
                                     desc = "Agent 读取屏幕文字的前提",
@@ -218,7 +218,7 @@ fun AgentSetupGuideSheet(onDismiss: () -> Unit) {
                                 )
                                 PermissionJumpRow(
                                     label = "使用情况访问",
-                                    desc = "Agent 用量统计 / 前台应用的前提",
+                                    desc = "Agent 用量统计与前台应用的前提",
                                     action = Settings.ACTION_USAGE_ACCESS_SETTINGS,
                                     context = context
                                 )
@@ -241,7 +241,7 @@ fun AgentSetupGuideSheet(onDismiss: () -> Unit) {
                             AccordionSection(title = "常见错误速查", defaultExpanded = false) {
                                 StepList(
                                     listOf(
-                                        "检测不到设备：充电线/数据线损坏、USB 模式不是「传输文件」或缺少驱动 → 换数据线；选「传输文件」；装官方驱动后重新检测。",
+                "检测不到设备：充电线或数据线损坏、USB 模式不是「传输文件」或缺少驱动 → 换数据线；选「传输文件」；装官方驱动后重新检测。",
                                         "一直显示「未授权」：手机锁屏或授权弹窗被关闭 → 解锁手机，点「允许 USB 调试」并勾选「始终允许」。",
                                         "安装失败 INSTALL_FAILED_UPDATE_INCOMPATIBLE：已装签名不一致的旧版 → 先卸载旧版再重装。",
                                         "提示需要先在手机上打开一次：从未打开过 Shizuku → 在手机上打开一次 Shizuku 应用。",
@@ -284,8 +284,8 @@ private val COMMON_ERRORS = listOf(
 
 private val systemTutorials = listOf(
     SystemTutorial(
-        title = "原生 Android（Android 8-10）",
-        applies = "适用于原生系统或未列出的品牌。先确认「设置」→「关于手机」→「Android 版本」是 8 / 9 / 10；是 11 或更高请改用「无线调试」方式。",
+        title = "原生 Android（Android 8 到 10）",
+        applies = "适用于原生系统或未列出的品牌。先确认「设置」→「关于手机」→「Android 版本」是 8、9 或 10；是 11 或更高请改用「无线调试」方式。",
         devSteps = listOf(
             "打开「设置」→「关于手机」。",
             "连续点击「版本号」7 次，直到提示「您已处于开发者模式」。",
@@ -302,8 +302,8 @@ private val systemTutorials = listOf(
         errors = COMMON_ERRORS
     ),
     SystemTutorial(
-        title = "MIUI 11 / 12（Android 8-10 小米 / 红米）",
-        applies = "适用于仍停留在 Android 8-10 的 MIUI 11 / 12 / 12.5 机型。MIUI 13 / 14、HyperOS 均为 Android 11+，请改用「无线调试」。",
+        title = "MIUI 11 到 12（Android 8 到 10，小米、红米）",
+        applies = "适用于仍停留在 Android 8 到 10 的 MIUI 11、12、12.5 机型。MIUI 13、14、HyperOS 均为 Android 11 及以上，请改用「无线调试」。",
         devSteps = listOf(
             "打开「设置」→「我的设备」→「全部参数与信息」。",
             "连续点击「MIUI 版本」7 次，直到提示「您已处于开发者模式」。",
@@ -315,15 +315,15 @@ private val systemTutorials = listOf(
             "手机弹出「允许 USB 调试？」时，勾选「始终允许」并点「确定」。"
         ),
         wirelessSteps = emptyList(),
-        wirelessNote = "MIUI 13 / 14、HyperOS（Android 11+）请改用「无线调试」方式。",
+        wirelessNote = "MIUI 13、14、HyperOS（Android 11 及以上）请改用「无线调试」方式。",
         authSteps = AUTH_USB_STEPS,
         errors = COMMON_ERRORS + (
             "安装失败 INSTALL_FAILED_UPDATE_INCOMPATIBLE" to "先卸载签名不一致的旧版 Shizuku 再重装（工具会自动尝试）。"
             )
     ),
     SystemTutorial(
-        title = "HyperOS（澎湃OS，Android 11+）",
-        applies = "适用于小米 / 红米 HyperOS 1 / 2 / 3（Android 13 / 14 / 16）。Android 11+ 只能走「无线调试」，不支持 USB 一键授权。",
+        title = "HyperOS（澎湃OS，Android 11 及以上）",
+        applies = "适用于小米、红米 HyperOS 1、2、3（Android 13、14、16）。Android 11 及以上只能走「无线调试」，不支持 USB 一键授权。",
         devSteps = listOf(
             "打开「设置」→「我的设备」→「全部参数与信息」。",
             "连续点击「HyperOS 版本」7 次，直到提示已处于开发者模式。",
@@ -348,8 +348,8 @@ private val systemTutorials = listOf(
         )
     ),
     SystemTutorial(
-        title = "EMUI 10 / HarmonyOS 2（华为）",
-        applies = "适用于 EMUI 10 或 HarmonyOS 2（兼容层为 Android 10）。HarmonyOS 3 / 4 兼容层为 Android 12，请改用「无线调试」。",
+        title = "EMUI 10 与 HarmonyOS 2（Android 10，华为）",
+        applies = "适用于 EMUI 10 或 HarmonyOS 2（兼容层为 Android 10）。HarmonyOS 3、4 兼容层为 Android 12，请改用「无线调试」。",
         devSteps = listOf(
             "打开「设置」→「关于手机」。",
             "连续点击「版本号」7 次，直到提示已处于开发者模式。",
@@ -360,14 +360,14 @@ private val systemTutorials = listOf(
             "用数据线连接电脑，手机弹出「允许 USB 调试？」时，勾选「始终允许」并点「确定」。"
         ),
         wirelessSteps = emptyList(),
-        wirelessNote = "HarmonyOS 3 / 4（Android 12）请改用「无线调试」方式。",
+        wirelessNote = "HarmonyOS 3、4（Android 12）请改用「无线调试」方式。",
         authSteps = AUTH_USB_STEPS,
         errors = COMMON_ERRORS + (
             "检测不到设备" to "换数据线；USB 模式选「传输文件」；安装华为手机助手或官方驱动后重新检测。"
             )
     ),
     SystemTutorial(
-        title = "ColorOS 7 / realme UI 1（OPPO / 一加 / 真我）",
+        title = "ColorOS 7 与 realme UI 1（Android 10，OPPO、一加、真我）",
         applies = "适用于 Android 10 的 ColorOS 7、realme UI 1.0。ColorOS 11+、realme UI 2+ 为 Android 11+，请改用「无线调试」。",
         devSteps = listOf(
             "打开「设置」→「关于本机」（真我机型为「关于手机」）。",
@@ -385,8 +385,8 @@ private val systemTutorials = listOf(
         errors = COMMON_ERRORS
     ),
     SystemTutorial(
-        title = "Funtouch OS 9 / 10（vivo / iQOO）",
-        applies = "适用于 Android 9 / 10 的 Funtouch OS 9 / 10。OriginOS 1.0 起全部基于 Android 11+（如 iQOO Neo 5），请改用「无线调试」。",
+        title = "Funtouch OS 9 到 10（vivo、iQOO）",
+        applies = "适用于 Android 9 到 10 的 Funtouch OS 9、10。OriginOS 1.0 起全部基于 Android 11 及以上（如 iQOO Neo 5），请改用「无线调试」。",
         devSteps = listOf(
             "打开「设置」→「关于手机」。",
             "连续点击「软件版本号」7 次，直到提示已处于开发者模式。",
@@ -404,7 +404,7 @@ private val systemTutorials = listOf(
     ),
     SystemTutorial(
         title = "Magic UI 3.x（荣耀）",
-        applies = "适用于 Android 10 的荣耀 Magic UI 3.x（如荣耀 20 系列、荣耀 V30 系列）。MagicOS 7 / 8 为 Android 12+，请改用「无线调试」。",
+        applies = "适用于 Android 10 的荣耀 Magic UI 3.x（如荣耀 20 系列、荣耀 V30 系列）。MagicOS 7、8 为 Android 12 及以上，请改用「无线调试」。",
         devSteps = listOf(
             "打开「设置」→「关于手机」。",
             "连续点击「版本号」7 次，直到提示已处于开发者模式。",
