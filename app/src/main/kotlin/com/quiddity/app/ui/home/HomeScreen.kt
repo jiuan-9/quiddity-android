@@ -107,6 +107,7 @@ import com.quiddity.app.data.model.Conversation
 import com.quiddity.app.data.model.ConversationType
 import com.quiddity.app.domain.GlobalChatSearch
 import com.quiddity.app.ui.agent.AgentTab
+import com.quiddity.app.ui.agent.AgentSettingsScreen
 import com.quiddity.app.ui.components.AiAvatar
 import com.quiddity.app.ui.components.ConfirmDialog
 import com.quiddity.app.ui.settings.SettingsBottomSheet
@@ -156,7 +157,7 @@ fun HomeScreen(
     settingsViewModel: SettingsViewModel,
     userAvatarUri: String?,
     onOpenMiniApps: () -> Unit = {},
-    onOpenAgentSettings: () -> Unit = {},
+    onOpenAgentGuide: () -> Unit = {},
     onOpenConversation: (String) -> Unit,
     onOpenMessage: (String, String) -> Unit
 ) {
@@ -165,6 +166,7 @@ fun HomeScreen(
     val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var showSettings by rememberSaveable { mutableStateOf(false) }
+    var showAgentSettings by rememberSaveable { mutableStateOf(false) }
 
     // ===== 私聊 / 群聊双 Tab（方案十四） =====
     val pagerState = rememberPagerState(initialPage = 1, pageCount = { 3 })
@@ -576,7 +578,8 @@ fun HomeScreen(
                             searchQuery = searchQuery,
                             onSearchQueryChange = { searchQuery = it },
                             onSettingsClick = {
-                                if (pagerState.currentPage == 0) onOpenAgentSettings() else showSettings = true
+                                // Agent 页：设置直接在会话列表上方滑出（与总设置同款底部弹层）
+                                if (pagerState.currentPage == 0) showAgentSettings = true else showSettings = true
                             },
                             onNewConversation = {
                                 when (pagerState.currentPage) {
@@ -805,6 +808,15 @@ fun HomeScreen(
         SettingsBottomSheet(
             viewModel = settingsViewModel,
             onDismiss = { showSettings = false }
+        )
+    }
+
+    // ===== Agent 设置：与总设置同款，直接在会话列表上方滑出 =====
+    if (showAgentSettings) {
+        AgentSettingsScreen(
+            settingsViewModel = settingsViewModel,
+            onBack = { showAgentSettings = false },
+            onOpenGuide = onOpenAgentGuide
         )
     }
 

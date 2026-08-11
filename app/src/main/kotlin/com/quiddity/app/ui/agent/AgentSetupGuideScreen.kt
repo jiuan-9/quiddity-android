@@ -5,6 +5,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -132,21 +134,22 @@ fun AgentSetupGuideScreen(
 @Composable
 private fun WirelessGuide() {
     GuideSection(
-        title = "Android 11+：无线调试（免电脑）",
+        title = "Android 11+：无线调试启动 Shizuku（免电脑）",
         steps = listOf(
-            "安装 Shizuku（官网或酷安下载，本机不内置）。",
-            "打开系统设置 → 开发者选项 → 开启「无线调试」。",
-            "进入 Shizuku，选择「通过无线调试启动」，按提示输入 6 位配对码。",
-            "授权完成后返回本 App，设置页 Shizuku 状态变为「已授权」。",
-            "之后在 Agent 设置中开启对应写入工具并添加白名单即可使用。"
+            "打开手机「设置」→「开发者选项」→ 打开「无线调试」。",
+            "打开 Shizuku 应用 →「无线调试」→ 点「开始」。",
+            "在「无线调试」中点击「使用配对码配对设备」，记下 6 位配对码。",
+            "在 Shizuku 的通知中输入配对码，完成配对。",
+            "返回 Shizuku 点「启动」，等待提示已运行。"
         )
     )
     GuideSection(
-        title = "常见问题",
+        title = "注意",
         steps = listOf(
-            "重启手机后 Shizuku 服务会失效，需重新启动（配对码可能需重新输入）。",
-            "小米澎湃OS（HyperOS）等国产系统需登录账号后才能在开发者选项中使用无线调试。",
-            "屏幕/通知权限在系统设置中单独开启，与本教程互不影响。"
+            "每次手机重启后需重新启动一次（配对只需一次）。",
+            "若一直「正在搜索配对服务」：允许 Shizuku 后台运行；小米机型把通知样式改为「Android」样式。",
+            "配对失败或输入配对码无效：配对码已过期，重新点击「使用配对码配对设备」，在 60 秒内输入。",
+            "启动后，回到本 App → Agent → 设置 → 权限 →「去开启」，同意 Binder 授权弹窗即可解锁进阶能力。"
         )
     )
 }
@@ -156,21 +159,58 @@ private fun PcGuide() {
     GuideSection(
         title = "Android 8-10：PC 一键授权（USB）",
         steps = listOf(
-            "在电脑上运行 Quiddity 授权助手（D:\\quiddity授权助手，需另行获取）。",
-            "手机开启开发者选项 → USB 调试；小米澎湃OS（HyperOS）建议同时开启「USB 调试（安全设置）」。",
-            "用数据线连接电脑，授权助手会自动检测设备并安装/启动 Shizuku。",
-            "手机端弹出授权窗口时点击允许。",
-            "完成后返回本 App，设置页 Shizuku 状态变为「已授权」。"
+            "先开启「开发者选项」（入口见下方各系统对照表）。",
+            "在「开发者选项」中打开「USB 调试」，首次弹出确认窗口时点「允许」；建议同时打开「USB 安装」。",
+            "用数据线连接电脑，USB 模式选择「传输文件」。",
+            "手机弹出「允许 USB 调试？」时，勾选「始终允许使用这台计算机进行调试」，点「确定」。",
+            "在电脑上打开「Quiddity 授权助手」，点「一键授权」，工具会自动安装并启动 Shizuku。",
+            "完成后回到本 App → Agent → 设置 → 权限 →「去开启」，同意 Binder 授权弹窗即可解锁进阶能力。"
         )
     )
+    GuideSection(title = "各系统开启「开发者选项」入口") {
+        BrandEntryRow("MIUI 11 / 12（Android 8-10）", "设置 → 我的设备 → 全部参数与信息 → 连点「MIUI 版本」7 次")
+        BrandEntryRow("HyperOS（Android 11+）", "设置 → 我的设备 → 全部参数与信息 → 连点「HyperOS 版本」7 次")
+        BrandEntryRow("EMUI 10 / HarmonyOS 2", "设置 → 关于手机 → 连点「版本号」7 次")
+        BrandEntryRow("ColorOS 7 / realme UI 1", "设置 → 关于本机 → 连点「版本号」7 次")
+        BrandEntryRow("Funtouch OS 9 / 10", "设置 → 关于手机 → 连点「软件版本号」7 次")
+        BrandEntryRow("Magic UI 3.x", "设置 → 关于手机 → 连点「版本号」7 次")
+        BrandEntryRow("One UI 2.x", "设置 → 关于手机 → 软件信息 → 连点「编译编号」7 次")
+        BrandEntryRow("原生 Android", "设置 → 关于手机 → 连点「版本号」7 次")
+    }
     GuideSection(
-        title = "常见问题",
+        title = "常见错误速查",
         steps = listOf(
-            "重启手机后 Shizuku 服务会失效，需重新插线执行一键授权。",
-            "无法识别设备时检查驱动、数据线是否支持数据传输、USB 调试是否开启。",
-            "国产 ROM 需额外开启「USB 调试（安全设置）」并登录账号。"
+            "检测不到设备：充电线/数据线损坏、USB 模式不是「传输文件」或缺少驱动 → 换数据线；USB 模式选「传输文件」；安装官方驱动后重新检测。",
+            "一直显示「未授权」：手机锁屏或授权弹窗被关闭 → 解锁手机，点「允许 USB 调试」并勾选「始终允许」，重新检测。",
+            "安装失败 INSTALL_FAILED_UPDATE_INCOMPATIBLE：已安装签名不一致的旧版 Shizuku → 先卸载旧版再重装（工具会自动尝试）。",
+            "提示需要先在手机上打开一次：从未打开过 Shizuku → 在手机上打开一次 Shizuku 应用。",
+            "Shizuku 已运行但仍锁定：未授予本 App 的 Binder 权限 → Agent 设置 → 权限 →「去开启」，同意授权弹窗。",
+            "系统提示「版本不支持」：手机是 Android 11+ → 请改用「无线调试」方式。"
         )
     )
+}
+
+@Composable
+private fun BrandEntryRow(brand: String, entry: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.Top
+    ) {
+        Text(
+            text = brand,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.widthIn(max = 150.dp)
+        )
+        Spacer(modifier = Modifier.size(8.dp))
+        Text(
+            text = entry,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f)
+        )
+    }
 }
 
 @Composable
@@ -186,7 +226,11 @@ private fun UnsupportedGuide() {
 }
 
 @Composable
-private fun GuideSection(title: String, steps: List<String>) {
+private fun GuideSection(
+    title: String,
+    steps: List<String> = emptyList(),
+    content: (@Composable ColumnScope.() -> Unit)? = null
+) {
     Surface(
         shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -208,6 +252,9 @@ private fun GuideSection(title: String, steps: List<String>) {
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurface
                 )
+            }
+            if (content != null) {
+                content()
             }
         }
     }

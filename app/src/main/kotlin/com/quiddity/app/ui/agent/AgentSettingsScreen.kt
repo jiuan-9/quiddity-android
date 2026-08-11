@@ -2,7 +2,10 @@ package com.quiddity.app.ui.agent
 
 import android.app.AppOpsManager
 import android.content.Context
+import android.content.Intent
 import android.os.Process
+import android.provider.Settings
+import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
@@ -60,9 +63,11 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableFloatState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -80,6 +85,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.quiddity.app.active.NotificationBridge
 import com.quiddity.app.active.ScreenReaderService
 import com.quiddity.app.di.ServiceLocator
@@ -139,10 +147,21 @@ fun AgentSettingsScreen(
     var showClearSessions by rememberSaveable { mutableStateOf(false) }
     var showGlobalSettings by rememberSaveable { mutableStateOf(false) }
 
-    val accessibilityEnabled = remember { ScreenReaderService.isServiceEnabled(context) }
-    val notificationEnabled = remember { NotificationBridge.isServiceEnabled(context) }
-    val usageEnabled = remember { hasUsageAccess(context) }
-    val shizukuInstalled = remember { isShizukuInstalled(context) }
+    // 从系统设置返回后刷新权限状态（ON_RESUME）
+    var refreshTick by remember { mutableIntStateOf(0) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) refreshTick++
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    val accessibilityEnabled = remember(refreshTick) { ScreenReaderService.isServiceEnabled(context) }
+    val notificationEnabled = remember(refreshTick) { NotificationBridge.isServiceEnabled(context) }
+    val usageEnabled = remember(refreshTick) { hasUsageAccess(context) }
+    val shizukuInstalled = remember(refreshTick) { isShizukuInstalled(context) }
     val shizukuGranted = false
 
     var visible by remember { mutableStateOf(false) }
@@ -234,19 +253,19 @@ fun AgentSettingsScreen(
                                     icon = Icons.Filled.Visibility,
                                     title = "无障碍（读屏）",
                                     subtitle = if (accessibilityEnabled) "已开启" else "未开启",
-                                    onClick = onOpenGuide
+                                    onClick = { openSystemSettings(context, Settings.ACTION_ACCESSIBILITY_SETTINGS) }
                                 )
                                 ClickableRow(
                                     icon = Icons.Filled.Notifications,
                                     title = "通知读取",
                                     subtitle = if (notificationEnabled) "已开启" else "未开启",
-                                    onClick = onOpenGuide
+                                    onClick = { openSystemSettings(context, Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS) }
                                 )
                                 ClickableRow(
                                     icon = Icons.Filled.Speed,
                                     title = "使用情况访问",
                                     subtitle = if (usageEnabled) "已开启" else "未开启",
-                                    onClick = onOpenGuide
+                                    onClick = { openSystemSettings(context, Settings.ACTION_USAGE_ACCESS_SETTINGS) }
                                 )
                                 ClickableRow(
                                     icon = Icons.Filled.Settings,
@@ -256,7 +275,13 @@ fun AgentSettingsScreen(
                                         shizukuInstalled -> "已安装，未授权"
                                         else -> "未安装"
                                     },
-                                    onClick = onOpenGuide
+                                    onClick = {
+                                        if (shizukuInstalled) {
+                                            launchShizukuApp(context)
+                                        } else {
+                                            onOpenGuide()
+                                        }
+                                    }
                                 )
                             }
                         }
@@ -633,3 +658,27 @@ private fun isShizukuInstalled(context: Context): Boolean = runCatching {
     context.packageManager.getPackageInfo("moe.shizuku.xyz", 0)
     true
 }.getOrDefault(false)
+
+/** 直接跳转系统对应设置页（无障碍 / 通知使用权 / 使用情况访问）。 */
+private fun openSystemSettings(context: Context, action: String) {
+    runCatching {
+        context.startActivity(Intent(action))
+    }.onFailure {
+        Toast.makeText(context, "无法打开系统设置", Toast.LENGTH_SHORT).show()
+    }
+}
+
+/** 已安装 Shizuku 时直接拉起 Shizuku 应用。 */
+private fun launchShizukuApp(context: Context) {
+    runCatching {
+        val intent = context.packageManager
+            .getLaunchIntentForPackage("moe.shizuku.privileged.api")
+        if (intent != null) {
+            context.startActivity(intent)
+        } else {
+            openSystemSettings(context, Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+        }
+    }.onFailure {
+        Toast.makeText(context, "无法打开 Shizuku", Toast.LENGTH_SHORT).show()
+    }
+}
