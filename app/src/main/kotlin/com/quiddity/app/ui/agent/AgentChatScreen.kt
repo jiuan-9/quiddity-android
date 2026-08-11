@@ -27,6 +27,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -69,7 +70,6 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
@@ -416,7 +416,20 @@ fun AgentChatScreen(
                                     )
                                 ) {
                                     toolUseName?.let { name ->
-                                        ToolUseShimmerLine(toolName = name)
+                                        Column(modifier = Modifier.fillMaxWidth()) {
+                                            // 工具报告与正文之间的细淡分割线
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .height(1.dp)
+                                                    .background(
+                                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                                            .copy(alpha = 0.14f)
+                                                    )
+                                            )
+                                            Spacer(modifier = Modifier.size(8.dp))
+                                            ToolUseShimmerLine(toolName = name)
+                                        }
                                     }
                                 }
                             }
@@ -627,7 +640,7 @@ private fun AgentMessageLine(
     }
 }
 
-/** Agent 消息正文：Markdown 行内样式 + 代码块，无气泡容器。 */
+/** Agent 消息正文：Markdown 行内样式 + 代码块 + 列表专用文本框，无气泡容器。 */
 @Composable
 private fun AgentMarkdownText(
     content: String,
@@ -640,10 +653,11 @@ private fun AgentMarkdownText(
         initialValue = MarkdownParser.ParsedMarkdown(content, emptyList()),
         key1 = content
     ) {
-        if (isStreaming || content.isEmpty()) {
-            value = MarkdownParser.ParsedMarkdown(content, emptyList())
+        // 流式期间也渲染 Markdown，避免 ** 等标记原样显示（如 08:03 那条回复）
+        value = if (content.isEmpty()) {
+            MarkdownParser.ParsedMarkdown("", emptyList())
         } else {
-            value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
                 MarkdownParser.parseMarkdown(content)
             }
         }
@@ -651,9 +665,21 @@ private fun AgentMarkdownText(
     val annotated = remember(parsed, color) {
         agentApplyMarkdownStyles(parsed, color, colorScheme.primary, colorScheme.onSurfaceVariant)
     }
-    if (markdownEnabled && !isStreaming) {
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            MarkdownParser.parse(content).forEach { block ->
+    val blocks = remember(content) { MarkdownParser.parse(content) }
+    // 列表判定：包含 - / * / + / • / 数字序号 开头的行 → 放入专用纯文本框
+    val isListLike = remember(content) {
+        content.lines().any { line ->
+            val t = line.trim()
+            t.isNotEmpty() && (
+                t.startsWith("- ") || t.startsWith("* ") || t.startsWith("+ ") ||
+                    t.startsWith("• ") || Regex("^\\d+[.)] ").containsMatchIn(t)
+                )
+        }
+    }
+    if (markdownEnabled) {
+        val rendered: @Composable () -> Unit = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                blocks.forEach { block ->
                 when (block) {
                     is MarkdownParser.Block.Text -> {
                         Text(
@@ -667,6 +693,27 @@ private fun AgentMarkdownText(
                     }
                 }
             }
+                if (isStreaming && content.isNotEmpty()) {
+                    Row(verticalAlignment = Alignment.Bottom) {
+                        Spacer(modifier = Modifier.size(2.dp))
+                        StreamingCursor()
+                    }
+                }
+            }
+        }
+        if (isListLike) {
+            // 列表内容放入专用纯文本框（与网页版 DeepSeek 等 AI 聊天软件一致）
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
+            ) {
+                rendered()
+            }
+        } else {
+            rendered()
         }
     } else {
         Row(verticalAlignment = Alignment.Bottom) {
@@ -817,7 +864,7 @@ private fun AgentActionButton(
     }
 }
 
-/** 工具使用报告条：图标 + 工具名 + 正在做的事，背景滑动高亮（加载效果）。 */
+/** 工具使用报告条：图标 + 工具名 + 正在做的事；滑动高亮只作用于文字本身。 */
 @Composable
 private fun ToolUseShimmerLine(toolName: String) {
     val colorScheme = MaterialTheme.colorScheme
@@ -832,26 +879,7 @@ private fun ToolUseShimmerLine(toolName: String) {
     )
     Row(
         modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .background(colorScheme.surfaceVariant.copy(alpha = 0.5f))
-            .drawWithCache {
-                onDrawBehind {
-                    val p = progress
-                    drawRect(
-                        brush = Brush.linearGradient(
-                            colors = listOf(
-                                Color.Transparent,
-                                colorScheme.primary.copy(alpha = 0.35f),
-                                Color.Transparent
-                            ),
-                            start = Offset(size.width * (p - 0.6f), 0f),
-                            end = Offset(size.width * (p + 0.6f), size.height)
-                        )
-                    )
-                }
-            }
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
@@ -861,12 +889,23 @@ private fun ToolUseShimmerLine(toolName: String) {
             modifier = Modifier.size(15.dp)
         )
         Spacer(modifier = Modifier.size(8.dp))
-        Text(
-            text = "${AgentToolRegistry.displayName(toolName)} --- ${AgentToolRegistry.actionFor(toolName)}",
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.Medium,
-            color = colorScheme.onSurfaceVariant
-        )
+        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+            val widthPx = with(LocalDensity.current) { maxWidth.toPx() }
+            val brush = Brush.linearGradient(
+                colors = listOf(
+                    colorScheme.onSurfaceVariant,
+                    colorScheme.primary,
+                    colorScheme.onSurfaceVariant
+                ),
+                start = Offset(widthPx * (progress - 0.5f), 0f),
+                end = Offset(widthPx * (progress + 0.5f), 0f)
+            )
+            Text(
+                text = "${AgentToolRegistry.displayName(toolName)} --- ${AgentToolRegistry.actionFor(toolName)}",
+                style = MaterialTheme.typography.bodySmall.copy(brush = brush),
+                fontWeight = FontWeight.Medium
+            )
+        }
     }
 }
 
