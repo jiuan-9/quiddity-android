@@ -193,51 +193,12 @@ fun AgentSetupGuideSheet(onDismiss: () -> Unit) {
                         ),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        item(key = "brands", contentType = { "section" }) {
-                            AccordionSection(title = "按系统开启「开发者选项」", defaultExpanded = false) {
-                                BrandEntryRow("MIUI 11 / 12（Android 8-10）", "设置 → 我的设备 → 全部参数与信息 → 连点「MIUI 版本」7 次")
-                                BrandEntryRow("HyperOS（Android 11+）", "设置 → 我的设备 → 全部参数与信息 → 连点「HyperOS 版本」7 次")
-                                BrandEntryRow("EMUI 10 / HarmonyOS 2", "设置 → 关于手机 → 连点「版本号」7 次")
-                                BrandEntryRow("ColorOS 7 / realme UI 1", "设置 → 关于本机 → 连点「版本号」7 次")
-                                BrandEntryRow("Funtouch OS 9 / 10", "设置 → 关于手机 → 连点「软件版本号」7 次")
-                                BrandEntryRow("Magic UI 3.x", "设置 → 关于手机 → 连点「版本号」7 次")
-                                BrandEntryRow("One UI 2.x", "设置 → 关于手机 → 软件信息 → 连点「编译编号」7 次")
-                                BrandEntryRow("原生 Android", "设置 → 关于手机 → 连点「版本号」7 次")
-                            }
-                        }
-
-                        item(key = "wireless", contentType = { "section" }) {
-                            AccordionSection(title = "Android 11+：无线调试启动 Shizuku", defaultExpanded = false) {
-                                StepList(
-                                    listOf(
-                                        "打开手机「设置」→「开发者选项」→ 打开「无线调试」。",
-                                        "打开 Shizuku 应用 →「无线调试」→ 点「开始」。",
-                                        "在「无线调试」中点击「使用配对码配对设备」，记下 6 位配对码。",
-                                        "在 Shizuku 的通知中输入配对码，完成配对。",
-                                        "返回 Shizuku 点「启动」，等待提示已运行。"
-                                    )
-                                )
-                                NoteText(
-                                    listOf(
-                                        "每次手机重启后需重新启动一次（配对只需一次）。",
-                                        "若一直「正在搜索配对服务」：允许 Shizuku 后台运行；小米机型把通知样式改为「Android」样式。",
-                                        "配对失败或输入配对码无效：配对码已过期，重新配对并在 60 秒内输入。"
-                                    )
-                                )
-                            }
-                        }
-
-                        item(key = "pc", contentType = { "section" }) {
-                            AccordionSection(title = "Android 8-10：USB + 授权助手", defaultExpanded = false) {
-                                StepList(
-                                    listOf(
-                                        "先开启「开发者选项」（入口见上方各系统对照表）。",
-                                        "在「开发者选项」中打开「USB 调试」，首次弹窗点「允许」；建议同时打开「USB 安装」。",
-                                        "用数据线连接电脑，USB 模式选择「传输文件」。",
-                                        "手机弹出「允许 USB 调试？」时，勾选「始终允许使用这台计算机进行调试」，点「确定」。",
-                                        "在电脑上打开「Quiddity 授权助手」，点「一键授权」，工具会自动安装并启动 Shizuku。"
-                                    )
-                                )
+                        // ===== 按系统一条龙：每个系统 = 适用/开发者选项/USB调试/启动Shizuku/常见错误 =====
+                        systemTutorials.forEach { system ->
+                            item(key = system.title, contentType = { "system" }) {
+                                AccordionSection(title = system.title, defaultExpanded = false) {
+                                    SystemTutorialContent(system)
+                                }
                             }
                         }
 
@@ -291,6 +252,250 @@ fun AgentSetupGuideSheet(onDismiss: () -> Unit) {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/** 单个系统的完整教程数据（与「Quiddity 授权助手」各品牌页面同源）。 */
+private data class SystemTutorial(
+    val title: String,
+    val applies: String,
+    val devSteps: List<String>,
+    val usbSteps: List<String>,
+    val wirelessSteps: List<String>,
+    val wirelessNote: String?,
+    val authSteps: List<String>,
+    val errors: List<Pair<String, String>>
+)
+
+private val AUTH_USB_STEPS = listOf(
+    "在电脑上运行「Quiddity 授权助手」。",
+    "用数据线连上手机，状态变绿显示「已就绪」。",
+    "点「一键授权」，工具自动完成：安装 Shizuku → 打开一次应用 → 启动服务并校验。",
+    "回到手机 Quiddity → Agent → 设置 → 权限 →「去开启」，同意 Binder 授权弹窗即可解锁进阶能力。"
+)
+
+private val COMMON_ERRORS = listOf(
+    "检测不到设备" to "换数据线；USB 模式选「传输文件」；安装厂商官方驱动后重新检测。",
+    "一直显示「未授权」" to "解锁手机，点「允许 USB 调试」并勾选「始终允许」，重新检测。",
+    "Shizuku 已运行但仍锁定" to "打开 Quiddity → Agent → 设置 → 权限 →「去开启」，同意 Binder 授权弹窗。"
+)
+
+private val systemTutorials = listOf(
+    SystemTutorial(
+        title = "原生 Android（Android 8-10）",
+        applies = "适用于原生系统或未列出的品牌。先确认「设置」→「关于手机」→「Android 版本」是 8 / 9 / 10；是 11 或更高请改用「无线调试」方式。",
+        devSteps = listOf(
+            "打开「设置」→「关于手机」。",
+            "连续点击「版本号」7 次，直到提示「您已处于开发者模式」。",
+            "返回「设置」→「系统」→ 进入「开发者选项」。"
+        ),
+        usbSteps = listOf(
+            "打开「USB 调试」，首次弹出确认窗口时点「允许」。",
+            "用数据线连接电脑，USB 模式选择「传输文件」。",
+            "手机弹出「允许 USB 调试？」时，勾选「始终允许使用这台计算机进行调试」并点「确定」。"
+        ),
+        wirelessSteps = emptyList(),
+        wirelessNote = "Android 11+ 请改用 Shizuku 的「无线调试」方式，不要走 USB 流程。",
+        authSteps = AUTH_USB_STEPS,
+        errors = COMMON_ERRORS
+    ),
+    SystemTutorial(
+        title = "MIUI 11 / 12（Android 8-10 小米 / 红米）",
+        applies = "适用于仍停留在 Android 8-10 的 MIUI 11 / 12 / 12.5 机型。MIUI 13 / 14、HyperOS 均为 Android 11+，请改用「无线调试」。",
+        devSteps = listOf(
+            "打开「设置」→「我的设备」→「全部参数与信息」。",
+            "连续点击「MIUI 版本」7 次，直到提示「您已处于开发者模式」。",
+            "返回「设置」→「更多设置」→ 进入「开发者选项」。"
+        ),
+        usbSteps = listOf(
+            "打开「USB 调试」，首次弹窗点「允许」；建议同时打开「USB 安装」。",
+            "用数据线连接电脑，USB 模式选择「传输文件」。",
+            "手机弹出「允许 USB 调试？」时，勾选「始终允许」并点「确定」。"
+        ),
+        wirelessSteps = emptyList(),
+        wirelessNote = "MIUI 13 / 14、HyperOS（Android 11+）请改用「无线调试」方式。",
+        authSteps = AUTH_USB_STEPS,
+        errors = COMMON_ERRORS + (
+            "安装失败 INSTALL_FAILED_UPDATE_INCOMPATIBLE" to "先卸载签名不一致的旧版 Shizuku 再重装（工具会自动尝试）。"
+            )
+    ),
+    SystemTutorial(
+        title = "HyperOS（澎湃OS，Android 11+）",
+        applies = "适用于小米 / 红米 HyperOS 1 / 2 / 3（Android 13 / 14 / 16）。Android 11+ 只能走「无线调试」，不支持 USB 一键授权。",
+        devSteps = listOf(
+            "打开「设置」→「我的设备」→「全部参数与信息」。",
+            "连续点击「HyperOS 版本」7 次，直到提示已处于开发者模式。",
+            "返回「设置」→「更多设置」→ 进入「开发者选项」。"
+        ),
+        usbSteps = emptyList(),
+        wirelessSteps = listOf(
+            "打开「开发者选项」→ 打开「无线调试」。",
+            "打开 Shizuku 应用 →「无线调试」→ 点「开始」。",
+            "在「无线调试」中点击「使用配对码配对设备」，记下 6 位配对码。",
+            "在 Shizuku 的通知中输入配对码，完成配对。",
+            "返回 Shizuku 点「启动」，等待提示已运行。"
+        ),
+        wirelessNote = "每次手机重启后需重新启动一次（配对只需一次）。若一直「正在搜索配对服务」：允许 Shizuku 后台运行，并把通知样式切换为「Android」样式。",
+        authSteps = listOf(
+            "回到手机 Quiddity → Agent → 设置 → 权限 →「去开启」，同意 Binder 授权弹窗即可解锁进阶能力。"
+        ),
+        errors = listOf(
+            "配对失败或输入配对码无效" to "配对码已过期，重新点击「使用配对码配对设备」，在 60 秒内输入。",
+            "一直「正在搜索配对服务」" to "允许 Shizuku 后台运行；小米机型把通知样式改为「Android」样式。",
+            "Shizuku 已运行但仍锁定" to "打开 Quiddity → Agent → 设置 → 权限 →「去开启」，同意 Binder 授权弹窗。"
+        )
+    ),
+    SystemTutorial(
+        title = "EMUI 10 / HarmonyOS 2（华为）",
+        applies = "适用于 EMUI 10 或 HarmonyOS 2（兼容层为 Android 10）。HarmonyOS 3 / 4 兼容层为 Android 12，请改用「无线调试」。",
+        devSteps = listOf(
+            "打开「设置」→「关于手机」。",
+            "连续点击「版本号」7 次，直到提示已处于开发者模式。",
+            "返回「设置」→「系统和更新」→ 进入「开发人员选项」。"
+        ),
+        usbSteps = listOf(
+            "打开「USB 调试」，首次弹窗点「允许」。",
+            "用数据线连接电脑，手机弹出「允许 USB 调试？」时，勾选「始终允许」并点「确定」。"
+        ),
+        wirelessSteps = emptyList(),
+        wirelessNote = "HarmonyOS 3 / 4（Android 12）请改用「无线调试」方式。",
+        authSteps = AUTH_USB_STEPS,
+        errors = COMMON_ERRORS + (
+            "检测不到设备" to "换数据线；USB 模式选「传输文件」；安装华为手机助手或官方驱动后重新检测。"
+            )
+    ),
+    SystemTutorial(
+        title = "ColorOS 7 / realme UI 1（OPPO / 一加 / 真我）",
+        applies = "适用于 Android 10 的 ColorOS 7、realme UI 1.0。ColorOS 11+、realme UI 2+ 为 Android 11+，请改用「无线调试」。",
+        devSteps = listOf(
+            "打开「设置」→「关于本机」（真我机型为「关于手机」）。",
+            "连续点击「版本号」7 次，直到提示已处于开发者模式。",
+            "返回「设置」→「其他设置」→ 进入「开发者选项」。"
+        ),
+        usbSteps = listOf(
+            "打开「USB 调试」，首次弹窗点「允许」。",
+            "用数据线连接电脑，USB 模式选择「传输文件」。",
+            "手机弹出「允许 USB 调试？」时，勾选「始终允许」并点「确定」。"
+        ),
+        wirelessSteps = emptyList(),
+        wirelessNote = "ColorOS 11+、realme UI 2+（Android 11+）请改用「无线调试」方式。",
+        authSteps = AUTH_USB_STEPS,
+        errors = COMMON_ERRORS
+    ),
+    SystemTutorial(
+        title = "Funtouch OS 9 / 10（vivo / iQOO）",
+        applies = "适用于 Android 9 / 10 的 Funtouch OS 9 / 10。OriginOS 1.0 起全部基于 Android 11+（如 iQOO Neo 5），请改用「无线调试」。",
+        devSteps = listOf(
+            "打开「设置」→「关于手机」。",
+            "连续点击「软件版本号」7 次，直到提示已处于开发者模式。",
+            "返回「设置」→「更多设置」→ 进入「开发者选项」。"
+        ),
+        usbSteps = listOf(
+            "打开「USB 调试」，首次弹窗点「允许」。",
+            "用数据线连接电脑，USB 模式选择「传输文件」。",
+            "手机弹出「允许 USB 调试？」时，勾选「始终允许」并点「确定」。"
+        ),
+        wirelessSteps = emptyList(),
+        wirelessNote = "OriginOS（Android 11+）请改用「无线调试」方式。",
+        authSteps = AUTH_USB_STEPS,
+        errors = COMMON_ERRORS
+    ),
+    SystemTutorial(
+        title = "Magic UI 3.x（荣耀）",
+        applies = "适用于 Android 10 的荣耀 Magic UI 3.x（如荣耀 20 系列、荣耀 V30 系列）。MagicOS 7 / 8 为 Android 12+，请改用「无线调试」。",
+        devSteps = listOf(
+            "打开「设置」→「关于手机」。",
+            "连续点击「版本号」7 次，直到提示已处于开发者模式。",
+            "返回「设置」→「系统和更新」→ 进入「开发人员选项」。"
+        ),
+        usbSteps = listOf(
+            "打开「USB 调试」，首次弹窗点「允许」。",
+            "用数据线连接电脑，手机弹出「允许 USB 调试？」时，勾选「始终允许」并点「确定」。"
+        ),
+        wirelessSteps = emptyList(),
+        wirelessNote = "MagicOS（Android 12+）请改用「无线调试」方式。",
+        authSteps = AUTH_USB_STEPS,
+        errors = COMMON_ERRORS
+    ),
+    SystemTutorial(
+        title = "One UI 2.x（三星）",
+        applies = "适用于 Android 10 的三星 One UI 2.x。One UI 3+ 为 Android 11+，请改用「无线调试」。",
+        devSteps = listOf(
+            "打开「设置」→「关于手机」→「软件信息」。",
+            "连续点击「编译编号」7 次，直到提示「开发者模式已启用」。",
+            "返回「设置」→ 进入「开发者选项」。"
+        ),
+        usbSteps = listOf(
+            "打开「USB 调试」，首次弹窗点「允许」。",
+            "用数据线连接电脑，手机弹出「允许 USB 调试？」时，勾选「始终允许」并点「确定」。"
+        ),
+        wirelessSteps = emptyList(),
+        wirelessNote = "One UI 3+（Android 11+）请改用「无线调试」方式。",
+        authSteps = AUTH_USB_STEPS,
+        errors = COMMON_ERRORS + (
+            "检测不到设备" to "换数据线；USB 模式选「传输文件」；安装三星 USB 驱动（Samsung USB Driver）后重新检测。"
+            )
+    )
+)
+
+/** 单个系统的完整教程渲染：适用 / 开发者选项 / USB 调试 / 启动 Shizuku / 常见错误。 */
+@Composable
+private fun SystemTutorialContent(system: SystemTutorial) {
+    GuideSubTitle("适用")
+    Text(
+        text = system.applies,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    GuideSubTitle("① 开启开发者选项")
+    StepList(system.devSteps)
+    if (system.usbSteps.isNotEmpty()) {
+        GuideSubTitle("② 开启 USB 调试")
+        StepList(system.usbSteps)
+    }
+    GuideSubTitle(if (system.wirelessSteps.isNotEmpty()) "② 无线调试启动 Shizuku" else "② 启动 Shizuku")
+    if (system.wirelessSteps.isNotEmpty()) {
+        StepList(system.wirelessSteps)
+    }
+    if (system.authSteps.isNotEmpty()) {
+        StepList(system.authSteps)
+    }
+    system.wirelessNote?.let { NoteText(listOf(it)) }
+    GuideSubTitle("常见错误")
+    ErrorList(system.errors)
+}
+
+/** 小节标题。 */
+@Composable
+private fun GuideSubTitle(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelLarge,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(top = 4.dp)
+    )
+}
+
+/** 错误列表：现象（加粗）→ 解决（次级色）。 */
+@Composable
+private fun ErrorList(rows: List<Pair<String, String>>) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        rows.forEach { (phenomenon, solution) ->
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = phenomenon,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = solution,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }
@@ -465,26 +670,6 @@ private fun NoteText(lines: List<String>) {
                 )
             }
         }
-    }
-}
-
-@Composable
-private fun BrandEntryRow(brand: String, entry: String) {
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        Text(
-            text = brand,
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-        Text(
-            text = entry,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
     }
 }
 
