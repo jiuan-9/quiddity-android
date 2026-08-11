@@ -2,6 +2,16 @@ package com.quiddity.app.ui.agent
 
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FiniteAnimationSpec
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -14,7 +24,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
@@ -44,7 +54,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
@@ -65,10 +77,14 @@ import com.quiddity.app.data.model.Role
 import com.quiddity.app.di.ServiceLocator
 import com.quiddity.app.ui.chat.ChatViewModel
 import com.quiddity.app.ui.chat.components.ChatInputBar
+import com.quiddity.app.ui.chat.components.StreamingCursor
+import com.quiddity.app.ui.chat.components.TypingIndicator
 import com.quiddity.app.ui.chat.components.panels.PersonaPanel
 import com.quiddity.app.ui.settings.SettingsViewModel
+import com.quiddity.app.ui.theme.Motion
 import com.quiddity.app.util.DateUtils
 import com.quiddity.app.util.MarkdownParser
+import kotlinx.coroutines.launch
 
 /*
  * ============================================================================
@@ -119,6 +135,8 @@ fun AgentChatScreen(
     val context = LocalContext.current
     val listState = rememberLazyListState()
     var showPersona by rememberSaveable { mutableStateOf(false) }
+    // 会话打开时刻：只有此后新到达的消息播放入场动画（历史消息滚动回来不重放）
+    val openedAtMs = rememberSaveable { System.currentTimeMillis() }
 
     DisposableEffect(Unit) {
         onDispose { onConversationExit() }
@@ -144,6 +162,7 @@ fun AgentChatScreen(
         modifier = Modifier
             .fillMaxSize()
             .windowInsetsPadding(WindowInsets.statusBars)
+            .imePadding()
     ) {
         // ===== 顶栏：返回 + 标题 + 汉堡（人设） =====
         Row(
@@ -214,12 +233,21 @@ fun AgentChatScreen(
                 }
                 messages.isEmpty() -> {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text(
-                            text = "Agent 会话已就绪\n输入指令开始（只读工具默认开启）",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                            textAlign = TextAlign.Center
-                        )
+                        Column {
+                            AnimatedVisibility(
+                                visible = true,
+                                enter = fadeIn(
+                                    tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedDecelerate)
+                                )
+                            ) {
+                                Text(
+                                    text = "Agent 会话已就绪\n输入指令开始（只读工具默认开启）",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
                     }
                 }
                 else -> {
@@ -233,10 +261,41 @@ fun AgentChatScreen(
                         ),
                         verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
+                        // 生成中且尚无流式内容时，底部显示打字指示（紧贴输入栏）
+                        val lastMsg = messages.lastOrNull { !it.isNotice }
+                        val showTyping = isGenerating &&
+                            (lastMsg == null || !(lastMsg.role == Role.ASSISTANT && lastMsg.isStreaming))
+                        item(key = "agent_typing", contentType = { "typing" }) {
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                AnimatedVisibility(
+                                    visible = showTyping,
+                                    enter = fadeIn(
+                                        tween(Motion.DurationShort, easing = Motion.EasingEmphasizedDecelerate)
+                                    ) + expandVertically(
+                                        tween(Motion.DurationShort, easing = Motion.EasingEmphasizedDecelerate)
+                                    ),
+                                    exit = fadeOut(
+                                        tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate)
+                                    ) + shrinkVertically(
+                                        tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate)
+                                    )
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 6.dp),
+                                        horizontalArrangement = Arrangement.Start
+                                    ) {
+                                        TypingIndicator()
+                                    }
+                                }
+                            }
+                        }
                         items(messages.reversed(), key = { it.id }) { message ->
                             AgentMessageLine(
                                 message = message,
-                                markdownEnabled = settings.markdownEnabled
+                                markdownEnabled = settings.markdownEnabled,
+                                animateEntry = message.timestamp >= openedAtMs
                             )
                         }
                     }
@@ -250,35 +309,46 @@ fun AgentChatScreen(
             isGenerating = isGenerating,
             onSend = { text -> viewModel.sendMessage(text) },
             onStop = { viewModel.stopGeneration() },
-            enabled = conversation != null,
-            modifier = Modifier.windowInsetsPadding(WindowInsets.navigationBars)
+            enabled = conversation != null
         )
     }
 
     // ===== 汉堡菜单：仅人设卡（复用 PersonaPanel） =====
-    if (showPersona && conversation != null) {
-        val conv = conversation!!
-        Surface(modifier = Modifier.fillMaxSize()) {
-            PersonaPanel(
-                initial = conv.persona.ifEmptyDefault(),
-                ownerId = conv.id,
-                compileEnabled = conv.compileEnabled,
-                modelTier = viewModel.resolveCurrentTier(),
-                catalogManager = ServiceLocator.apiCatalogManager,
-                onBack = { showPersona = false },
-                onSave = { persona, compileEnabled ->
-                    viewModel.updatePersona(persona, compileEnabled)
-                    showPersona = false
-                },
-                onCompile = { persona, maxTokens -> viewModel.compilePersona(persona, maxTokens) },
-                onSaveAndExit = { persona, compileEnabled ->
-                    viewModel.updatePersona(persona, compileEnabled)
-                    showPersona = false
-                },
-                onAutoSave = { persona, compileEnabled ->
-                    viewModel.updatePersona(persona, compileEnabled)
-                }
-            )
+    AnimatedVisibility(
+        visible = showPersona,
+        enter = slideInHorizontally(
+            initialOffsetX = { it },
+            animationSpec = tween(Motion.DurationPageTransition, easing = Motion.EasingStandard)
+        ) + fadeIn(tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedDecelerate)),
+        exit = slideOutHorizontally(
+            targetOffsetX = { it },
+            animationSpec = tween(Motion.DurationPageTransition, easing = Motion.EasingStandard)
+        ) + fadeOut(tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate))
+    ) {
+        val conv = conversation
+        if (conv != null) {
+            Surface(modifier = Modifier.fillMaxSize()) {
+                PersonaPanel(
+                    initial = conv.persona.ifEmptyDefault(),
+                    ownerId = conv.id,
+                    compileEnabled = conv.compileEnabled,
+                    modelTier = viewModel.resolveCurrentTier(),
+                    catalogManager = ServiceLocator.apiCatalogManager,
+                    onBack = { showPersona = false },
+                    onSave = { persona, compileEnabled ->
+                        viewModel.updatePersona(persona, compileEnabled)
+                        showPersona = false
+                    },
+                    onCompile = { persona, maxTokens -> viewModel.compilePersona(persona, maxTokens) },
+                    onSaveAndExit = { persona, compileEnabled ->
+                        viewModel.updatePersona(persona, compileEnabled)
+                        showPersona = false
+                    },
+                    onAutoSave = { persona, compileEnabled ->
+                        viewModel.updatePersona(persona, compileEnabled)
+                    }
+                )
+            }
         }
     }
 }
@@ -296,7 +366,8 @@ private fun Persona.ifEmptyDefault(): Persona =
 @Composable
 private fun AgentMessageLine(
     message: Message,
-    markdownEnabled: Boolean
+    markdownEnabled: Boolean,
+    animateEntry: Boolean = true
 ) {
     val colorScheme = MaterialTheme.colorScheme
     if (message.isNotice) {
@@ -309,9 +380,39 @@ private fun AgentMessageLine(
         )
         return
     }
+
+    // ===== 新消息入场动画（与气泡一致：淡入 + 上浮 + 轻微放大） =====
+    val entryAlpha = remember(message.id, animateEntry) {
+        Animatable(if (animateEntry) 0f else 1f)
+    }
+    val entryOffsetY = remember(message.id, animateEntry) { Animatable(0f) }
+    val entryScale = remember(message.id, animateEntry) {
+        Animatable(if (animateEntry) 0.97f else 1f)
+    }
+    val entryOffsetPx = with(LocalDensity.current) { 10.dp.toPx() }
+    LaunchedEffect(message.id, animateEntry) {
+        if (animateEntry) {
+            entryAlpha.snapTo(0f)
+            entryOffsetY.snapTo(entryOffsetPx)
+            entryScale.snapTo(0.97f)
+            val spec: FiniteAnimationSpec<Float> =
+                tween(Motion.DurationXLong, easing = Motion.EasingEmphasizedDecelerate)
+            launch { entryAlpha.animateTo(1f, spec) }
+            launch { entryOffsetY.animateTo(0f, spec) }
+            launch { entryScale.animateTo(1f, spec) }
+        }
+    }
+
     val isUser = message.role == Role.USER
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .graphicsLayer {
+                alpha = entryAlpha.value
+                translationY = entryOffsetY.value
+                scaleX = entryScale.value
+                scaleY = entryScale.value
+            },
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
         verticalAlignment = Alignment.Bottom
     ) {
@@ -335,7 +436,7 @@ private fun AgentMessageLine(
             )
             Spacer(modifier = Modifier.size(3.dp))
             Text(
-                text = DateUtils.formatTimestamp(message.timestamp),
+                text = DateUtils.formatTime(message.timestamp),
                 style = MaterialTheme.typography.labelSmall,
                 color = colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
             )
@@ -385,11 +486,17 @@ private fun AgentMarkdownText(
             }
         }
     } else {
-        Text(
-            text = content,
-            style = MaterialTheme.typography.bodyMedium,
-            color = color
-        )
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(
+                text = content,
+                style = MaterialTheme.typography.bodyMedium,
+                color = color
+            )
+            if (isStreaming && content.isNotEmpty()) {
+                Spacer(modifier = Modifier.size(2.dp))
+                StreamingCursor()
+            }
+        }
     }
 }
 
