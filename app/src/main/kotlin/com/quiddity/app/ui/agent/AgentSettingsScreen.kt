@@ -135,8 +135,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun AgentSettingsScreen(
     settingsViewModel: SettingsViewModel,
-    onBack: () -> Unit,
-    onOpenGuide: () -> Unit
+    onBack: () -> Unit
 ) {
     val context = LocalContext.current
     val store = ServiceLocator.agentStore
@@ -146,6 +145,8 @@ fun AgentSettingsScreen(
     var showPrivacy by rememberSaveable { mutableStateOf(false) }
     var showClearSessions by rememberSaveable { mutableStateOf(false) }
     var showGlobalSettings by rememberSaveable { mutableStateOf(false) }
+    var showGuide by rememberSaveable { mutableStateOf(false) }
+    var helpText by remember { mutableStateOf<String?>(null) }
 
     // 从系统设置返回后刷新权限状态（ON_RESUME）
     var refreshTick by remember { mutableIntStateOf(0) }
@@ -253,19 +254,25 @@ fun AgentSettingsScreen(
                                     icon = Icons.Filled.Visibility,
                                     title = "无障碍（读屏）",
                                     subtitle = if (accessibilityEnabled) "已开启" else "未开启",
-                                    onClick = { openSystemSettings(context, Settings.ACTION_ACCESSIBILITY_SETTINGS) }
+                                    onClick = { openSystemSettings(context, Settings.ACTION_ACCESSIBILITY_SETTINGS) },
+                                    helpText = "允许 Agent 读取屏幕上的文字，才能帮你「看」当前页面（只读，不上传）。",
+                                    onHelpClick = { helpText = "允许 Agent 读取屏幕上的文字，才能帮你「看」当前页面（只读，不上传）。" }
                                 )
                                 ClickableRow(
                                     icon = Icons.Filled.Notifications,
                                     title = "通知读取",
                                     subtitle = if (notificationEnabled) "已开启" else "未开启",
-                                    onClick = { openSystemSettings(context, Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS) }
+                                    onClick = { openSystemSettings(context, Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS) },
+                                    helpText = "允许 Agent 读取手机通知（如验证码、消息提醒），只读、不上传。",
+                                    onHelpClick = { helpText = "允许 Agent 读取手机通知（如验证码、消息提醒），只读、不上传。" }
                                 )
                                 ClickableRow(
                                     icon = Icons.Filled.Speed,
                                     title = "使用情况访问",
                                     subtitle = if (usageEnabled) "已开启" else "未开启",
-                                    onClick = { openSystemSettings(context, Settings.ACTION_USAGE_ACCESS_SETTINGS) }
+                                    onClick = { openSystemSettings(context, Settings.ACTION_USAGE_ACCESS_SETTINGS) },
+                                    helpText = "允许 Agent 查看你用了哪些应用、用了多久（用量统计、前台应用）。",
+                                    onHelpClick = { helpText = "允许 Agent 查看你用了哪些应用、用了多久（用量统计、前台应用）。" }
                                 )
                                 ClickableRow(
                                     icon = Icons.Filled.Settings,
@@ -279,9 +286,11 @@ fun AgentSettingsScreen(
                                         if (shizukuInstalled) {
                                             launchShizukuApp(context)
                                         } else {
-                                            onOpenGuide()
+                                            showGuide = true
                                         }
-                                    }
+                                    },
+                                    helpText = "进阶能力（停用/卸载应用、改权限、强制停止）需要 Shizuku 授权；不开启只能用只读功能。",
+                                    onHelpClick = { helpText = "进阶能力（停用/卸载应用、改权限、强制停止）需要 Shizuku 授权；不开启只能用只读功能。" }
                                 )
                             }
                         }
@@ -295,7 +304,9 @@ fun AgentSettingsScreen(
                                     checked = settings.toolSwitches.sense_screen,
                                     onCheckedChange = { on ->
                                         scope.launch { store.setToolSwitch("sense_screen", on) }
-                                    }
+                                    },
+                                    helpText = "打开后，Agent 才能使用「读取屏幕」工具（需要无障碍权限）。",
+                                    onHelpClick = { helpText = "打开后，Agent 才能使用「读取屏幕」工具（需要无障碍权限）。" }
                                 )
                                 ToggleRow(
                                     icon = Icons.Filled.Notifications,
@@ -304,7 +315,9 @@ fun AgentSettingsScreen(
                                     checked = settings.toolSwitches.sense_notifications,
                                     onCheckedChange = { on ->
                                         scope.launch { store.setToolSwitch("sense_notifications", on) }
-                                    }
+                                    },
+                                    helpText = "打开后，Agent 才能使用「读取通知」工具（需要通知使用权）。",
+                                    onHelpClick = { helpText = "打开后，Agent 才能使用「读取通知」工具（需要通知使用权）。" }
                                 )
                                 ToggleRow(
                                     icon = Icons.Filled.Speed,
@@ -313,7 +326,9 @@ fun AgentSettingsScreen(
                                     checked = settings.toolSwitches.sense_usage,
                                     onCheckedChange = { on ->
                                         scope.launch { store.setToolSwitch("sense_usage", on) }
-                                    }
+                                    },
+                                    helpText = "打开后，Agent 才能使用「用量统计」「前台应用」工具。",
+                                    onHelpClick = { helpText = "打开后，Agent 才能使用「用量统计」「前台应用」工具。" }
                                 )
                                 ToggleRow(
                                     icon = Icons.Filled.Apps,
@@ -322,7 +337,9 @@ fun AgentSettingsScreen(
                                     checked = settings.toolSwitches.read_apps,
                                     onCheckedChange = { on ->
                                         scope.launch { store.setToolSwitch("read_apps", on) }
-                                    }
+                                    },
+                                    helpText = "打开后，Agent 才能列出你手机上的应用。",
+                                    onHelpClick = { helpText = "打开后，Agent 才能列出你手机上的应用。" }
                                 )
                                 ToggleRow(
                                     icon = Icons.Filled.Info,
@@ -331,27 +348,37 @@ fun AgentSettingsScreen(
                                     checked = settings.toolSwitches.read_system,
                                     onCheckedChange = { on ->
                                         scope.launch { store.setToolSwitch("read_system", on) }
-                                    }
+                                    },
+                                    helpText = "打开后，Agent 才能读取系统基础信息（电量、型号、网络等）。",
+                                    onHelpClick = { helpText = "打开后，Agent 才能读取系统基础信息（电量、型号、网络等）。" }
                                 )
                                 WriteLockedRow(
                                     title = "停用 / 启用应用",
                                     unlocked = shizukuGranted,
-                                    onClick = onOpenGuide
+                                    onClick = { showGuide = true },
+                                    helpText = "停用后应用图标消失、无法运行；需 Shizuku 授权，且目标应用必须在白名单内。",
+                                    onHelpClick = { helpText = "停用后应用图标消失、无法运行；需 Shizuku 授权，且目标应用必须在白名单内。" }
                                 )
                                 WriteLockedRow(
                                     title = "权限修改",
                                     unlocked = shizukuGranted,
-                                    onClick = onOpenGuide
+                                    onClick = { showGuide = true },
+                                    helpText = "修改应用的权限模式（如拒绝震动、定位等）；需 Shizuku 授权 + 白名单。",
+                                    onHelpClick = { helpText = "修改应用的权限模式（如拒绝震动、定位等）；需 Shizuku 授权 + 白名单。" }
                                 )
                                 WriteLockedRow(
                                     title = "强制停止",
                                     unlocked = shizukuGranted,
-                                    onClick = onOpenGuide
+                                    onClick = { showGuide = true },
+                                    helpText = "立即停止应用的后台运行；需 Shizuku 授权 + 白名单。",
+                                    onHelpClick = { helpText = "立即停止应用的后台运行；需 Shizuku 授权 + 白名单。" }
                                 )
                                 WriteLockedRow(
                                     title = "卸载应用",
                                     unlocked = shizukuGranted,
-                                    onClick = onOpenGuide
+                                    onClick = { showGuide = true },
+                                    helpText = "卸载指定应用；需 Shizuku 授权 + 白名单，卸载后数据不可恢复。",
+                                    onHelpClick = { helpText = "卸载指定应用；需 Shizuku 授权 + 白名单，卸载后数据不可恢复。" }
                                 )
                             }
                         }
@@ -362,7 +389,9 @@ fun AgentSettingsScreen(
                                     icon = Icons.Filled.CheckCircle,
                                     title = "基础",
                                     subtitle = "只读能力（屏幕 / 通知 / 用量 / 应用列表） · 已解锁",
-                                    onClick = {}
+                                    onClick = {},
+                                    helpText = "基础等级 = 只读能力（屏幕 / 通知 / 用量 / 应用列表），系统授权后即可使用。",
+                                    onHelpClick = { helpText = "基础等级 = 只读能力（屏幕 / 通知 / 用量 / 应用列表），系统授权后即可使用。" }
                                 )
                                 ClickableRow(
                                     icon = Icons.Filled.Star,
@@ -372,7 +401,9 @@ fun AgentSettingsScreen(
                                     } else {
                                         "系统写入（停用 / 权限 / 强停 / 卸载） · 未解锁"
                                     },
-                                    onClick = onOpenGuide
+                                    onClick = { showGuide = true },
+                                    helpText = "进阶等级 = 写入能力（停用 / 权限 / 强停 / 卸载），需要 Shizuku 授权。",
+                                    onHelpClick = { helpText = "进阶等级 = 写入能力（停用 / 权限 / 强停 / 卸载），需要 Shizuku 授权。" }
                                 )
                             }
                         }
@@ -384,7 +415,9 @@ fun AgentSettingsScreen(
                                         icon = Icons.Filled.Info,
                                         title = "暂无白名单",
                                         subtitle = "写入类工具将被拒绝执行",
-                                        onClick = { showAddWhitelist = true }
+                                        onClick = { showAddWhitelist = true },
+                                        helpText = "只有加入白名单的应用，Agent 才能对它执行停用 / 卸载等写入操作。",
+                                        onHelpClick = { helpText = "只有加入白名单的应用，Agent 才能对它执行停用 / 卸载等写入操作。" }
                                     )
                                 }
                                 settings.whitelist.forEach { pkg ->
@@ -409,7 +442,9 @@ fun AgentSettingsScreen(
                                     icon = Icons.Filled.Add,
                                     title = "添加包名",
                                     subtitle = "加入后写入类工具才可执行",
-                                    onClick = { showAddWhitelist = true }
+                                    onClick = { showAddWhitelist = true },
+                                    helpText = "输入应用包名（如 com.tencent.mm）加入白名单，写入工具才能对该应用生效。",
+                                    onHelpClick = { helpText = "输入应用包名（如 com.tencent.mm）加入白名单，写入工具才能对该应用生效。" }
                                 )
                             }
                         }
@@ -420,19 +455,25 @@ fun AgentSettingsScreen(
                                     icon = Icons.Filled.Description,
                                     title = "审计记录",
                                     subtitle = "${settings.audit.size} 条（最多保留 500 条）",
-                                    onClick = { scope.launch { store.clearAudit() } }
+                                    onClick = { scope.launch { store.clearAudit() } },
+                                    helpText = "记录每次工具执行的明细（时间 / 工具 / 参数 / 是否确认）；点击可清空。",
+                                    onHelpClick = { helpText = "记录每次工具执行的明细（时间 / 工具 / 参数 / 是否确认）；点击可清空。" }
                                 )
                                 ClickableRow(
                                     icon = Icons.Filled.Delete,
                                     title = "清空 Agent 会话",
                                     subtitle = "删除全部 Agent 会话与消息",
-                                    onClick = { showClearSessions = true }
+                                    onClick = { showClearSessions = true },
+                                    helpText = "删除所有 Agent 会话及其消息，不可恢复。",
+                                    onHelpClick = { helpText = "删除所有 Agent 会话及其消息，不可恢复。" }
                                 )
                                 ClickableRow(
                                     icon = Icons.Filled.PrivacyTip,
                                     title = "隐私声明",
                                     subtitle = "数据仅在本机处理，不上传",
-                                    onClick = { showPrivacy = true }
+                                    onClick = { showPrivacy = true },
+                                    helpText = "说明屏幕 / 通知 / 用量等数据的本地处理规则，不会上传网络。",
+                                    onHelpClick = { helpText = "说明屏幕 / 通知 / 用量等数据的本地处理规则，不会上传网络。" }
                                 )
                             }
                         }
@@ -443,13 +484,17 @@ fun AgentSettingsScreen(
                                     icon = Icons.Filled.Settings,
                                     title = "总设置",
                                     subtitle = "全局：主题 / 字体 / Markdown 等",
-                                    onClick = { showGlobalSettings = true }
+                                    onClick = { showGlobalSettings = true },
+                                    helpText = "全局设置（主题 / 字体 / Markdown 等），所有模式共用，Agent 也受它管控。",
+                                    onHelpClick = { helpText = "全局设置（主题 / 字体 / Markdown 等），所有模式共用，Agent 也受它管控。" }
                                 )
                                 ClickableRow(
                                     icon = Icons.Filled.HelpOutline,
                                     title = "开启教程",
                                     subtitle = "按系统版本路由",
-                                    onClick = onOpenGuide
+                                    onClick = { showGuide = true },
+                                    helpText = "按你的手机系统版本，一步步教你开启权限与 Shizuku。",
+                                    onHelpClick = { helpText = "按你的手机系统版本，一步步教你开启权限与 Shizuku。" }
                                 )
                             }
                         }
@@ -523,6 +568,28 @@ fun AgentSettingsScreen(
             onDismiss = { showGlobalSettings = false }
         )
     }
+
+    // ===== 教程：底部弹出子设置页（与总设置的子页面一致） =====
+    if (showGuide) {
+        AgentSetupGuideSheet(onDismiss = { showGuide = false })
+    }
+
+    // ===== 设置项说明（问号）：假设用户不了解该设置 =====
+    if (helpText != null) {
+        AlertDialog(
+            onDismissRequest = { helpText = null },
+            title = { Text("这个设置是干什么的？") },
+            text = {
+                Text(
+                    text = helpText.orEmpty(),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { helpText = null }) { Text("知道了") }
+            }
+        )
+    }
 }
 
 /** 写入类工具行：未解锁时显示锁定提示，点击进入开启教程。 */
@@ -530,13 +597,17 @@ fun AgentSettingsScreen(
 private fun WriteLockedRow(
     title: String,
     unlocked: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    helpText: String? = null,
+    onHelpClick: (() -> Unit)? = null
 ) {
     ClickableRow(
         icon = Icons.Filled.Lock,
         title = title,
         subtitle = if (unlocked) "已解锁" else "授权通道开启后解锁",
-        onClick = onClick
+        onClick = onClick,
+        helpText = helpText,
+        onHelpClick = onHelpClick
     )
 }
 

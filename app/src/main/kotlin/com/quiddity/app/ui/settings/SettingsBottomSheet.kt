@@ -59,6 +59,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.FormatSize
 import androidx.compose.material.icons.filled.Gavel
+import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Layers
@@ -1239,7 +1240,9 @@ internal fun ToggleRow(
     title: String,
     subtitle: String = "",
     checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
+    onCheckedChange: (Boolean) -> Unit,
+    helpText: String? = null,
+    onHelpClick: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     // Box 替代 Surface：行内无 elevation 需求，Box+background+clip 跳过 Surface 的 CompositionLocalProvider 开销
@@ -1274,6 +1277,16 @@ internal fun ToggleRow(
                         text = subtitle,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                    )
+                }
+            }
+            if (helpText != null) {
+                IconButton(onClick = { onHelpClick?.invoke() }) {
+                    Icon(
+                        imageVector = Icons.Filled.HelpOutline,
+                        contentDescription = "设置说明",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        modifier = Modifier.size(18.dp)
                     )
                 }
             }
@@ -1380,7 +1393,9 @@ internal fun ClickableRow(
     subtitle: String = "",
     onClick: () -> Unit,
     expandableSubtitle: Boolean = false,
-    trailingContent: @Composable (() -> Unit)? = null
+    trailingContent: @Composable (() -> Unit)? = null,
+    helpText: String? = null,
+    onHelpClick: (() -> Unit)? = null
 ) {
     // Box 替代 Surface：clickable 移到 Box，避免 Surface 包裹的额外开销
     Box(
@@ -1428,6 +1443,16 @@ internal fun ClickableRow(
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                         )
                     }
+                }
+            }
+            if (helpText != null) {
+                IconButton(onClick = { onHelpClick?.invoke() }) {
+                    Icon(
+                        imageVector = Icons.Filled.HelpOutline,
+                        contentDescription = "设置说明",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        modifier = Modifier.size(18.dp)
+                    )
                 }
             }
             // 自定义尾部内容（如加载指示器）；默认显示右箭头

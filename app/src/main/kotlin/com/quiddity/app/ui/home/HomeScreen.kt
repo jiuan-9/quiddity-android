@@ -157,7 +157,6 @@ fun HomeScreen(
     settingsViewModel: SettingsViewModel,
     userAvatarUri: String?,
     onOpenMiniApps: () -> Unit = {},
-    onOpenAgentGuide: () -> Unit = {},
     onOpenConversation: (String) -> Unit,
     onOpenMessage: (String, String) -> Unit
 ) {
@@ -815,8 +814,7 @@ fun HomeScreen(
     if (showAgentSettings) {
         AgentSettingsScreen(
             settingsViewModel = settingsViewModel,
-            onBack = { showAgentSettings = false },
-            onOpenGuide = onOpenAgentGuide
+            onBack = { showAgentSettings = false }
         )
     }
 

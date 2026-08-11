@@ -30,7 +30,6 @@ import androidx.navigation.compose.rememberNavController
 import com.quiddity.app.di.ServiceLocator
 import com.quiddity.app.data.model.ConversationType
 import com.quiddity.app.ui.agent.AgentChatScreen
-import com.quiddity.app.ui.agent.AgentSetupGuideScreen
 import com.quiddity.app.ui.components.UpdateDialog
 import com.quiddity.app.ui.components.rememberUpdateController
 import com.quiddity.app.ui.chat.ChatScreen
@@ -165,9 +164,6 @@ fun QuiddityNavHost() {
                 userAvatarUri = settings.userAvatarUri,
                 onOpenMiniApps = {
                     navigateThrottle.tryNavigate { navController.navigate(QuiddityRoute.MiniApps.path) }
-                },
-                onOpenAgentGuide = {
-                    navigateThrottle.tryNavigate { navController.navigate(QuiddityRoute.AgentGuide.path) }
                 },
                 onOpenConversation = { convId ->
                     navigateThrottle.tryNavigate {
@@ -374,9 +370,6 @@ fun QuiddityNavHost() {
             )
         }
 
-        composable(QuiddityRoute.AgentGuide.path) {
-            AgentSetupGuideScreen(onBack = { navController.popBackStack() })
-        }
     }
 
     // UpdateDialog 放在 NavHost 之后（z-order 上层）：
@@ -425,7 +418,6 @@ sealed class QuiddityRoute(val path: String) {
         )
     }
 
-    data object AgentGuide : QuiddityRoute("agent/setup")
 }
 
 // ===== 防多按 =====
