@@ -12,9 +12,12 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -46,6 +49,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
@@ -85,6 +89,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -169,6 +174,16 @@ fun AgentSettingsScreen(
     val usageEnabled = remember(refreshTick) { hasUsageAccess(context) }
     val shizukuInstalled = remember(refreshTick) { isShizukuInstalled(context) }
     val shizukuGranted = false
+    // 未开启的权限清单（用于教程前置与对应设置置灰）
+    val missingPermissions = remember(refreshTick, accessibilityEnabled, notificationEnabled, usageEnabled) {
+        buildList {
+            if (!accessibilityEnabled) add("无障碍（读屏）" to Settings.ACTION_ACCESSIBILITY_SETTINGS)
+            if (!notificationEnabled) add("通知读取" to Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+            if (!usageEnabled) add("使用情况访问" to Settings.ACTION_USAGE_ACCESS_SETTINGS)
+        }
+    }
+    // 基础权限未开齐 → 教程前置；基础权限给全 → 教程放最后（顶部引导块消失）
+    val hasMissingPermissions = missingPermissions.isNotEmpty()
 
     var visible by remember { mutableStateOf(false) }
     val configuration = LocalConfiguration.current
@@ -253,8 +268,61 @@ fun AgentSettingsScreen(
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 32.dp)
                     ) {
+                        // ===== 权限未开齐：教程前置 =====
+                        if (hasMissingPermissions) {
+                            item(key = "tutorial_first", contentType = { "section" }) {
+                                SettingsSectionCard(title = "先完成授权（教程在前）") {
+                                    missingPermissions.forEach { (label, action) ->
+                                        ClickableRow(
+                                            icon = Icons.Filled.Info,
+                                            title = label,
+                                            subtitle = "未开启",
+                                            onClick = { openSystemSettings(context, action) },
+                                            trailingContent = {
+                                                Text(
+                                                    text = "去开启",
+                                                    style = MaterialTheme.typography.labelMedium,
+                                                    color = MaterialTheme.colorScheme.primary
+                                                )
+                                            }
+                                        )
+                                    }
+                                    if (!shizukuGranted) {
+                                        ClickableRow(
+                                            icon = Icons.Filled.Settings,
+                                            title = "Shizuku（进阶）",
+                                            subtitle = if (shizukuInstalled) "已安装，未授权" else "未安装",
+                                            onClick = {
+                                                if (shizukuInstalled) {
+                                                    launchShizukuApp(context)
+                                                } else {
+                                                    openUrl(context, SHIZUKU_DOWNLOAD_URL)
+                                                }
+                                            },
+                                            trailingContent = {
+                                                Text(
+                                                    text = if (shizukuInstalled) "去开启" else "去下载",
+                                                    style = MaterialTheme.typography.labelMedium,
+                                                    color = MaterialTheme.colorScheme.primary
+                                                )
+                                            }
+                                        )
+                                    }
+                                    ClickableRow(
+                                        icon = Icons.Filled.HelpOutline,
+                                        title = "打开完整教程",
+                                        subtitle = "按系统分类，一步步开启",
+                                        onClick = { showGuide = true }
+                                    )
+                                }
+                            }
+                        }
+
                         item(key = "permissions", contentType = { "section" }) {
-                            SettingsSectionCard(title = "权限状态") {
+                            ExpandableSettingsSection(
+                                title = "权限状态",
+                                defaultExpanded = hasMissingPermissions
+                            ) {
                                 ClickableRow(
                                     icon = Icons.Filled.Visibility,
                                     title = "无障碍（读屏）",
@@ -301,7 +369,10 @@ fun AgentSettingsScreen(
                         }
 
                         item(key = "tools", contentType = { "section" }) {
-                            SettingsSectionCard(title = "工具使用权限") {
+                            ExpandableSettingsSection(
+                                title = "工具使用权限",
+                                defaultExpanded = true
+                            ) {
                                 ToggleRow(
                                     icon = Icons.Filled.Visibility,
                                     title = "读屏",
@@ -311,7 +382,8 @@ fun AgentSettingsScreen(
                                         scope.launch { store.setToolSwitch("sense_screen", on) }
                                     },
                                     helpText = "打开后，Agent 才能使用「读取屏幕」工具（需要无障碍权限）。",
-                                    onHelpClick = { helpText = "打开后，Agent 才能使用「读取屏幕」工具（需要无障碍权限）。" }
+                                    onHelpClick = { helpText = "打开后，Agent 才能使用「读取屏幕」工具（需要无障碍权限）。" },
+                                    enabled = accessibilityEnabled
                                 )
                                 ToggleRow(
                                     icon = Icons.Filled.Notifications,
@@ -322,7 +394,8 @@ fun AgentSettingsScreen(
                                         scope.launch { store.setToolSwitch("sense_notifications", on) }
                                     },
                                     helpText = "打开后，Agent 才能使用「读取通知」工具（需要通知使用权）。",
-                                    onHelpClick = { helpText = "打开后，Agent 才能使用「读取通知」工具（需要通知使用权）。" }
+                                    onHelpClick = { helpText = "打开后，Agent 才能使用「读取通知」工具（需要通知使用权）。" },
+                                    enabled = notificationEnabled
                                 )
                                 ToggleRow(
                                     icon = Icons.Filled.Speed,
@@ -333,7 +406,8 @@ fun AgentSettingsScreen(
                                         scope.launch { store.setToolSwitch("sense_usage", on) }
                                     },
                                     helpText = "打开后，Agent 才能使用「用量统计」「前台应用」工具。",
-                                    onHelpClick = { helpText = "打开后，Agent 才能使用「用量统计」「前台应用」工具。" }
+                                    onHelpClick = { helpText = "打开后，Agent 才能使用「用量统计」「前台应用」工具。" },
+                                    enabled = usageEnabled
                                 )
                                 ToggleRow(
                                     icon = Icons.Filled.Apps,
@@ -345,17 +419,6 @@ fun AgentSettingsScreen(
                                     },
                                     helpText = "打开后，Agent 才能列出你手机上的应用。",
                                     onHelpClick = { helpText = "打开后，Agent 才能列出你手机上的应用。" }
-                                )
-                                ToggleRow(
-                                    icon = Icons.Filled.Info,
-                                    title = "系统信息",
-                                    subtitle = "读取系统基础信息",
-                                    checked = settings.toolSwitches.read_system,
-                                    onCheckedChange = { on ->
-                                        scope.launch { store.setToolSwitch("read_system", on) }
-                                    },
-                                    helpText = "打开后，Agent 才能读取系统基础信息（电量、型号、网络等）。",
-                                    onHelpClick = { helpText = "打开后，Agent 才能读取系统基础信息（电量、型号、网络等）。" }
                                 )
                                 WriteLockedRow(
                                     title = "停用 / 启用应用",
@@ -384,31 +447,6 @@ fun AgentSettingsScreen(
                                     onClick = { showGuide = true },
                                     helpText = "卸载指定应用；需 Shizuku 授权 + 白名单，卸载后数据不可恢复。",
                                     onHelpClick = { helpText = "卸载指定应用；需 Shizuku 授权 + 白名单，卸载后数据不可恢复。" }
-                                )
-                            }
-                        }
-
-                        item(key = "badges", contentType = { "section" }) {
-                            SettingsSectionCard(title = "等级徽章") {
-                                ClickableRow(
-                                    icon = Icons.Filled.CheckCircle,
-                                    title = "基础",
-                                    subtitle = "只读能力（屏幕 / 通知 / 用量 / 应用列表） · 已解锁",
-                                    onClick = {},
-                                    helpText = "基础等级 = 只读能力（屏幕 / 通知 / 用量 / 应用列表），系统授权后即可使用。",
-                                    onHelpClick = { helpText = "基础等级 = 只读能力（屏幕 / 通知 / 用量 / 应用列表），系统授权后即可使用。" }
-                                )
-                                ClickableRow(
-                                    icon = Icons.Filled.Star,
-                                    title = "进阶",
-                                    subtitle = if (shizukuGranted) {
-                                        "系统写入（停用 / 权限 / 强停 / 卸载） · 已解锁"
-                                    } else {
-                                        "系统写入（停用 / 权限 / 强停 / 卸载） · 未解锁"
-                                    },
-                                    onClick = { showGuide = true },
-                                    helpText = "进阶等级 = 写入能力（停用 / 权限 / 强停 / 卸载），需要 Shizuku 授权。",
-                                    onHelpClick = { helpText = "进阶等级 = 写入能力（停用 / 权限 / 强停 / 卸载），需要 Shizuku 授权。" }
                                 )
                             }
                         }
@@ -495,8 +533,8 @@ fun AgentSettingsScreen(
                                 )
                                 ClickableRow(
                                     icon = Icons.Filled.HelpOutline,
-                                    title = "开启教程",
-                                    subtitle = "按系统版本路由",
+                                    title = "教程",
+                                    subtitle = "按系统分类，一步步开启",
                                     onClick = { showGuide = true },
                                     helpText = "按你的手机系统版本，一步步教你开启权限与 Shizuku。",
                                     onHelpClick = { helpText = "按你的手机系统版本，一步步教你开启权限与 Shizuku。" }
@@ -579,21 +617,41 @@ fun AgentSettingsScreen(
         AgentSetupGuideSheet(onDismiss = { showGuide = false })
     }
 
-    // ===== 设置项说明（问号）：假设用户不了解该设置 =====
+    // ===== 设置项说明（问号）：独立浮层卡片，不再与底色同层 =====
     if (helpText != null) {
-        AlertDialog(
+        Dialog(
             onDismissRequest = { helpText = null },
-            title = { Text("这个设置是干什么的？") },
-            text = {
-                Text(
-                    text = helpText.orEmpty(),
-                    style = MaterialTheme.typography.bodyMedium
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = { helpText = null }) { Text("知道了") }
+        ) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                ),
+                shadowElevation = 16.dp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 28.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 18.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = helpText.orEmpty(),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        TextButton(onClick = { helpText = null }) { Text("知道了") }
+                    }
+                }
             }
-        )
+        }
     }
 }
 
@@ -614,6 +672,75 @@ private fun WriteLockedRow(
         helpText = helpText,
         onHelpClick = onHelpClick
     )
+}
+
+/** 可展开设置分组：点头部展开/收起（用于权限状态、工具使用权限）。 */
+@Composable
+private fun ExpandableSettingsSection(
+    title: String,
+    defaultExpanded: Boolean = false,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    var expanded by rememberSaveable(title) { mutableStateOf(defaultExpanded) }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .clip(RoundedCornerShape(20.dp))
+            .background(com.quiddity.app.ui.components.glassCardColor())
+            .border(
+                width = 1.dp,
+                color = com.quiddity.app.ui.components.glassCardBorderColor(),
+                shape = RoundedCornerShape(20.dp)
+            )
+            .padding(horizontal = 4.dp, vertical = 6.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) { expanded = !expanded }
+                .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(4.dp)
+                    .height(16.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(MaterialTheme.colorScheme.primary)
+            )
+            Spacer(modifier = Modifier.size(10.dp))
+            Text(
+                text = title,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.weight(1f)
+            )
+            Icon(
+                imageVector = Icons.Filled.ExpandMore,
+                contentDescription = if (expanded) "收起" else "展开",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .size(20.dp)
+                    .graphicsLayer {
+                        rotationZ = if (expanded) 180f else 0f
+                    }
+            )
+        }
+        AnimatedVisibility(
+            visible = expanded,
+            enter = fadeIn(tween(Motion.DurationShort)) +
+                expandVertically(tween(Motion.DurationShort, easing = Motion.EasingEmphasizedDecelerate)),
+            exit = fadeOut(tween(Motion.DurationShort)) +
+                shrinkVertically(tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate))
+        ) {
+            Column(content = content)
+        }
+    }
 }
 
 /** 底部弹层顶部抓手：拖拽面板 1:1 跟随，超阈值关闭，否则回弹。 */
