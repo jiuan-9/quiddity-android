@@ -98,3 +98,14 @@
 -keepattributes EnclosingMethod
 # 保留源文件名与行号（崩溃栈）
 -keepattributes SourceFile,LineNumberTable
+
+# ============================================================================
+# 10. Shizuku 用户服务（Shizuku 服务端按类名加载，禁止重命名/重打包）
+# ============================================================================
+-keep class com.quiddity.app.active.ShizukuShellService { *; }
+-keep class com.quiddity.app.active.IRemoteShell { *; }
+-keep class com.quiddity.app.active.IRemoteShell$* { *; }
+-keep class com.quiddity.app.active.ShellResult { *; }
+-keepclassmembers class com.quiddity.app.active.ShellResult {
+    public static final android.os.Parcelable$Creator CREATOR;
+}

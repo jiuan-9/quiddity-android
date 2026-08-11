@@ -91,7 +91,12 @@ data class AgentContext(
     val conversation: Conversation?,
     val switches: AgentToolSwitches,
     val whitelist: Set<String>,
-    val auditAppend: suspend (com.quiddity.app.data.local.AgentAuditEntry) -> Unit = {}
+    val auditAppend: suspend (com.quiddity.app.data.local.AgentAuditEntry) -> Unit = {},
+    /**
+     * 危险操作确认回调：返回 null 表示未接确认 UI（按未确认处理），
+     * 返回 true / false 表示用户已确认 / 已取消。
+     */
+    val confirmRequest: (suspend (AgentTool, JsonObject) -> Boolean)? = null
 )
 
 /**
@@ -119,7 +124,9 @@ class AgentToolRegistry(
             kotlinx.serialization.json.Json.parseToJsonElement(argsJson) as? JsonObject
         }.getOrNull()
         val args = parsed ?: JsonObject(emptyMap())
-        return AgentSecurity.executeGated(tool, args, ctx)
+        // 模型自带的 confirmed 字段不可信：一律剥掉，由确认弹窗统一补上。
+        val sanitized = JsonObject(args.toMutableMap().apply { remove("confirmed") })
+        return AgentSecurity.executeGated(tool, sanitized, ctx)
     }
 
     companion object {
@@ -228,7 +235,10 @@ class AgentToolRegistry(
                     level = AgentPermissionLevel.ADVANCED,
                     confirm = AgentConfirmPolicy.ALWAYS_CONFIRM,
                     enabledByDefault = false,
-                    execute = { _, _ -> "尚未接入执行器" }
+                    execute = { _, args ->
+                        val pkg = argString(args, "pkg").orEmpty()
+                        executors?.disableApp(pkg) ?: "尚未接入执行器"
+                    }
                 ),
                 AgentTool(
                     name = "enable_app",
@@ -243,7 +253,10 @@ class AgentToolRegistry(
                     level = AgentPermissionLevel.ADVANCED,
                     confirm = AgentConfirmPolicy.ALWAYS_CONFIRM,
                     enabledByDefault = false,
-                    execute = { _, _ -> "尚未接入执行器" }
+                    execute = { _, args ->
+                        val pkg = argString(args, "pkg").orEmpty()
+                        executors?.enableApp(pkg) ?: "尚未接入执行器"
+                    }
                 ),
                 AgentTool(
                     name = "set_appops",
@@ -252,7 +265,7 @@ class AgentToolRegistry(
                         properties = mapOf(
                             "pkg" to stringParam("目标应用包名"),
                             "op" to stringParam("权限操作名，如 震动"),
-                            "mode" to stringParam("允许 / 拒绝 / 忽略 / 恢复默认 / 询问"),
+                            "mode" to stringParam("允许 / 拒绝 / 忽略 / 恢复默认"),
                             "confirmed" to boolParam("用户已确认")
                         ),
                         required = listOf("pkg", "op", "mode")
@@ -260,7 +273,12 @@ class AgentToolRegistry(
                     level = AgentPermissionLevel.ADVANCED,
                     confirm = AgentConfirmPolicy.ALWAYS_CONFIRM,
                     enabledByDefault = false,
-                    execute = { _, _ -> "尚未接入执行器" }
+                    execute = { _, args ->
+                        val pkg = argString(args, "pkg").orEmpty()
+                        val op = argString(args, "op").orEmpty()
+                        val mode = argString(args, "mode").orEmpty()
+                        executors?.setAppOps(pkg, op, mode) ?: "尚未接入执行器"
+                    }
                 ),
                 AgentTool(
                     name = "force_stop",
@@ -275,7 +293,10 @@ class AgentToolRegistry(
                     level = AgentPermissionLevel.ADVANCED,
                     confirm = AgentConfirmPolicy.ALWAYS_CONFIRM,
                     enabledByDefault = false,
-                    execute = { _, _ -> "尚未接入执行器" }
+                    execute = { _, args ->
+                        val pkg = argString(args, "pkg").orEmpty()
+                        executors?.forceStop(pkg) ?: "尚未接入执行器"
+                    }
                 ),
                 AgentTool(
                     name = "uninstall_app",
@@ -290,7 +311,10 @@ class AgentToolRegistry(
                     level = AgentPermissionLevel.ADVANCED,
                     confirm = AgentConfirmPolicy.ALWAYS_CONFIRM,
                     enabledByDefault = false,
-                    execute = { _, _ -> "尚未接入执行器" }
+                    execute = { _, args ->
+                        val pkg = argString(args, "pkg").orEmpty()
+                        executors?.uninstallApp(pkg) ?: "尚未接入执行器"
+                    }
                 )
             )
             return AgentToolRegistry(tools.associateBy { it.name })

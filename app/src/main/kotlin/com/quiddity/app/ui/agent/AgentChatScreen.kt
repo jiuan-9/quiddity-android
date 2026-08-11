@@ -53,6 +53,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -162,6 +163,7 @@ fun AgentChatScreen(
     val isGenerating by viewModel.isGenerating.collectAsStateWithLifecycle()
     val chatError by viewModel.chatError.collectAsStateWithLifecycle()
     val toolUseName by viewModel.toolUse.collectAsStateWithLifecycle()
+    val pendingConfirm by viewModel.pendingToolConfirm.collectAsStateWithLifecycle()
     val pendingImageUri by viewModel.pendingImageUri.collectAsStateWithLifecycle()
     val ocrState by viewModel.ocrState.collectAsStateWithLifecycle()
     val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
@@ -511,6 +513,46 @@ fun AgentChatScreen(
             conversation = conversation,
             viewModel = viewModel,
             onDismiss = { showCharacterPicker = false }
+        )
+    }
+
+    // ===== 危险工具确认弹窗：每次执行写入类工具前必须用户确认 =====
+    pendingConfirm?.let { pending ->
+        AlertDialog(
+            onDismissRequest = { viewModel.confirmTool(false) },
+            title = { Text("确认执行危险操作") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Agent 请求执行「${AgentToolRegistry.displayName(pending.toolName)}」",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    val detail = buildString {
+                        pending.args["pkg"]?.let { append("应用包名：$it\n") }
+                        pending.args["op"]?.let { append("权限操作：$it\n") }
+                        pending.args["mode"]?.let { append("权限模式：$it\n") }
+                        if (isEmpty()) append(pending.args.toString())
+                    }.trimEnd()
+                    Text(
+                        text = detail,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "该操作每次都会要求你确认，且只对白名单内的应用生效。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.confirmTool(true) }) { Text("确认执行") }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.confirmTool(false) }) { Text("取消") }
+            }
         )
     }
 }

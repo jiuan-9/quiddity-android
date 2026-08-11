@@ -58,7 +58,7 @@ object AgentSecurity {
         "MANAGE_EXTERNAL_STORAGE"
     )
 
-    private val APP_OPS_MODES = setOf("allow", "deny", "ignore", "default", "ask")
+    private val APP_OPS_MODES = setOf("allow", "deny", "ignore", "default")
 
     /** 屏幕文本不可信包装：提示模型这是数据而非指令。 */
     fun wrapUntrustedScreen(text: String): String = "$UNTRUSTED_SCREEN_PREFIX\n$text"
@@ -123,7 +123,7 @@ object AgentSecurity {
                 "mode" -> {
                     val value = (present as? JsonPrimitive)?.content.orEmpty()
                     if (value !in APP_OPS_MODES) {
-                        return "参数「模式」非法：仅允许 允许 / 拒绝 / 忽略 / 恢复默认 / 询问"
+                        return "参数「模式」非法：仅允许 允许 / 拒绝 / 忽略 / 恢复默认"
                     }
                 }
                 "maxChars" -> {
@@ -168,41 +168,60 @@ object AgentSecurity {
         args: JsonObject,
         ctx: AgentContext
     ): String {
-        val argsText = kotlinx.serialization.json.Json.encodeToString(
-            kotlinx.serialization.json.JsonElement.serializer(),
-            args
-        )
+        var argsText = encodeArgs(args)
+        var effectiveArgs = args
 
-        val validationError = validateArgs(tool, args)
+        if (tool.confirm == AgentConfirmPolicy.ALWAYS_CONFIRM && !confirmed(args)) {
+            val approved = ctx.confirmRequest?.invoke(tool, args)
+            if (approved != true) {
+                appendAudit(ctx, tool, argsText, ok = false, confirmed = false)
+                return if (approved == null) {
+                    "需要用户确认后才能执行 ${tool.name}"
+                } else {
+                    "用户已取消执行 ${tool.name}"
+                }
+            }
+            effectiveArgs = withConfirmed(args)
+            argsText = encodeArgs(effectiveArgs)
+        }
+
+        val validationError = validateArgs(tool, effectiveArgs)
         if (validationError != null) {
-            appendAudit(ctx, tool, argsText, ok = false, confirmed = confirmed(args))
+            appendAudit(ctx, tool, argsText, ok = false, confirmed = confirmed(effectiveArgs))
             return validationError
         }
 
-        val gateError = whitelistGate(tool, args, ctx.whitelist)
+        val gateError = whitelistGate(tool, effectiveArgs, ctx.whitelist)
         if (gateError != null) {
-            appendAudit(ctx, tool, argsText, ok = false, confirmed = confirmed(args))
+            appendAudit(ctx, tool, argsText, ok = false, confirmed = confirmed(effectiveArgs))
             return gateError
         }
 
-        if (tool.confirm == AgentConfirmPolicy.ALWAYS_CONFIRM && !confirmed(args)) {
-            appendAudit(ctx, tool, argsText, ok = false, confirmed = false)
-            return "需要用户确认后才能执行 ${tool.name}"
-        }
-
         return runCatching {
-            tool.execute(ctx, args)
+            tool.execute(ctx, effectiveArgs)
         }.fold(
             onSuccess = { result ->
-                appendAudit(ctx, tool, argsText, ok = true, confirmed = confirmed(args))
+                appendAudit(ctx, tool, argsText, ok = true, confirmed = confirmed(effectiveArgs))
                 result
             },
             onFailure = { t ->
-                appendAudit(ctx, tool, argsText, ok = false, confirmed = confirmed(args))
+                appendAudit(ctx, tool, argsText, ok = false, confirmed = confirmed(effectiveArgs))
                 "工具 ${tool.name} 执行失败：${t.message ?: "未知错误"}"
             }
         )
     }
+
+    private fun withConfirmed(args: JsonObject): JsonObject {
+        val map = args.toMutableMap()
+        map["confirmed"] = JsonPrimitive(true)
+        return JsonObject(map)
+    }
+
+    private fun encodeArgs(args: JsonObject): String =
+        kotlinx.serialization.json.Json.encodeToString(
+            kotlinx.serialization.json.JsonElement.serializer(),
+            args
+        )
 
     private fun confirmed(args: JsonObject): Boolean =
         (args["confirmed"] as? JsonPrimitive)?.content?.toBooleanStrictOrNull() == true

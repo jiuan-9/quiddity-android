@@ -102,6 +102,7 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+        aidl = true
     }
 
     composeCompiler {
@@ -156,6 +157,8 @@ dependencies {
     implementation(libs.okhttp.sse)
     implementation(libs.coil.compose)
     implementation(libs.collections.immutable)
+    implementation(libs.shizuku.api)
+    implementation(libs.shizuku.provider)
 
     debugImplementation(libs.bundles.compose.debug)
 

@@ -26,7 +26,9 @@ import com.quiddity.app.domain.MessageStreamCoordinator
 import com.quiddity.app.domain.PromptBuilder
 import com.quiddity.app.domain.StreamCoordinator
 import com.quiddity.app.domain.agent.AgentContext
+import com.quiddity.app.domain.agent.AgentTool
 import com.quiddity.app.domain.agent.AgentToolRegistry
+import kotlinx.coroutines.CompletableDeferred
 import com.quiddity.app.util.IdGenerator
 import com.quiddity.app.util.QuiddityConstants
 import kotlinx.serialization.json.Json
@@ -195,6 +197,12 @@ class ChatRepository(
         data class Notice(val text: String) : Event()
         /** Agent 工具使用报告：模型调用了哪个工具（聊天页显示使用中动画）。 */
         data class ToolUse(val toolName: String) : Event()
+        /** Agent 危险工具确认请求：弹出确认框，用户决定后回调 [resume]。 */
+        data class ToolConfirmRequest(
+            val toolName: String,
+            val args: JsonObject,
+            val resume: (Boolean) -> Unit
+        ) : Event()
         /** 错误。 */
         data class Error(val throwable: Throwable, val partialContent: String) : Event()
     }
@@ -457,7 +465,7 @@ class ChatRepository(
                 onEvent(Event.ToolUse(call.name))
             }
             val secondRequest = try {
-                buildSecondRoundRequest(request, conv, firstRoundCalls)
+                buildSecondRoundRequest(request, conv, firstRoundCalls, onEvent)
             } catch (c: kotlinx.coroutines.CancellationException) {
                 throw c
             } catch (t: Throwable) {
@@ -555,10 +563,11 @@ class ChatRepository(
     private suspend fun buildSecondRoundRequest(
         request: ChatRoundRequest,
         conv: Conversation,
-        calls: List<ChatStreamParser.AggregatedToolCall>
+        calls: List<ChatStreamParser.AggregatedToolCall>,
+        onEvent: suspend (Event) -> Unit
     ): ChatRoundRequest = when (request) {
         is ChatRoundRequest.Completions -> {
-            val toolMessages = buildToolResultMessages(request.request.messages, conv, calls)
+            val toolMessages = buildToolResultMessages(request.request.messages, conv, calls, onEvent)
             ChatRoundRequest.Completions(
                 request.request.copy(
                     messages = toolMessages,
@@ -569,7 +578,7 @@ class ChatRepository(
             )
         }
         is ChatRoundRequest.Responses -> {
-            val items = buildResponsesToolResultItems(request.request.input, conv, calls)
+            val items = buildResponsesToolResultItems(request.request.input, conv, calls, onEvent)
             ChatRoundRequest.Responses(
                 request.request.copy(
                     input = items,
@@ -588,7 +597,8 @@ class ChatRepository(
     private suspend fun buildToolResultMessages(
         originalMessages: List<ChatMessage>,
         conv: Conversation,
-        calls: List<ChatStreamParser.AggregatedToolCall>
+        calls: List<ChatStreamParser.AggregatedToolCall>,
+        onEvent: suspend (Event) -> Unit
     ): List<ChatMessage> {
         val result = originalMessages.toMutableList()
         result += ChatMessage(
@@ -611,7 +621,7 @@ class ChatRepository(
             result += ChatMessage(
                 role = "tool",
                 tool_call_id = toolCallId,
-                content = resolveToolContent(call, conv, memory)
+                content = resolveToolContent(call, conv, memory, onEvent)
             )
         }
         return result
@@ -624,7 +634,8 @@ class ChatRepository(
     private suspend fun buildResponsesToolResultItems(
         originalInput: List<ResponsesInputItem>,
         conv: Conversation,
-        calls: List<ChatStreamParser.AggregatedToolCall>
+        calls: List<ChatStreamParser.AggregatedToolCall>,
+        onEvent: suspend (Event) -> Unit
     ): List<ResponsesInputItem> {
         val result = originalInput.toMutableList()
         calls.forEach { call ->
@@ -640,7 +651,7 @@ class ChatRepository(
             result += ResponsesInputItem(
                 type = "function_call_output",
                 call_id = call.id ?: "call_${call.index}",
-                output = resolveToolContent(call, conv, memory)
+                output = resolveToolContent(call, conv, memory, onEvent)
             )
         }
         return result
@@ -654,13 +665,15 @@ class ChatRepository(
     private suspend fun resolveToolContent(
         call: ChatStreamParser.AggregatedToolCall,
         conv: Conversation,
-        memory: String
-    ): String = resolveToolContentInternal(call, conv, memory)
+        memory: String,
+        onEvent: suspend (Event) -> Unit
+    ): String = resolveToolContentInternal(call, conv, memory, onEvent)
 
     private suspend fun resolveToolContentInternal(
         call: ChatStreamParser.AggregatedToolCall,
         conv: Conversation,
-        memory: String
+        memory: String,
+        onEvent: suspend (Event) -> Unit
     ): String {
         if (conv.type == ConversationType.AGENT) {
             val dispatched = dispatchAgentToolIfNeeded(
@@ -668,7 +681,7 @@ class ChatRepository(
                 name = call.name,
                 args = call.arguments,
                 registry = agentToolRegistry,
-                ctx = agentContext(conv)
+                ctx = agentContext(conv, onEvent)
             )
             if (dispatched != null) return dispatched
         }
@@ -686,15 +699,38 @@ class ChatRepository(
         }
     }
 
-    private fun agentContext(conv: Conversation): AgentContext? {
+    private fun agentContext(
+        conv: Conversation,
+        onEvent: suspend (Event) -> Unit
+    ): AgentContext? {
         val store = agentStore ?: return null
         val settings = store.snapshot()
         return AgentContext(
             conversation = conv,
             switches = settings.toolSwitches,
             whitelist = settings.whitelist.toSet(),
-            auditAppend = { store.appendAudit(it) }
+            auditAppend = { store.appendAudit(it) },
+            confirmRequest = { tool, args -> requestToolConfirm(onEvent, tool, args) }
         )
+    }
+
+    /**
+     * 弹出确认框并挂起等待用户决定；
+     * 流被取消时自动按“取消”收尾，避免弹窗悬挂。
+     */
+    private suspend fun requestToolConfirm(
+        onEvent: suspend (Event) -> Unit,
+        tool: AgentTool,
+        args: JsonObject
+    ): Boolean {
+        val deferred = CompletableDeferred<Boolean>()
+        onEvent(Event.ToolConfirmRequest(tool.name, args) { approved -> deferred.complete(approved) })
+        return try {
+            deferred.await()
+        } catch (c: kotlinx.coroutines.CancellationException) {
+            deferred.complete(false)
+            throw c
+        }
     }
 
     companion object {
@@ -941,6 +977,7 @@ class ChatRepository(
                 is Event.Error -> onEvent(event)
                 is Event.Notice -> onEvent(event)
                 is Event.ToolUse -> onEvent(event)
+                is Event.ToolConfirmRequest -> onEvent(event)
                 is Event.Truncated -> onEvent(event)
             }
         }

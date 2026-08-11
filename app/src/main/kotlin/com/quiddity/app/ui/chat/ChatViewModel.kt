@@ -36,6 +36,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonObject
 
 /*
  * ============================================================================
@@ -161,6 +162,17 @@ class ChatViewModel(
     /** 当前轮次 AI 使用的工具名（聊天页工具报告条展示，生成结束后清空）。 */
     private val _toolUse = MutableStateFlow<String?>(null)
     val toolUse: StateFlow<String?> = _toolUse.asStateFlow()
+
+    /** 待用户确认的危险工具调用（弹窗由 Agent 聊天页展示）。 */
+    private val _pendingToolConfirm = MutableStateFlow<PendingToolConfirm?>(null)
+    val pendingToolConfirm: StateFlow<PendingToolConfirm?> = _pendingToolConfirm.asStateFlow()
+
+    /** 用户对危险工具确认弹窗做出决定：通过 [resume] 回调放行/取消挂起的流。 */
+    fun confirmTool(approved: Boolean) {
+        val pending = _pendingToolConfirm.value ?: return
+        _pendingToolConfirm.value = null
+        pending.resume(approved)
+    }
 
     // ===== 压缩状态机 =====
     // 与 isGenerating 解耦：压缩在 isGenerating 置 false 之后才启动，两者互斥。
@@ -612,6 +624,7 @@ class ChatViewModel(
             cleanupStaleStreamingMessages()
             _isGenerating.value = true
             _toolUse.value = null
+            _pendingToolConfirm.value = null
             try {
                 replyRunStart = System.currentTimeMillis()
                 replyRunChars = 0
@@ -643,6 +656,7 @@ class ChatViewModel(
                 if (streamJob === selfJob) {
                     _isGenerating.value = false
                     _toolUse.value = null
+                    _pendingToolConfirm.value = null
                 }
                 settleInterruptedStreams()
                 notifyIdleIfNoWork()
@@ -946,6 +960,8 @@ class ChatViewModel(
             } finally {
                 if (streamJob === selfJob) {
                     _isGenerating.value = false
+                    _toolUse.value = null
+                    _pendingToolConfirm.value = null
                 }
                 settleInterruptedStreams()
                 notifyIdleIfNoWork()
@@ -1035,8 +1051,16 @@ class ChatViewModel(
             is ChatRepository.Event.ToolUse -> {
                 _toolUse.value = event.toolName
             }
+            is ChatRepository.Event.ToolConfirmRequest -> {
+                _pendingToolConfirm.value = PendingToolConfirm(
+                    toolName = event.toolName,
+                    args = event.args,
+                    resume = event.resume
+                )
+            }
             is ChatRepository.Event.Done -> {
                 _toolUse.value = null
+                _pendingToolConfirm.value = null
             }
             is ChatRepository.Event.Truncated -> {
                 // 回复被截断：不静默吞掉——群聊插入可见提示气泡，私聊弹提示
@@ -1067,6 +1091,7 @@ class ChatViewModel(
             }
             is ChatRepository.Event.Error -> {
                 _toolUse.value = null
+                _pendingToolConfirm.value = null
                 _errorEvent.value = event.throwable.message ?: "未知错误"
                 _chatError.value = chatRepository.classify(event.throwable)
             }
@@ -1121,6 +1146,8 @@ class ChatViewModel(
         streamJob?.cancel()
         streamJob = null
         cancelPendingSend() // 同时取消 pending 的发送延迟
+        _toolUse.value = null
+        _pendingToolConfirm.value = null
         _isGenerating.value = false
         settleInterruptedStreams()
         notifyIdleIfNoWork()
@@ -2299,6 +2326,16 @@ class ChatViewModelFactory(
         ) as T
     }
 }
+
+/**
+ * 待确认的危险工具调用：聊天页弹窗展示 [toolName] 与 [args]，
+ * 用户点击后通过 [resume] 把决定交还给挂起的工具执行流。
+ */
+data class PendingToolConfirm(
+    val toolName: String,
+    val args: JsonObject,
+    val resume: (Boolean) -> Unit
+)
 
 // 当前规则：压缩状态与 isGenerating 解耦；Compressing 驱动 UI 弹窗与发送置灰，Success/Failed 为瞬态供 Toast 后 consume 回 Idle。
 sealed interface CompressionState {

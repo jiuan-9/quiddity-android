@@ -97,6 +97,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.quiddity.app.active.NotificationBridge
 import com.quiddity.app.active.ScreenReaderService
+import com.quiddity.app.active.ShizukuStatus
 import com.quiddity.app.di.ServiceLocator
 import com.quiddity.app.ui.settings.ClickableRow
 import com.quiddity.app.ui.settings.SettingsBottomSheet
@@ -105,10 +106,12 @@ import com.quiddity.app.ui.settings.SettingsViewModel
 import com.quiddity.app.ui.settings.ToggleRow
 import com.quiddity.app.ui.theme.Motion
 import kotlinx.coroutines.launch
+import rikka.shizuku.Shizuku
 
 /** Shizuku 直装下载页（Quiddity 官网，全中文）。 */
 private const val SHIZUKU_DOWNLOAD_URL =
     "https://jiuan-9.github.io/Quiddity-website/downloads/shizuku.apk"
+private const val SHIZUKU_REQUEST_CODE = 1101
 
 /*
  * ============================================================================
@@ -173,8 +176,8 @@ fun AgentSettingsScreen(
     val accessibilityEnabled = remember(refreshTick) { ScreenReaderService.isServiceEnabled(context) }
     val notificationEnabled = remember(refreshTick) { NotificationBridge.isServiceEnabled(context) }
     val usageEnabled = remember(refreshTick) { hasUsageAccess(context) }
-    val shizukuInstalled = remember(refreshTick) { isShizukuInstalled(context) }
-    val shizukuGranted = false
+    val shizukuClient = ServiceLocator.shizukuClient
+    var shizukuStatus by remember(refreshTick) { mutableStateOf(shizukuClient.status()) }
     var visible by remember { mutableStateOf(false) }
     val configuration = LocalConfiguration.current
     val screenHeight = configuration.screenHeightDp.dp
@@ -182,6 +185,21 @@ fun AgentSettingsScreen(
     val dragOffsetYState = remember { mutableFloatStateOf(0f) }
     val dismissThreshold = screenHeightPx * 0.2f
     LaunchedEffect(Unit) { visible = true }
+
+    fun refreshShizuku() {
+        shizukuStatus = ServiceLocator.shizukuClient.status()
+    }
+
+    DisposableEffect(Unit) {
+        val received = Shizuku.OnBinderReceivedListener { refreshShizuku() }
+        val dead = Shizuku.OnBinderDeadListener { refreshShizuku() }
+        Shizuku.addBinderReceivedListener(received)
+        Shizuku.addBinderDeadListener(dead)
+        onDispose {
+            Shizuku.removeBinderReceivedListener(received)
+            Shizuku.removeBinderDeadListener(dead)
+        }
+    }
 
     fun dismissSheet() {
         visible = false
@@ -339,29 +357,49 @@ fun AgentSettingsScreen(
                                     icon = Icons.Filled.Settings,
                                     title = "Shizuku（进阶）",
                                     subtitle = when {
-                                        shizukuGranted -> "已授权"
-                                        shizukuInstalled -> "已安装，未授权"
+                                        shizukuStatus == ShizukuStatus.GRANTED -> "已授权"
+                                        shizukuStatus == ShizukuStatus.RUNNING_NOT_GRANTED -> "已安装，未授权"
+                                        shizukuStatus == ShizukuStatus.INSTALLED_NOT_RUNNING -> "已安装，未运行"
                                         else -> "未安装"
                                     },
                                     onClick = {
-                                        if (shizukuInstalled) {
-                                            launchShizukuApp(context)
-                                        } else {
-                                            openUrl(context, SHIZUKU_DOWNLOAD_URL)
+                                        when (shizukuStatus) {
+                                            ShizukuStatus.GRANTED -> launchShizukuApp(context)
+                                            ShizukuStatus.RUNNING_NOT_GRANTED -> {
+                                                val started = shizukuClient.requestPermission(
+                                                    SHIZUKU_REQUEST_CODE
+                                                ) { refreshShizuku() }
+                                                if (!started) {
+                                                    Toast.makeText(
+                                                        context,
+                                                        "Shizuku 未运行，请先启动",
+                                                        Toast.LENGTH_SHORT
+                                                    ).show()
+                                                    launchShizukuApp(context)
+                                                }
+                                            }
+                                            ShizukuStatus.INSTALLED_NOT_RUNNING -> launchShizukuApp(context)
+                                            ShizukuStatus.NOT_INSTALLED ->
+                                                openUrl(context, SHIZUKU_DOWNLOAD_URL)
                                         }
                                     },
                                     helpText = "进阶能力（停用、卸载应用，改权限，强制停止）需要 Shizuku 授权；不开启只能用只读功能。",
                                     onHelpClick = { helpText = "进阶能力（停用、卸载应用，改权限，强制停止）需要 Shizuku 授权；不开启只能用只读功能。" },
                                     trailingContent = {
                                         when {
-                                            shizukuGranted -> Icon(
+                                            shizukuStatus == ShizukuStatus.GRANTED -> Icon(
                                                 imageVector = Icons.Filled.Check,
                                                 contentDescription = "已授权",
                                                 tint = MaterialTheme.colorScheme.primary,
                                                 modifier = Modifier.size(20.dp)
                                             )
-                                            shizukuInstalled -> Text(
+                                            shizukuStatus == ShizukuStatus.RUNNING_NOT_GRANTED -> Text(
                                                 text = "去开启",
+                                                style = MaterialTheme.typography.labelMedium,
+                                                color = MaterialTheme.colorScheme.primary
+                                            )
+                                            shizukuStatus == ShizukuStatus.INSTALLED_NOT_RUNNING -> Text(
+                                                text = "去启动",
                                                 style = MaterialTheme.typography.labelMedium,
                                                 color = MaterialTheme.colorScheme.primary
                                             )
@@ -430,28 +468,28 @@ fun AgentSettingsScreen(
                                 )
                                 WriteLockedRow(
                                     title = "停用与启用应用",
-                                    unlocked = shizukuGranted,
+                                    unlocked = shizukuStatus == ShizukuStatus.GRANTED,
                                     onClick = { showGuide = true },
                                     helpText = "停用后应用图标消失、无法运行；需 Shizuku 授权，且目标应用必须在白名单内。",
                                     onHelpClick = { helpText = "停用后应用图标消失、无法运行；需 Shizuku 授权，且目标应用必须在白名单内。" }
                                 )
                                 WriteLockedRow(
                                     title = "权限修改",
-                                    unlocked = shizukuGranted,
+                                    unlocked = shizukuStatus == ShizukuStatus.GRANTED,
                                     onClick = { showGuide = true },
                                     helpText = "修改应用的权限模式（如拒绝震动、定位等）；需 Shizuku 授权 + 白名单。",
                                     onHelpClick = { helpText = "修改应用的权限模式（如拒绝震动、定位等）；需 Shizuku 授权 + 白名单。" }
                                 )
                                 WriteLockedRow(
                                     title = "强制停止",
-                                    unlocked = shizukuGranted,
+                                    unlocked = shizukuStatus == ShizukuStatus.GRANTED,
                                     onClick = { showGuide = true },
                                     helpText = "立即停止应用的后台运行；需 Shizuku 授权 + 白名单。",
                                     onHelpClick = { helpText = "立即停止应用的后台运行；需 Shizuku 授权 + 白名单。" }
                                 )
                                 WriteLockedRow(
                                     title = "卸载应用",
-                                    unlocked = shizukuGranted,
+                                    unlocked = shizukuStatus == ShizukuStatus.GRANTED,
                                     onClick = { showGuide = true },
                                     helpText = "卸载指定应用；需 Shizuku 授权 + 白名单，卸载后数据不可恢复。",
                                     onHelpClick = { helpText = "卸载指定应用；需 Shizuku 授权 + 白名单，卸载后数据不可恢复。" }
@@ -858,11 +896,6 @@ private fun hasUsageAccess(context: Context): Boolean = runCatching {
     ) == AppOpsManager.MODE_ALLOWED
 }.getOrDefault(false)
 
-private fun isShizukuInstalled(context: Context): Boolean = runCatching {
-    context.packageManager.getPackageInfo("moe.shizuku.xyz", 0)
-    true
-}.getOrDefault(false)
-
 /** 直接跳转系统对应设置页（无障碍 / 通知使用权 / 使用情况访问）。 */
 private fun openSystemSettings(context: Context, action: String) {
     runCatching {
@@ -875,8 +908,9 @@ private fun openSystemSettings(context: Context, action: String) {
 /** 已安装 Shizuku 时直接拉起 Shizuku 应用。 */
 private fun launchShizukuApp(context: Context) {
     runCatching {
-        val intent = context.packageManager
-            .getLaunchIntentForPackage("moe.shizuku.privileged.api")
+        val intent = listOf("moe.shizuku.privileged.api", "moe.shizuku.xyz")
+            .mapNotNull { context.packageManager.getLaunchIntentForPackage(it) }
+            .firstOrNull()
         if (intent != null) {
             context.startActivity(intent)
         } else {

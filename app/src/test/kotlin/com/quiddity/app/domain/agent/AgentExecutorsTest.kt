@@ -109,4 +109,54 @@ class AgentExecutorsTest {
         AgentSensorState.updateNotifications(emptyList())
         assertEquals(0, AgentSensorState.notifications().size)
     }
+
+    @Test
+    fun writeCommands_buildFixedCommandArrays() {
+        assertEquals(
+            listOf("pm", "disable-user", "--user", "0", "com.a"),
+            AgentExecutors.disableCommand("com.a").toList()
+        )
+        assertEquals(
+            listOf("pm", "enable", "com.a"),
+            AgentExecutors.enableCommand("com.a").toList()
+        )
+        assertEquals(
+            listOf("cmd", "appops", "set", "com.a", "VIBRATE", "allow"),
+            AgentExecutors.appOpsCommand("com.a", "VIBRATE", "allow").toList()
+        )
+        assertEquals(
+            listOf("am", "force-stop", "com.a"),
+            AgentExecutors.forceStopCommand("com.a").toList()
+        )
+        assertEquals(
+            listOf("pm", "uninstall", "com.a"),
+            AgentExecutors.uninstallCommand("com.a").toList()
+        )
+    }
+
+    @Test
+    fun formatShellResult_successAndFailure() {
+        assertEquals(
+            "已停用 com.a",
+            AgentExecutors.formatShellResult(AgentShellResult(0, ""), "已停用 com.a")
+        )
+        assertTrue(
+            AgentExecutors.formatShellResult(
+                AgentShellResult(0, "Package com.a new state: disabled-user"),
+                "已停用 com.a"
+            ).contains("disabled-user")
+        )
+        assertTrue(
+            AgentExecutors.formatShellResult(
+                AgentShellResult(1, "Error"),
+                "已停用 com.a"
+            ).contains("退出码 1")
+        )
+        assertTrue(
+            AgentExecutors.formatShellResult(
+                AgentShellResult(1, ""),
+                "已停用 com.a"
+            ).contains("请检查包名与权限")
+        )
+    }
 }

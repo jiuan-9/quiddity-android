@@ -71,7 +71,10 @@ object AgentSensorState {
  * 纯格式化与过滤逻辑收敛到 companion，便于 JVM 单测；
  * 需要系统服务的调用集中在本类，由 ServiceLocator 统一构造。
  */
-class AgentExecutors(private val context: Context) {
+class AgentExecutors(
+    private val context: Context,
+    private val shizuku: ShizukuShell? = null
+) {
 
     fun listApps(query: String?): String {
         val apps = runCatching {
@@ -132,6 +135,27 @@ class AgentExecutors(private val context: Context) {
         return pkg?.let { "当前前台应用：$it" } ?: "未检测到前台应用"
     }
 
+    suspend fun disableApp(pkg: String): String =
+        writeViaShizuku(disableCommand(pkg), "已停用 $pkg")
+
+    suspend fun enableApp(pkg: String): String =
+        writeViaShizuku(enableCommand(pkg), "已启用 $pkg")
+
+    suspend fun setAppOps(pkg: String, op: String, mode: String): String =
+        writeViaShizuku(appOpsCommand(pkg, op, mode), "已设置 $pkg 的 $op 为 $mode")
+
+    suspend fun forceStop(pkg: String): String =
+        writeViaShizuku(forceStopCommand(pkg), "已强制停止 $pkg")
+
+    suspend fun uninstallApp(pkg: String): String =
+        writeViaShizuku(uninstallCommand(pkg), "已卸载 $pkg")
+
+    private suspend fun writeViaShizuku(command: Array<String>, success: String): String {
+        val shell = shizuku ?: return "未获得 Shizuku 授权，无法执行写入操作"
+        if (!shell.isGranted()) return "未获得 Shizuku 授权，无法执行写入操作"
+        return formatShellResult(shell.exec(command), success)
+    }
+
     private fun hasUsageAccess(): Boolean = runCatching {
         val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
         @Suppress("DEPRECATION")
@@ -187,5 +211,30 @@ class AgentExecutors(private val context: Context) {
             val limit = maxChars?.takeIf { it > 0 } ?: return text
             return if (text.length <= limit) text else text.take(limit)
         }
+
+        /** 固定命令形状：pm disable-user（不传可能误伤系统应用）。 */
+        fun disableCommand(pkg: String): Array<String> =
+            arrayOf("pm", "disable-user", "--user", "0", pkg)
+
+        fun enableCommand(pkg: String): Array<String> =
+            arrayOf("pm", "enable", pkg)
+
+        fun appOpsCommand(pkg: String, op: String, mode: String): Array<String> =
+            arrayOf("cmd", "appops", "set", pkg, op, mode)
+
+        fun forceStopCommand(pkg: String): Array<String> =
+            arrayOf("am", "force-stop", pkg)
+
+        fun uninstallCommand(pkg: String): Array<String> =
+            arrayOf("pm", "uninstall", pkg)
+
+        /** 命令结果格式化：退出码 0 视为成功，否则附上错误输出。 */
+        fun formatShellResult(result: AgentShellResult, success: String): String =
+            if (result.exitCode == 0) {
+                val detail = result.output.takeIf { it.isNotBlank() }
+                if (detail == null) success else "$success：$detail"
+            } else {
+                "执行失败（退出码 ${result.exitCode}）：${result.output.ifBlank { "请检查包名与权限" }}"
+            }
     }
 }

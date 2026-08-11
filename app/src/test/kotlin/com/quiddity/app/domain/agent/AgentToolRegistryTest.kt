@@ -18,7 +18,8 @@ class AgentToolRegistryTest {
     private fun context(
         switches: AgentToolSwitches = AgentToolSwitches(),
         whitelist: Set<String> = emptySet(),
-        audit: MutableList<AgentAuditEntry> = mutableListOf()
+        audit: MutableList<AgentAuditEntry> = mutableListOf(),
+        confirmRequest: (suspend (AgentTool, kotlinx.serialization.json.JsonObject) -> Boolean)? = null
     ): AgentContext = AgentContext(
         conversation = Conversation(
             id = "conv1",
@@ -28,7 +29,8 @@ class AgentToolRegistryTest {
         ),
         switches = switches,
         whitelist = whitelist,
-        auditAppend = { audit += it }
+        auditAppend = { audit += it },
+        confirmRequest = confirmRequest
     )
 
     private fun j(args: String) = args
@@ -91,6 +93,7 @@ class AgentToolRegistryTest {
         assertNull(AgentSecurity.validateArgs(tool, parse("""{"pkg":"com.a","op":"VIBRATE","mode":"allow"}""")))
         assertNotNull(AgentSecurity.validateArgs(tool, parse("""{"pkg":"com.a","op":"NOT_A_REAL_OP","mode":"allow"}""")))
         assertNotNull(AgentSecurity.validateArgs(tool, parse("""{"pkg":"com.a","op":"VIBRATE","mode":"sometimes"}""")))
+        assertNotNull(AgentSecurity.validateArgs(tool, parse("""{"pkg":"com.a","op":"VIBRATE","mode":"ask"}""")))
         assertNotNull(AgentSecurity.validateArgs(tool, parse("""{"pkg":"com.a","op":"VIBRATE"}""")))
     }
 
@@ -99,15 +102,61 @@ class AgentToolRegistryTest {
         val result = runBlockingTest {
             registry.dispatch(
                 "disable_app",
-                """{"pkg":"com.tencent.mm","confirmed":true}""",
-                context(switches = AgentToolSwitches().copy(write_disable = true))
+                """{"pkg":"com.tencent.mm"}""",
+                context(
+                    switches = AgentToolSwitches().copy(write_disable = true),
+                    confirmRequest = { _, _ -> true }
+                )
             )
         }
         assertTrue(result.contains("白名单") || result.contains("whitelist") || result.contains("拒绝"))
     }
 
     @Test
-    fun dispatch_advancedToolWhitelistedConfirmed_executes() {
+    fun dispatch_advancedTool_confirmRequestApproved_executes() {
+        val audit = mutableListOf<AgentAuditEntry>()
+        val result = runBlockingTest {
+            registry.dispatch(
+                "disable_app",
+                """{"pkg":"com.tencent.mm"}""",
+                context(
+                    switches = AgentToolSwitches().copy(write_disable = true),
+                    whitelist = setOf("com.tencent.mm"),
+                    audit = audit,
+                    confirmRequest = { _, _ -> true }
+                )
+            )
+        }
+        assertTrue(result.isNotBlank())
+        assertEquals(1, audit.size)
+        assertEquals("disable_app", audit[0].tool)
+        assertEquals(true, audit[0].ok)
+        assertEquals(true, audit[0].confirmed)
+    }
+
+    @Test
+    fun dispatch_advancedTool_userDeclined_cancelled() {
+        val audit = mutableListOf<AgentAuditEntry>()
+        val result = runBlockingTest {
+            registry.dispatch(
+                "disable_app",
+                """{"pkg":"com.tencent.mm"}""",
+                context(
+                    switches = AgentToolSwitches().copy(write_disable = true),
+                    whitelist = setOf("com.tencent.mm"),
+                    audit = audit,
+                    confirmRequest = { _, _ -> false }
+                )
+            )
+        }
+        assertTrue(result.contains("取消"))
+        assertEquals(1, audit.size)
+        assertEquals(false, audit[0].ok)
+        assertEquals(false, audit[0].confirmed)
+    }
+
+    @Test
+    fun dispatch_advancedTool_modelConfirmedFlag_notTrustedWithoutDialog() {
         val audit = mutableListOf<AgentAuditEntry>()
         val result = runBlockingTest {
             registry.dispatch(
@@ -120,11 +169,10 @@ class AgentToolRegistryTest {
                 )
             )
         }
-        assertTrue(result.isNotBlank())
+        assertTrue(result.contains("确认"))
         assertEquals(1, audit.size)
-        assertEquals("disable_app", audit[0].tool)
-        assertEquals(true, audit[0].ok)
-        assertEquals(true, audit[0].confirmed)
+        assertEquals(false, audit[0].ok)
+        assertEquals(false, audit[0].confirmed)
     }
 
     @Test
@@ -152,17 +200,19 @@ class AgentToolRegistryTest {
         val result = runBlockingTest {
             registry.dispatch(
                 "force_stop",
-                """{"pkg":"bad pkg","confirmed":true}""",
+                """{"pkg":"bad pkg"}""",
                 context(
                     switches = AgentToolSwitches().copy(write_force_stop = true),
                     whitelist = setOf("bad pkg"),
-                    audit = audit
+                    audit = audit,
+                    confirmRequest = { _, _ -> true }
                 )
             )
         }
         assertTrue(result.isNotBlank())
         assertEquals(1, audit.size)
         assertEquals(false, audit[0].ok)
+        assertEquals(true, audit[0].confirmed)
     }
 
     @Test

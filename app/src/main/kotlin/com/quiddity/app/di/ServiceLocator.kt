@@ -2,6 +2,7 @@ package com.quiddity.app.di
 
 import android.annotation.SuppressLint
 import android.content.Context
+import com.quiddity.app.active.ShizukuClient
 import com.quiddity.app.active.AlarmScheduler
 import com.quiddity.app.data.local.CharacterStore
 import com.quiddity.app.data.local.ConversationStore
@@ -77,6 +78,8 @@ object ServiceLocator {
         private set
     lateinit var agentStore: AgentStore
         private set
+    lateinit var shizukuClient: ShizukuClient
+        private set
     lateinit var chatApi: ChatApi
         private set
 
@@ -131,6 +134,7 @@ object ServiceLocator {
         miniAppStore = MiniAppStore(appContext)
         characterStore = CharacterStore(appContext)
         agentStore = AgentStore(appContext)
+        shizukuClient = ShizukuClient(appContext)
         chatApi = ChatApi()
 
         settingsRepository = SettingsRepository(settingsStore)
@@ -156,7 +160,9 @@ object ServiceLocator {
             conversationRepo = conversationRepository,
             settingsRepo = settingsRepository,
             apiCatalogManager = apiCatalogManager,
-            agentToolRegistry = AgentToolRegistry.defaultRegistry(AgentExecutors(appContext)),
+            agentToolRegistry = AgentToolRegistry.defaultRegistry(
+                AgentExecutors(appContext, shizukuClient)
+            ),
             agentStore = agentStore
         )
         alarmScheduler = AlarmScheduler(appContext)
