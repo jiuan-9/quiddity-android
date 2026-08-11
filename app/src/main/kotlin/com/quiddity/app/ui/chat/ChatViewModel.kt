@@ -1215,6 +1215,30 @@ class ChatViewModel(
         }
     }
 
+    /** 应用非角色库来源的人设（如从私聊会话合成）：只写入 AI 人设 + 用户人设 + 记忆，不写角色引用。 */
+    fun bindPersona(
+        persona: Persona,
+        userPersona: com.quiddity.app.data.model.UserPersona,
+        memory: String
+    ) {
+        viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
+            val newTitle = syncTitleWithPersonaName(
+                currentTitle = conv.title,
+                oldPersonaName = conv.persona.name,
+                newPersonaName = persona.name
+            )
+            conversationRepository.updateConversation(
+                conv.copy(
+                    persona = persona.copy(compiledPersona = null),
+                    userPersona = userPersona,
+                    memory = memory,
+                    title = newTitle
+                )
+            )
+        }
+    }
+
     /**
      * 计算头部名字框（会话标题）与人设名的同步结果。
      *

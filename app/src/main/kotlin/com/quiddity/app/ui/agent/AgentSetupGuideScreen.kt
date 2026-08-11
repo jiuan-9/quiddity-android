@@ -2,6 +2,7 @@ package com.quiddity.app.ui.agent
 
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.provider.Settings
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
@@ -260,6 +261,12 @@ fun AgentSetupGuideSheet(onDismiss: () -> Unit) {
                                     action = Settings.ACTION_USAGE_ACCESS_SETTINGS,
                                     context = context
                                 )
+                                UrlJumpRow(
+                                    label = "Shizuku 下载安装",
+                                    desc = "官方直装 APK（全中文页面）",
+                                    url = "https://jiuan-9.github.io/Quiddity-website/downloads/shizuku.apk",
+                                    context = context
+                                )
                                 NoteText(
                                     listOf(
                                         "Shizuku：Android 11+ 用上方「无线调试」启动；Android 8-10 用「授权助手」。",
@@ -286,6 +293,52 @@ fun AgentSetupGuideSheet(onDismiss: () -> Unit) {
                 }
             }
         }
+    }
+}
+
+/** 下载/网页跳转行。 */
+@Composable
+private fun UrlJumpRow(
+    label: String,
+    desc: String,
+    url: String,
+    context: Context
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = desc,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Text(
+            text = "去下载",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) {
+                    runCatching {
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                    }.onFailure {
+                        Toast.makeText(context, "无法打开下载页面", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                .padding(horizontal = 8.dp, vertical = 6.dp)
+        )
     }
 }
 

@@ -3,6 +3,7 @@ package com.quiddity.app.ui.agent
 import android.app.AppOpsManager
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Process
 import android.provider.Settings
 import android.widget.Toast
@@ -98,6 +99,10 @@ import com.quiddity.app.ui.settings.SettingsViewModel
 import com.quiddity.app.ui.settings.ToggleRow
 import com.quiddity.app.ui.theme.Motion
 import kotlinx.coroutines.launch
+
+/** Shizuku 直装下载页（Quiddity 官网，全中文）。 */
+private const val SHIZUKU_DOWNLOAD_URL =
+    "https://jiuan-9.github.io/Quiddity-website/downloads/shizuku.apk"
 
 /*
  * ============================================================================
@@ -286,7 +291,7 @@ fun AgentSettingsScreen(
                                         if (shizukuInstalled) {
                                             launchShizukuApp(context)
                                         } else {
-                                            showGuide = true
+                                            openUrl(context, SHIZUKU_DOWNLOAD_URL)
                                         }
                                     },
                                     helpText = "进阶能力（停用/卸载应用、改权限、强制停止）需要 Shizuku 授权；不开启只能用只读功能。",
@@ -751,5 +756,14 @@ private fun launchShizukuApp(context: Context) {
         }
     }.onFailure {
         Toast.makeText(context, "无法打开 Shizuku", Toast.LENGTH_SHORT).show()
+    }
+}
+
+/** 打开 Shizuku 直装下载页（官网，全中文）。 */
+private fun openUrl(context: Context, url: String) {
+    runCatching {
+        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+    }.onFailure {
+        Toast.makeText(context, "无法打开下载页面", Toast.LENGTH_SHORT).show()
     }
 }

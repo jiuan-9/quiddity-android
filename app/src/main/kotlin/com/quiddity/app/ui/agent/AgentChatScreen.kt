@@ -945,11 +945,71 @@ private fun AgentCharacterPicker(
     onDismiss: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
-    var characters by remember { mutableStateOf<List<Character>?>(null) }
+    var candidates by remember { mutableStateOf<List<AgentCharacterCandidate>?>(null) }
     LaunchedEffect(Unit) {
-        characters = runCatching {
+        // 角色 = 角色库全部角色 + 全部私聊会话的人设（与群聊成员选择同一数据口径）
+        val library = runCatching {
             ServiceLocator.characterRepository.listCharacters()
         }.getOrDefault(emptyList())
+        val libraryIds = library.map { it.id }.toSet()
+        val solos = ServiceLocator.conversationRepository.conversations.value
+            .filter {
+                it.type == com.quiddity.app.data.model.ConversationType.SOLO &&
+                    it.id != conversation?.id
+            }
+        candidates = buildList {
+            library.forEach { c ->
+                add(
+                    AgentCharacterCandidate(
+                        id = c.id,
+                        name = c.persona.name.ifBlank { "未命名角色" },
+                        subtitle = buildString {
+                            val aiDesc = c.persona.character.ifBlank { c.persona.persona }
+                            if (aiDesc.isNotBlank()) append(aiDesc)
+                            val userName = c.userPersona.name
+                            if (userName.isNotBlank()) {
+                                if (isNotEmpty()) append(" · ")
+                                append("用户：$userName")
+                            }
+                            if (isEmpty()) append("点击选用")
+                        },
+                        avatarUri = c.aiAvatarUri ?: c.persona.aiAvatarUri,
+                        library = c,
+                        persona = c.persona,
+                        userPersona = c.userPersona,
+                        memory = c.memory,
+                        selected = conversation?.characterId == c.id
+                    )
+                )
+            }
+            solos.forEach { conv ->
+                if (conv.characterId != null && conv.characterId in libraryIds) return@forEach
+                val p = conv.persona
+                if (p.name.isBlank() && p.persona.isBlank() && p.character.isBlank()) return@forEach
+                add(
+                    AgentCharacterCandidate(
+                        id = "conv:${conv.id}",
+                        name = p.name.ifBlank { conv.title.ifBlank { "未命名角色" } },
+                        subtitle = buildString {
+                            val aiDesc = p.character.ifBlank { p.persona }
+                            if (aiDesc.isNotBlank()) append(aiDesc)
+                            val userName = conv.userPersona.name
+                            if (userName.isNotBlank()) {
+                                if (isNotEmpty()) append(" · ")
+                                append("用户：$userName")
+                            }
+                            if (isEmpty()) append("点击选用")
+                        },
+                        avatarUri = p.aiAvatarUri,
+                        library = null,
+                        persona = p,
+                        userPersona = conv.userPersona,
+                        memory = conv.memory,
+                        selected = false
+                    )
+                )
+            }
+        }
     }
 
     Column(
@@ -994,15 +1054,15 @@ private fun AgentCharacterPicker(
         }
 
         when {
-            characters == null -> {
+            candidates == null -> {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(modifier = Modifier.size(28.dp))
                 }
             }
-            characters.orEmpty().isEmpty() -> {
+            candidates.orEmpty().isEmpty() -> {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(
-                        text = "角色库为空",
+                        text = "暂无可选角色\n可先到私聊里设置人设",
                         style = MaterialTheme.typography.bodyLarge,
                         color = colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                     )
@@ -1031,25 +1091,23 @@ private fun AgentCharacterPicker(
                             )
                         }
                     }
-                    items(characters.orEmpty(), key = { it.id }) { character ->
-                        val selected = conversation?.characterId == character.id
+                    items(candidates.orEmpty(), key = { it.id }) { candidate ->
                         CharacterSelectRow(
-                            name = character.persona.name.ifBlank { "未命名角色" },
-                            subtitle = buildString {
-                                val aiDesc = character.persona.character
-                                    .ifBlank { character.persona.persona }
-                                if (aiDesc.isNotBlank()) append(aiDesc)
-                                val userName = character.userPersona.name
-                                if (userName.isNotBlank()) {
-                                    if (isNotEmpty()) append(" · ")
-                                    append("用户：$userName")
-                                }
-                                if (isEmpty()) append("点击选用")
-                            },
-                            avatarUri = character.aiAvatarUri ?: character.persona.aiAvatarUri,
-                            selected = selected,
+                            name = candidate.name,
+                            subtitle = candidate.subtitle,
+                            avatarUri = candidate.avatarUri,
+                            selected = candidate.selected,
                             onClick = {
-                                viewModel.bindCharacter(character)
+                                val lib = candidate.library
+                                if (lib != null) {
+                                    viewModel.bindCharacter(lib)
+                                } else {
+                                    viewModel.bindPersona(
+                                        persona = candidate.persona,
+                                        userPersona = candidate.userPersona,
+                                        memory = candidate.memory
+                                    )
+                                }
                                 onDismiss()
                             }
                         )
@@ -1059,6 +1117,19 @@ private fun AgentCharacterPicker(
         }
     }
 }
+
+/** 角色候选项：角色库角色或私聊会话合成的人设。 */
+private data class AgentCharacterCandidate(
+    val id: String,
+    val name: String,
+    val subtitle: String,
+    val avatarUri: String?,
+    val library: Character?,
+    val persona: com.quiddity.app.data.model.Persona,
+    val userPersona: com.quiddity.app.data.model.UserPersona,
+    val memory: String,
+    val selected: Boolean
+)
 
 /** 角色选择行：头像 + 名字 + 简介，选中打勾。 */
 @Composable
