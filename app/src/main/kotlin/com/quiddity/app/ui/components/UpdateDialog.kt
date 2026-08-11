@@ -470,23 +470,38 @@ internal sealed interface ReleaseNoteItem {
     data class Plain(val text: String) : ReleaseNoteItem
 }
 
-/** 把远程更新说明按行拆成「小节标题 / 列表项 / 正文」，空行忽略。 */
+/**
+ * 把远程更新说明按行拆成「小节标题 / 列表项 / 正文」，空行忽略。
+ * 兼容两种书写风格：`**标题：**` 与 `# / ## 标题`，并去掉行内 Markdown 符号。
+ */
 internal fun parseReleaseNotes(raw: String): List<ReleaseNoteItem> {
     val items = mutableListOf<ReleaseNoteItem>()
     raw.lineSequence().forEach { rawLine ->
         val line = rawLine.trim()
         when {
-            line.startsWith("**") -> {
-                val title = line.trim('*').trim()
+            line.startsWith("**") && line.endsWith("**") -> {
+                val title = cleanMarkdown(line.trim('*').trim())
                 if (title.isNotBlank()) items += ReleaseNoteItem.Section(title)
             }
-            line.startsWith("- ") || line.startsWith("• ") ->
-                items += ReleaseNoteItem.Bullet(line.removePrefix("- ").removePrefix("• "))
-            line.isNotBlank() -> items += ReleaseNoteItem.Plain(line)
+            line.startsWith("#") -> {
+                val title = cleanMarkdown(line.trimStart('#').trim())
+                if (title.isNotBlank()) items += ReleaseNoteItem.Section(title)
+            }
+            line.startsWith("- ") || line.startsWith("• ") || line.startsWith("* ") ->
+                items += ReleaseNoteItem.Bullet(cleanMarkdown(line.drop(2).trim()))
+            line.startsWith(">") -> {
+                val text = cleanMarkdown(line.trimStart('>').trim())
+                if (text.isNotBlank()) items += ReleaseNoteItem.Plain(text)
+            }
+            line.isNotBlank() -> items += ReleaseNoteItem.Plain(cleanMarkdown(line))
         }
     }
     return items
 }
+
+/** 去掉行内 Markdown 符号（加粗 / 代码 / 斜体），只保留纯文本。 */
+private fun cleanMarkdown(text: String): String =
+    text.replace("**", "").replace("`", "")
 
 /** 更新内容展示：小节标题 + 列表项，超过高度可上下滚动。 */
 @Composable
