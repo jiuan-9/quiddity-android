@@ -55,6 +55,8 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.FormatSize
 import androidx.compose.material.icons.filled.Gavel
@@ -922,7 +924,7 @@ fun SettingsBottomSheet(
                             color = com.quiddity.app.ui.components.glassCardColor()
                         ) {
                             Text(
-                                text = "提示：你也可以在会话内汉堡菜单中单独导入人设卡或对话记录",
+                                text = "提示：你也可以在会话内汉堡菜单中单独导入角色卡或对话记录",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(12.dp)
@@ -1115,6 +1117,8 @@ internal fun SettingsSectionCard(
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit
 ) {
+    // 大分区默认收起，点头部展开/收起
+    var expanded by rememberSaveable(title) { mutableStateOf(false) }
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -1126,7 +1130,12 @@ internal fun SettingsSectionCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 8.dp),
+                .clip(RoundedCornerShape(12.dp))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) { expanded = !expanded }
+                .padding(start = 12.dp, end = 8.dp, top = 6.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
@@ -1141,11 +1150,22 @@ internal fun SettingsSectionCard(
                 text = title,
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.weight(1f)
+            )
+            Icon(
+                imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                contentDescription = if (expanded) "收起" else "展开",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp)
             )
         }
-        content()
-        Spacer(modifier = Modifier.height(4.dp))
+        AnimatedVisibility(visible = expanded) {
+            Column {
+                content()
+                Spacer(modifier = Modifier.height(4.dp))
+            }
+        }
     }
 }
 

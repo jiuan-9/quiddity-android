@@ -52,6 +52,8 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Compress
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
@@ -1760,11 +1762,11 @@ private fun MainMenuContent(
                 trailingTint = MaterialTheme.colorScheme.primary
             )
             Spacer(modifier = Modifier.size(4.dp))
-            // Agent 模式不提供人设卡导出/导入：人设来自角色库唯一角色卡（uid）直接引用
+            // Agent 模式不提供角色卡导出/导入：人设来自角色库唯一角色卡（uid）直接引用
             if (conversation?.type != ConversationType.AGENT) {
                 ExportImportCard(
-                    title = "人设卡",
-                    subtitle = "导出或导入当前会话的人设卡",
+                    title = "角色卡",
+                    subtitle = "导出或导入当前会话「人设」一栏的全部设置（含快速设定内容）",
                     onExport = onExportPersona,
                     onImport = onImportPersona,
                 )
@@ -1814,6 +1816,8 @@ private fun MenuSectionCard(
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit
 ) {
+    // 大分区默认收起，点头部展开/收起（统计分区内容样式保持不变）
+    var expanded by rememberSaveable(title) { mutableStateOf(false) }
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -1826,7 +1830,12 @@ private fun MenuSectionCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 8.dp),
+                .clip(RoundedCornerShape(12.dp))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) { expanded = !expanded }
+                .padding(start = 12.dp, end = 8.dp, top = 6.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
@@ -1841,11 +1850,22 @@ private fun MenuSectionCard(
                 text = title,
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.weight(1f)
+            )
+            Icon(
+                imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                contentDescription = if (expanded) "收起" else "展开",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp)
             )
         }
-        content()
-        Spacer(modifier = Modifier.height(4.dp))
+        AnimatedVisibility(visible = expanded) {
+            Column {
+                content()
+                Spacer(modifier = Modifier.height(4.dp))
+            }
+        }
     }
 }
 
@@ -3308,10 +3328,6 @@ private fun ExportImportCard(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(
-                com.quiddity.app.ui.components.glassCardColor()
-            )
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(

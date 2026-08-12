@@ -75,8 +75,6 @@ fun ActiveMessagePermissionCard(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerLow)
             .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
         PermissionStatusRow(
