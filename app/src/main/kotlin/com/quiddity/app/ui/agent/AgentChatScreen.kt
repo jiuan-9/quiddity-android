@@ -231,8 +231,13 @@ fun AgentChatScreen(
             scope = scope,
             screenWidthPx = screenWidthPx,
             onBack = onBack,
-            onMenuVisibilityChange = { open -> showHamburger = open }
+            onMenuVisibilityChange = { open -> showHamburger = open },
+            onCharacterPickerDismiss = { closeCharacterPicker() }
         )
+    }
+
+    LaunchedEffect(showCharacterPicker) {
+        dragController.updateCharacterPickerOpen(showCharacterPicker)
     }
 
     DisposableEffect(Unit) {
@@ -251,12 +256,16 @@ fun AgentChatScreen(
         if (messages.any { !it.isNotice }) listState.animateScrollToItem(0)
     }
 
-    BackHandler(enabled = showCharacterPicker || characterPickerClosing) {
-        closeCharacterPicker()
-    }
-
-    BackHandler(enabled = !isGenerating && !showHamburger && !showCharacterPicker && !characterPickerClosing) {
-        dragController.animateBackAndExit()
+    // ===== 系统返回键：角色面板 -> 关闭面板；正常状态 -> 退出会话 =====
+    // 合并为单一 BackHandler 状态机，避免多 handler 注册顺序带来的返回误判。
+    BackHandler(
+        enabled = showCharacterPicker || characterPickerClosing ||
+            (!isGenerating && !showHamburger)
+    ) {
+        when {
+            showCharacterPicker || characterPickerClosing -> closeCharacterPicker()
+            else -> dragController.animateBackAndExit()
+        }
     }
 
     LaunchedEffect(characterPickerClosing) {
@@ -521,7 +530,7 @@ fun AgentChatScreen(
         },
         // Agent 的「AI 人设」行 = 选择角色（角色库点选），不进入从零编辑表单
         onPersonaOverride = {
-            dragController.closeMenu()
+            dragController.closeMenuImmediately()
             characterPickerClosing = false
             showCharacterPicker = true
         }
