@@ -46,6 +46,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Article
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.BatteryFull
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -63,6 +64,7 @@ import androidx.compose.material.icons.filled.PrivacyTip
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
@@ -147,7 +149,7 @@ private const val SHIZUKU_REQUEST_CODE = 1101
  * Agent 设置（会话外设置）：与总设置完全同款的底部弹层。
  *
  * - 排版/滑动/动画/行样式与 [SettingsBottomSheet] 一致（毛玻璃面板 + 顶部抓手拖拽 + 分组卡片行）；
- * - 内容仅 Agent 专属：权限状态 / 工具使用权限 / 等级徽章 / 白名单 / 数据与隐私 / 支持；
+ * - 内容仅 Agent 专属：权限状态 / 工具使用开关 / 等级徽章 / 白名单 / 数据与隐私 / 支持；
  * - 全局设置（主题 / 字体 / Markdown 等）通过「总设置」入口进入，受总设置管控。
  */
 @Composable
@@ -182,6 +184,8 @@ fun AgentSettingsScreen(
     val usageEnabled = remember(refreshTick) { hasUsageAccess(context) }
     val shizukuClient = ServiceLocator.shizukuClient
     var shizukuStatus by remember(refreshTick) { mutableStateOf(shizukuClient.status()) }
+    // Shizuku 已授权并配对：写入类与全局日志等工具的开关才可操作
+    val shizukuReady = shizukuStatus == ShizukuStatus.GRANTED
     var visible by remember { mutableStateOf(false) }
     val configuration = LocalConfiguration.current
     val screenHeight = configuration.screenHeightDp.dp
@@ -420,13 +424,14 @@ fun AgentSettingsScreen(
 
                         item(key = "tools", contentType = { "section" }) {
                             ExpandableSettingsSection(
-                                title = "工具使用权限",
+                                title = "工具使用开关",
                                 defaultExpanded = false
                             ) {
+                                // ===== 感知类：依赖系统权限，未授权时开关置灰 =====
                                 ToggleRow(
                                     icon = Icons.Filled.Visibility,
                                     title = "读屏",
-                                    subtitle = "读取屏幕文本",
+                                    subtitle = toolStatusSubtitle("读取屏幕文本", "无障碍服务", accessibilityEnabled),
                                     checked = settings.toolSwitches.sense_screen,
                                     onCheckedChange = { on ->
                                         scope.launch { store.setToolSwitch("sense_screen", on) }
@@ -438,7 +443,7 @@ fun AgentSettingsScreen(
                                 ToggleRow(
                                     icon = Icons.Filled.Notifications,
                                     title = "通知",
-                                    subtitle = "读取最近的通知",
+                                    subtitle = toolStatusSubtitle("读取最近的通知", "通知使用权", notificationEnabled),
                                     checked = settings.toolSwitches.sense_notifications,
                                     onCheckedChange = { on ->
                                         scope.launch { store.setToolSwitch("sense_notifications", on) }
@@ -450,7 +455,7 @@ fun AgentSettingsScreen(
                                 ToggleRow(
                                     icon = Icons.Filled.Speed,
                                     title = "用量与前台应用",
-                                    subtitle = "统计应用使用情况",
+                                    subtitle = toolStatusSubtitle("统计应用使用情况", "使用情况访问", usageEnabled),
                                     checked = settings.toolSwitches.sense_usage,
                                     onCheckedChange = { on ->
                                         scope.launch { store.setToolSwitch("sense_usage", on) }
@@ -459,6 +464,7 @@ fun AgentSettingsScreen(
                                     onHelpClick = { helpText = "打开后，Agent 才能使用「用量统计」「前台应用」工具。" },
                                     enabled = usageEnabled
                                 )
+                                // ===== 读取类：无需额外权限 =====
                                 ToggleRow(
                                     icon = Icons.Filled.Apps,
                                     title = "应用列表",
@@ -484,29 +490,31 @@ fun AgentSettingsScreen(
                                 ToggleRow(
                                     icon = Icons.Filled.BatteryFull,
                                     title = "后台耗电",
-                                    subtitle = "查询应用后台耗电统计",
+                                    subtitle = toolStatusSubtitle("查询应用后台耗电统计", "Shizuku 授权", shizukuReady),
                                     checked = settings.toolSwitches.read_battery,
                                     onCheckedChange = { on ->
                                         scope.launch { store.setToolSwitch("read_battery", on) }
                                     },
                                     helpText = "打开后，Agent 才能查询指定应用的后台耗电（需要 Shizuku 授权）。",
-                                    onHelpClick = { helpText = "打开后，Agent 才能查询指定应用的后台耗电（需要 Shizuku 授权）。" }
+                                    onHelpClick = { helpText = "打开后，Agent 才能查询指定应用的后台耗电（需要 Shizuku 授权）。" },
+                                    enabled = shizukuReady
                                 )
                                 ToggleRow(
                                     icon = Icons.Filled.DataUsage,
                                     title = "流量排行",
-                                    subtitle = "按流量统计已安装应用",
+                                    subtitle = toolStatusSubtitle("按流量统计已安装应用", "使用情况访问", usageEnabled),
                                     checked = settings.toolSwitches.read_traffic,
                                     onCheckedChange = { on ->
                                         scope.launch { store.setToolSwitch("read_traffic", on) }
                                     },
                                     helpText = "打开后，Agent 才能按接收/发送流量排行应用（需要使用情况访问权限）。",
-                                    onHelpClick = { helpText = "打开后，Agent 才能按接收/发送流量排行应用（需要使用情况访问权限）。" }
+                                    onHelpClick = { helpText = "打开后，Agent 才能按接收/发送流量排行应用（需要使用情况访问权限）。" },
+                                    enabled = usageEnabled
                                 )
                                 ToggleRow(
                                     icon = Icons.Filled.PhotoCamera,
                                     title = "截图",
-                                    subtitle = "截取当前屏幕并保存",
+                                    subtitle = toolStatusSubtitle("截取当前屏幕并保存", "无障碍服务", accessibilityEnabled),
                                     checked = settings.toolSwitches.read_screenshot,
                                     onCheckedChange = { on ->
                                         scope.launch { store.setToolSwitch("read_screenshot", on) }
@@ -518,41 +526,63 @@ fun AgentSettingsScreen(
                                 ToggleRow(
                                     icon = Icons.Filled.Article,
                                     title = "全局日志",
-                                    subtitle = "查看所有应用的日志报告",
+                                    subtitle = toolStatusSubtitle("查看所有应用的日志报告", "Shizuku 授权", shizukuReady),
                                     checked = settings.toolSwitches.read_logs,
                                     onCheckedChange = { on ->
                                         scope.launch { store.setToolSwitch("read_logs", on) }
                                     },
                                     helpText = "打开后，Agent 才能读取全局系统日志（logcat，覆盖所有应用；需要 Shizuku 授权）。",
-                                    onHelpClick = { helpText = "打开后，Agent 才能读取全局系统日志（logcat，覆盖所有应用；需要 Shizuku 授权）。" }
+                                    onHelpClick = { helpText = "打开后，Agent 才能读取全局系统日志（logcat，覆盖所有应用；需要 Shizuku 授权）。" },
+                                    enabled = shizukuReady
                                 )
-                                WriteLockedRow(
+                                // ===== 写入类：无论是否授权都有开关；Shizuku 未授权/未配对时置灰 =====
+                                ToggleRow(
+                                    icon = Icons.Filled.Block,
                                     title = "停用与启用应用",
-                                    unlocked = shizukuStatus == ShizukuStatus.GRANTED,
-                                    onClick = { showGuide = true },
+                                    subtitle = toolStatusSubtitle("停用/启用指定应用", "Shizuku 授权", shizukuReady),
+                                    checked = settings.toolSwitches.write_disable,
+                                    onCheckedChange = { on ->
+                                        scope.launch { store.setToolSwitch("write_disable", on) }
+                                    },
                                     helpText = "停用后应用图标消失、无法运行；需 Shizuku 授权，且目标应用必须在白名单内。",
-                                    onHelpClick = { helpText = "停用后应用图标消失、无法运行；需 Shizuku 授权，且目标应用必须在白名单内。" }
+                                    onHelpClick = { helpText = "停用后应用图标消失、无法运行；需 Shizuku 授权，且目标应用必须在白名单内。" },
+                                    enabled = shizukuReady
                                 )
-                                WriteLockedRow(
+                                ToggleRow(
+                                    icon = Icons.Filled.Lock,
                                     title = "权限修改",
-                                    unlocked = shizukuStatus == ShizukuStatus.GRANTED,
-                                    onClick = { showGuide = true },
+                                    subtitle = toolStatusSubtitle("修改应用的权限模式", "Shizuku 授权", shizukuReady),
+                                    checked = settings.toolSwitches.write_appops,
+                                    onCheckedChange = { on ->
+                                        scope.launch { store.setToolSwitch("write_appops", on) }
+                                    },
                                     helpText = "修改应用的权限模式（如拒绝震动、定位等）；需 Shizuku 授权 + 白名单。",
-                                    onHelpClick = { helpText = "修改应用的权限模式（如拒绝震动、定位等）；需 Shizuku 授权 + 白名单。" }
+                                    onHelpClick = { helpText = "修改应用的权限模式（如拒绝震动、定位等）；需 Shizuku 授权 + 白名单。" },
+                                    enabled = shizukuReady
                                 )
-                                WriteLockedRow(
+                                ToggleRow(
+                                    icon = Icons.Filled.Stop,
                                     title = "强制停止",
-                                    unlocked = shizukuStatus == ShizukuStatus.GRANTED,
-                                    onClick = { showGuide = true },
+                                    subtitle = toolStatusSubtitle("立即停止应用的后台运行", "Shizuku 授权", shizukuReady),
+                                    checked = settings.toolSwitches.write_force_stop,
+                                    onCheckedChange = { on ->
+                                        scope.launch { store.setToolSwitch("write_force_stop", on) }
+                                    },
                                     helpText = "立即停止应用的后台运行；需 Shizuku 授权 + 白名单。",
-                                    onHelpClick = { helpText = "立即停止应用的后台运行；需 Shizuku 授权 + 白名单。" }
+                                    onHelpClick = { helpText = "立即停止应用的后台运行；需 Shizuku 授权 + 白名单。" },
+                                    enabled = shizukuReady
                                 )
-                                WriteLockedRow(
+                                ToggleRow(
+                                    icon = Icons.Filled.Delete,
                                     title = "卸载应用",
-                                    unlocked = shizukuStatus == ShizukuStatus.GRANTED,
-                                    onClick = { showGuide = true },
+                                    subtitle = toolStatusSubtitle("卸载指定应用", "Shizuku 授权", shizukuReady),
+                                    checked = settings.toolSwitches.write_uninstall,
+                                    onCheckedChange = { on ->
+                                        scope.launch { store.setToolSwitch("write_uninstall", on) }
+                                    },
                                     helpText = "卸载指定应用；需 Shizuku 授权 + 白名单，卸载后数据不可恢复。",
-                                    onHelpClick = { helpText = "卸载指定应用；需 Shizuku 授权 + 白名单，卸载后数据不可恢复。" }
+                                    onHelpClick = { helpText = "卸载指定应用；需 Shizuku 授权 + 白名单，卸载后数据不可恢复。" },
+                                    enabled = shizukuReady
                                 )
                             }
                         }
@@ -761,26 +791,11 @@ fun AgentSettingsScreen(
     }
 }
 
-/** 写入类工具行：未解锁时显示锁定提示，点击进入开启教程。 */
-@Composable
-private fun WriteLockedRow(
-    title: String,
-    unlocked: Boolean,
-    onClick: () -> Unit,
-    helpText: String? = null,
-    onHelpClick: (() -> Unit)? = null
-) {
-    ClickableRow(
-        icon = Icons.Filled.Lock,
-        title = title,
-        subtitle = if (unlocked) "已解锁" else "授权通道开启后解锁",
-        onClick = onClick,
-        helpText = helpText,
-        onHelpClick = onHelpClick
-    )
-}
+/** 工具行副标题：所需权限未授权时附加「需XX（未开启）」，开关置灰原因一目了然。 */
+private fun toolStatusSubtitle(base: String, need: String?, granted: Boolean): String =
+    if (need == null || granted) base else "$base · 需$need（未开启）"
 
-/** 可展开设置分组：点头部展开/收起（用于权限状态、工具使用权限）。 */
+/** 可展开设置分组：点头部展开/收起（用于权限状态、工具使用开关）。 */
 @Composable
 private fun ExpandableSettingsSection(
     title: String,
