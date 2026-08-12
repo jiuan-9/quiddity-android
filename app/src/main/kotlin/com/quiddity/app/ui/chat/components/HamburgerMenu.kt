@@ -17,7 +17,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -1817,14 +1816,9 @@ private fun MenuSectionCard(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 10.dp, vertical = 6.dp)
-            .clip(RoundedCornerShape(18.dp))
-            // 毛玻璃半透明卡片：透出壁纸背景
+            // 毛玻璃半透明卡片：与总设置一色透明，无描边
+            .clip(RoundedCornerShape(20.dp))
             .background(com.quiddity.app.ui.components.glassCardColor())
-            .border(
-                width = 1.dp,
-                color = com.quiddity.app.ui.components.glassCardBorderColor(),
-                shape = RoundedCornerShape(18.dp)
-            )
             .padding(horizontal = 2.dp, vertical = 6.dp)
     ) {
         Row(
@@ -1868,13 +1862,8 @@ private fun ExpandableMenuGroup(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(14.dp))
             .background(com.quiddity.app.ui.components.glassCardColor())
-            .border(
-                width = 1.dp,
-                color = com.quiddity.app.ui.components.glassCardBorderColor(),
-                shape = RoundedCornerShape(12.dp)
-            )
     ) {
         Row(
             modifier = Modifier
@@ -1944,7 +1933,7 @@ private fun MenuRow(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(14.dp))
             .background(
                 com.quiddity.app.ui.components.glassCardColor()
             )
@@ -3021,7 +3010,7 @@ private fun ToggleMenuRow(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(14.dp))
             .background(
                 com.quiddity.app.ui.components.glassCardColor()
             )
@@ -3327,7 +3316,7 @@ private fun ExportImportCard(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(14.dp))
             .background(
                 com.quiddity.app.ui.components.glassCardColor()
             )
