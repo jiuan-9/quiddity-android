@@ -20,7 +20,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -1122,11 +1121,6 @@ internal fun SettingsSectionCard(
             .padding(horizontal = 12.dp, vertical = 6.dp)
             .clip(RoundedCornerShape(20.dp))
             .background(com.quiddity.app.ui.components.glassCardColor())
-            .border(
-                width = 1.dp,
-                color = com.quiddity.app.ui.components.glassCardBorderColor(),
-                shape = RoundedCornerShape(20.dp)
-            )
             .padding(horizontal = 4.dp, vertical = 6.dp)
     ) {
         Row(
@@ -1179,9 +1173,7 @@ private fun FontSizeRow(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 3.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(com.quiddity.app.ui.components.glassCardColor())
+            .padding(vertical = 3.dp)
     ) {
         Column(
             modifier = Modifier
@@ -1250,9 +1242,7 @@ internal fun ToggleRow(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 3.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(com.quiddity.app.ui.components.glassCardColor())
+            .padding(vertical = 3.dp)
     ) {
         Row(
             modifier = Modifier
@@ -1323,14 +1313,7 @@ private fun ExpandableSettingGroup(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 3.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(com.quiddity.app.ui.components.glassCardColor())
-            .border(
-                width = 1.dp,
-                color = com.quiddity.app.ui.components.glassCardBorderColor(),
-                shape = RoundedCornerShape(14.dp)
-            )
+            .padding(vertical = 3.dp)
     ) {
         Row(
             modifier = Modifier
@@ -1406,9 +1389,7 @@ internal fun ClickableRow(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 3.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(com.quiddity.app.ui.components.glassCardColor())
+            .padding(vertical = 3.dp)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,

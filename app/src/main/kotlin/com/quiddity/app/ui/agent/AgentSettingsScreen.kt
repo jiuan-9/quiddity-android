@@ -17,7 +17,6 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -795,11 +794,6 @@ private fun ExpandableSettingsSection(
             .padding(horizontal = 12.dp, vertical = 6.dp)
             .clip(RoundedCornerShape(20.dp))
             .background(com.quiddity.app.ui.components.glassCardColor())
-            .border(
-                width = 1.dp,
-                color = com.quiddity.app.ui.components.glassCardBorderColor(),
-                shape = RoundedCornerShape(20.dp)
-            )
             .padding(horizontal = 4.dp, vertical = 6.dp)
     ) {
         Row(

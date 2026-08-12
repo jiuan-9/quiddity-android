@@ -1864,8 +1864,6 @@ private fun ExpandableMenuGroup(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(com.quiddity.app.ui.components.glassCardColor())
     ) {
         Row(
             modifier = Modifier
@@ -1935,10 +1933,6 @@ private fun MenuRow(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(
-                com.quiddity.app.ui.components.glassCardColor()
-            )
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -3012,10 +3006,6 @@ private fun ToggleMenuRow(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(
-                com.quiddity.app.ui.components.glassCardColor()
-            )
             .then(
                 if (enabled) {
                     Modifier.clickable(
