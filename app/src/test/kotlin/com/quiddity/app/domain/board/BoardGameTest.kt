@@ -12,6 +12,46 @@ class BoardGameTest {
     private fun gomoku() = BoardState(gameType = BoardGameType.GOMOKU)
     private fun go() = BoardState(gameType = BoardGameType.GO)
 
+    @Test
+    fun boardSize_defaultsFollowChineseStandards() {
+        assertEquals(15, BoardGameType.GOMOKU.defaultSize)
+        assertEquals(19, BoardGameType.GO.defaultSize)
+        assertEquals(15, BoardState(gameType = BoardGameType.GOMOKU).size)
+        assertEquals(19, BoardState(gameType = BoardGameType.GO).size)
+    }
+
+    @Test
+    fun boardSize_customSizesBuildMatchingGrid() {
+        val gomoku9 = BoardState(gameType = BoardGameType.GOMOKU, size = 9)
+        assertEquals(9, gomoku9.size)
+        assertEquals(81, gomoku9.grid.size)
+        val go13 = BoardState(gameType = BoardGameType.GO, size = 13)
+        assertEquals(13, go13.size)
+        assertEquals(169, go13.grid.size)
+    }
+
+    @Test
+    fun gomoku_fiveInRowStillWinsOnCustomSmallBoard() {
+        var state = BoardState(gameType = BoardGameType.GOMOKU, size = 9)
+        val blacks = listOf(4 to 1, 4 to 2, 4 to 3, 4 to 4, 4 to 5)
+        val whiteMoves = listOf(0 to 0, 0 to 1, 0 to 2, 0 to 3)
+        var whiteIndex = 0
+        for ((index, mv) in blacks.withIndex()) {
+            val r = state.applyMove(mv.first, mv.second)
+            assertIs<MoveOutcome.Played>(r)
+            state = r.state
+            if (index < blacks.lastIndex) {
+                val (wr, wc) = whiteMoves[whiteIndex++]
+                val wr2 = state.applyMove(wr, wc)
+                assertIs<MoveOutcome.Played>(wr2)
+                state = wr2.state
+            } else {
+                assertEquals(Stone.BLACK, r.winner)
+                assertTrue(r.gameOver)
+            }
+        }
+    }
+
     private fun farMoves(state: BoardState, count: Int): List<Pair<Int, Int>> {
         // 返回远离棋盘中心的合法空位，用于让对手"过手"
         val size = state.size
@@ -172,7 +212,7 @@ class BoardGameTest {
         for ((r, c) in ring) grid[r * 9 + c] = Stone.BLACK.code
         // 远处放几颗白子，让外圈大空域成为公海，不计入任何一方
         for ((r, c) in listOf(0 to 0, 0 to 1, 1 to 0)) grid[r * 9 + c] = Stone.WHITE.code
-        val state = BoardState(gameType = BoardGameType.GO, grid = grid.toList(), current = Stone.WHITE, moveCount = 11)
+        val state = BoardState(gameType = BoardGameType.GO, size = 9, grid = grid.toList(), current = Stone.WHITE, moveCount = 11)
         val score = state.score()
         assertEquals(9.0, score.black)
         assertEquals(10.5, score.white)
@@ -195,6 +235,7 @@ class BoardGameTest {
         for ((r, c) in listOf(0 to 2, 2 to 0)) grid[r * 9 + c] = Stone.BLACK.code
         val state = BoardState(
             gameType = BoardGameType.GO,
+            size = 9,
             grid = grid.toList(),
             current = Stone.BLACK
         )
@@ -225,7 +266,7 @@ class BoardGameTest {
         val grid = MutableList(81) { 0 }
         for ((r, c) in listOf(0 to 0, 0 to 1, 1 to 0, 1 to 1)) grid[r * 9 + c] = Stone.BLACK.code
         for ((r, c) in listOf(6 to 6, 6 to 7, 7 to 6, 7 to 7)) grid[r * 9 + c] = Stone.WHITE.code
-        val state = BoardState(gameType = BoardGameType.GO, grid = grid.toList(), current = Stone.WHITE)
+        val state = BoardState(gameType = BoardGameType.GO, size = 9, grid = grid.toList(), current = Stone.WHITE)
         val score = state.score()
         assertEquals(4.0, score.black)
         assertEquals(11.5, score.white)

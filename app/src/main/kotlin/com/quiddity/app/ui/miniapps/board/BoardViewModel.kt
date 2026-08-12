@@ -46,9 +46,10 @@ import kotlin.random.Random
  */
 sealed interface BoardRoute {
     data object GameSelect : BoardRoute
-    data class ModeSelect(val game: BoardGameType) : BoardRoute
-    data class DifficultySelect(val game: BoardGameType) : BoardRoute
-    data class Invite(val game: BoardGameType) : BoardRoute
+    data class SizeSelect(val game: BoardGameType) : BoardRoute
+    data class ModeSelect(val game: BoardGameType, val size: Int) : BoardRoute
+    data class DifficultySelect(val game: BoardGameType, val size: Int) : BoardRoute
+    data class Invite(val game: BoardGameType, val size: Int) : BoardRoute
     data class Playing(val sessionId: String) : BoardRoute
 }
 
@@ -124,30 +125,41 @@ class BoardViewModel(
         )
 
     fun selectGame(game: BoardGameType) {
-        _uiState.update { it.copy(route = BoardRoute.ModeSelect(game)) }
+        _uiState.update { it.copy(route = BoardRoute.SizeSelect(game)) }
+    }
+
+    /** 选定棋盘大小后进入对手选择页。 */
+    fun selectSize(game: BoardGameType, size: Int) {
+        _uiState.update { it.copy(route = BoardRoute.ModeSelect(game, size)) }
     }
 
     fun backToGames() {
         _uiState.update { it.copy(route = BoardRoute.GameSelect, session = null) }
     }
 
-    fun backToMode(game: BoardGameType) {
-        _uiState.update { it.copy(route = BoardRoute.ModeSelect(game)) }
+    /** 从"选择对手"返回上一级"选择棋盘大小"。 */
+    fun backToSize(game: BoardGameType) {
+        _uiState.update { it.copy(route = BoardRoute.SizeSelect(game)) }
     }
 
-    fun onChooseInvite(game: BoardGameType) {
-        _uiState.update { it.copy(route = BoardRoute.Invite(game)) }
+    fun backToMode(game: BoardGameType, size: Int) {
+        _uiState.update { it.copy(route = BoardRoute.ModeSelect(game, size)) }
+    }
+
+    fun onChooseInvite(game: BoardGameType, size: Int) {
+        _uiState.update { it.copy(route = BoardRoute.Invite(game, size)) }
     }
 
     /** 进入难度选择页。 */
-    fun onChooseVsComputer(game: BoardGameType) {
-        _uiState.update { it.copy(route = BoardRoute.DifficultySelect(game)) }
+    fun onChooseVsComputer(game: BoardGameType, size: Int) {
+        _uiState.update { it.copy(route = BoardRoute.DifficultySelect(game, size)) }
     }
 
     /** 选定难度后与电脑开局：固定本地棋力，无需联网。 */
-    fun onStartVsComputer(game: BoardGameType, difficulty: BoardDifficulty) {
+    fun onStartVsComputer(game: BoardGameType, size: Int, difficulty: BoardDifficulty) {
         startSession(
             game = game,
+            boardSize = size,
             mode = BoardGameMode.VS_COMPUTER,
             opponentName = "电脑棋手",
             opponentPersona = null,
@@ -160,7 +172,9 @@ class BoardViewModel(
 
     /** 邀请好友：复用已有私聊会话并检测 API 连接；失败则本地电脑兜底，不阻塞开始。 */
     fun inviteFriend(invitee: BoardInvitee) {
-        val game = (_uiState.value.route as? BoardRoute.Invite)?.game ?: return
+        val route = _uiState.value.route as? BoardRoute.Invite ?: return
+        val game = route.game
+        val size = route.size
         _uiState.update { it.copy(inviteChecking = true) }
         viewModelScope.launch {
             val conversation = invitee.conversation
@@ -178,7 +192,7 @@ class BoardViewModel(
             }
             val invite = inviteManager.prepare(
                 character = character,
-                inviteBubbleText = { name -> BoardMiniApp.inviteBubbleText(game, name) },
+                inviteBubbleText = { name -> BoardMiniApp.inviteBubbleText(game, size, name) },
                 miniAppId = BoardMiniApp.id,
                 miniAppTitle = BoardMiniApp.name,
                 existingConversation = conversation
@@ -186,6 +200,7 @@ class BoardViewModel(
 
             startSession(
                 game = game,
+                boardSize = size,
                 mode = BoardGameMode.INVITE_CHARACTER,
                 opponentName = invite.opponentName,
                 opponentPersona = invite.opponentPersona,
@@ -308,6 +323,7 @@ class BoardViewModel(
         val session = _uiState.value.session ?: return
         startSession(
             game = session.gameType,
+            boardSize = session.board.size,
             mode = session.mode,
             opponentName = session.opponentName,
             opponentPersona = session.opponentPersona,
@@ -320,6 +336,7 @@ class BoardViewModel(
 
     private fun startSession(
         game: BoardGameType,
+        boardSize: Int,
         mode: BoardGameMode,
         opponentName: String,
         opponentPersona: String?,
@@ -339,7 +356,7 @@ class BoardViewModel(
             difficulty = difficulty,
             llmEnabled = access != null,
             access = access,
-            board = BoardState(gameType = game),
+            board = BoardState(gameType = game, size = boardSize),
             chat = emptyList(),
             status = BoardStatus.Playing,
             conversationId = conversationId,

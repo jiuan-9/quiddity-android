@@ -82,7 +82,7 @@ class BoardBotTest {
         grid[0 * 9 + 1] = Stone.BLACK.code
         grid[1 * 9 + 0] = Stone.BLACK.code
         grid[2 * 9 + 1] = Stone.BLACK.code
-        val state = BoardState(gameType = BoardGameType.GO, grid = grid.toList(), current = Stone.BLACK)
+        val state = BoardState(gameType = BoardGameType.GO, size = 9, grid = grid.toList(), current = Stone.BLACK)
         val move = BoardBot.nextMove(state, Random(1))
         assertNotNull(move)
         assertEquals(1 to 2, move.row to move.col)
@@ -93,7 +93,7 @@ class BoardBotTest {
         val grid = MutableList(9 * 9) { 0 }
         grid[0 * 9 + 1] = Stone.WHITE.code
         grid[1 * 9 + 0] = Stone.WHITE.code
-        val state = BoardState(gameType = BoardGameType.GO, grid = grid.toList(), current = Stone.BLACK)
+        val state = BoardState(gameType = BoardGameType.GO, size = 9, grid = grid.toList(), current = Stone.BLACK)
         val move = BoardBot.nextMove(state, Random(1))
         assertNotNull(move)
         assertIs<MoveOutcome.Played>(state.applyMove(move))
@@ -105,7 +105,7 @@ class BoardBotTest {
         for (r in 0 until 9) for (c in 0 until 9) {
             grid[r * 9 + c] = if ((r + c) % 2 == 0) Stone.BLACK.code else Stone.WHITE.code
         }
-        val state = BoardState(gameType = BoardGameType.GO, grid = grid.toList(), current = Stone.BLACK)
+        val state = BoardState(gameType = BoardGameType.GO, size = 9, grid = grid.toList(), current = Stone.BLACK)
         assertNull(BoardBot.nextMove(state, Random(1)))
     }
 }

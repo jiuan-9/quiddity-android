@@ -514,6 +514,7 @@ fun SpyWordReminderDialog(
 fun SpySetupSeatRow(
     userAvatarUri: String?,
     llmCharacters: List<Character>,
+    onAddClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Row(
@@ -540,6 +541,7 @@ fun SpySetupSeatRow(
             } else {
                 SpySeatSlot(
                     empty = true,
+                    onClick = onAddClick,
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -554,30 +556,37 @@ private fun SpySeatSlot(
     avatarUri: String? = null,
     filled: Boolean = false,
     accent: Boolean = false,
-    empty: Boolean = false
+    empty: Boolean = false,
+    onClick: (() -> Unit)? = null
 ) {
     Column(
         modifier = modifier,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         if (empty) {
-            Box(
-                modifier = Modifier
-                    .size(52.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                    .border(
-                        1.dp,
-                        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f),
-                        CircleShape
-                    ),
-                contentAlignment = Alignment.Center
+            SpyPressable(
+                onClick = onClick ?: {},
+                enabled = onClick != null,
+                modifier = Modifier.size(52.dp)
             ) {
-                Text(
-                    text = "+",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                )
+                Box(
+                    modifier = Modifier
+                        .size(52.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                        .border(
+                            1.dp,
+                            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f),
+                            CircleShape
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "+",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    )
+                }
             }
         } else {
             Box(
@@ -597,7 +606,7 @@ private fun SpySeatSlot(
         }
         Spacer(Modifier.size(4.dp))
         Text(
-            text = if (empty) "空位" else name,
+            text = if (empty) "点击加入" else name,
             style = MaterialTheme.typography.labelSmall,
             color = if (empty) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
             else MaterialTheme.colorScheme.onSurface,
