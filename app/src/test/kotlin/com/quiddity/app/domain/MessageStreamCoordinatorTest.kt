@@ -773,7 +773,7 @@ class MessageStreamCoordinatorTest {
     }
 
     @Test
-    fun `server reasoning attaches to first reply alongside local thinking`() {
+    fun `server reasoning ignored and local thinking attaches to first reply`() {
         val coord = MessageStreamCoordinator(
             "conv1", "run1", singleMessageTokens = 1000,
             thinking = "用户想了解代码"
@@ -784,18 +784,18 @@ class MessageStreamCoordinatorTest {
         coord.accept("println 1。")
         coord.finalize()
         val snap = coord.snapshot()
-        assertEquals(1, snap.size, "reasoning 与正文合并为同一条消息")
+        assertEquals(1, snap.size, "reasoning 被忽略，不生成独立思考消息")
         assertEquals("好的，代码是：println 1。", snap.first().content)
         assertTrue(snap.first().isThinking.not())
         assertEquals(
-            "用户想了解代码\n用户想要一段代码，先分析需求。",
+            "用户想了解代码",
             snap.first().thinking,
-            "本地思考与 reasoning 思考合并附着在首条回复上"
+            "本地思考附着在首条回复上"
         )
     }
 
     @Test
-    fun `reasoning streamed word by word attaches as one sentence`() {
+    fun `reasoning streamed word by word is ignored`() {
         val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
         coord.acceptReasoning("The ")
         coord.acceptReasoning("user ")
@@ -806,21 +806,7 @@ class MessageStreamCoordinatorTest {
         val snap = coord.snapshot()
         assertEquals(1, snap.size)
         assertEquals("最终回复。", snap.first().content)
-        assertEquals(
-            "The user just said hi.",
-            snap.first().thinking,
-            "reasoning 逐词流式返回必须合并为完整句子，不得一词一行"
-        )
-    }
-
-    @Test
-    fun `reasoning without content still attaches on finalize`() {
-        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
-        coord.acceptReasoning("只思考 ")
-        coord.acceptReasoning("没有回复。")
-        coord.finalize()
-        val snap = coord.snapshot()
-        assertEquals(0, snap.size, "仅有思考无正文时不产生消息")
+        assertTrue(snap.first().thinking.isBlank(), "reasoning 兜底已移除，不再附着到消息")
     }
 
     @Test
