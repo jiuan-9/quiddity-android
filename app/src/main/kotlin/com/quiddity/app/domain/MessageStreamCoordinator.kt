@@ -154,13 +154,15 @@ class MessageStreamCoordinator(
     private val thinkingChunk = StringBuilder()
     /** 跨 delta 保留的尾部（可能是【思考】/【回答】标记的开头，等待下一个分片补全）。 */
     private var markerTail = ""
+    /** 模型 reasoning_content 累积缓冲：流式逐词返回，先拼成完整思考再附着，避免一词一行。 */
+    private val reasoningBuffer = StringBuilder()
 
     override fun acceptReasoning(delta: String): List<StreamCoordinator.Signal> {
         // 思考优先由提示词引导（【思考】/【回答】标记）产生；
         // 模型返回 reasoning_content 时同样附着为思考内容，双通道兜底，
         // 保证开启思考的模型（如 DeepSeek 思考模型）也能展示真实思考。
         if (delta.isBlank()) return emptyList()
-        appendThinking(delta.trim())
+        reasoningBuffer.append(delta)
         return emptyList()
     }
 
@@ -173,6 +175,9 @@ class MessageStreamCoordinator(
 
     override fun accept(delta: String): List<StreamCoordinator.Signal> {
         if (delta.isEmpty()) return emptyList()
+        // 正文开始前，把已累积的 reasoning_content 一次性附着为思考，
+        // 避免流式逐词返回被拆成「一词一行」的思考文本。
+        flushReasoning()
         val signals = mutableListOf<StreamCoordinator.Signal>()
         val combined = markerTail + delta
         markerTail = ""
@@ -300,8 +305,20 @@ class MessageStreamCoordinator(
         return 0
     }
 
+    /** 把累积的 reasoning_content 一次性附着为思考文本（合并为完整句子）。 */
+    private fun flushReasoning() {
+        if (reasoningBuffer.isBlank()) return
+        val text = reasoningBuffer.toString().trim()
+        reasoningBuffer.clear()
+        if (text.isNotBlank()) {
+            appendThinking(text)
+        }
+    }
+
     override fun finalize(): List<StreamCoordinator.Signal> {
         val signals = mutableListOf<StreamCoordinator.Signal>()
+        // 流结束时仍有未附着的 reasoning_content：一并拼入思考，避免丢失
+        flushReasoning()
         // 流结束时仍未闭合的思考段：
         // - 已有正文 → 附着到 pendingThinking（思考正常展示）；
         // - 无任何正文 → 视为模型未输出【回答】标记，思考内容转正文，避免整段丢失。

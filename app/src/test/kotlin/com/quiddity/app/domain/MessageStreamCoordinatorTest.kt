@@ -788,10 +788,39 @@ class MessageStreamCoordinatorTest {
         assertEquals("好的，代码是：println 1。", snap.first().content)
         assertTrue(snap.first().isThinking.not())
         assertEquals(
-            "用户想了解代码\n用户想要一段代码，\n先分析需求。",
+            "用户想了解代码\n用户想要一段代码，先分析需求。",
             snap.first().thinking,
             "本地思考与 reasoning 思考合并附着在首条回复上"
         )
+    }
+
+    @Test
+    fun `reasoning streamed word by word attaches as one sentence`() {
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.acceptReasoning("The ")
+        coord.acceptReasoning("user ")
+        coord.acceptReasoning("just ")
+        coord.acceptReasoning("said hi. ")
+        coord.accept("最终回复。")
+        coord.finalize()
+        val snap = coord.snapshot()
+        assertEquals(1, snap.size)
+        assertEquals("最终回复。", snap.first().content)
+        assertEquals(
+            "The user just said hi.",
+            snap.first().thinking,
+            "reasoning 逐词流式返回必须合并为完整句子，不得一词一行"
+        )
+    }
+
+    @Test
+    fun `reasoning without content still attaches on finalize`() {
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.acceptReasoning("只思考 ")
+        coord.acceptReasoning("没有回复。")
+        coord.finalize()
+        val snap = coord.snapshot()
+        assertEquals(0, snap.size, "仅有思考无正文时不产生消息")
     }
 
     @Test
