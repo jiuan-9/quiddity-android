@@ -447,11 +447,19 @@ fun MessageBubble(
                                 }
                             }
                     ) {
-                        CodeBlockView(
-                            language = codeBlock.language,
-                            code = codeBlock.code,
-                            initiallyExpanded = wasStreamed
-                        )
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            BubbleThinkingHeader(
+                                thinking = message.thinking,
+                                isStreaming = isStreaming,
+                                contentEmpty = content.isBlank(),
+                                isThinking = isThinking
+                            )
+                            CodeBlockView(
+                                language = codeBlock.language,
+                                code = codeBlock.code,
+                                initiallyExpanded = wasStreamed
+                            )
+                        }
                     }
                 }
                 RenderMode.MIXED -> {
@@ -509,21 +517,12 @@ fun MessageBubble(
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             // ===== 应用内本地思考：气泡内可展开/收起（思考中为高亮滑块） =====
-                            if (message.thinking.isNotBlank()) {
-                                com.quiddity.app.ui.components.ThinkingBlock(
-                                    thinking = message.thinking,
-                                    isStreaming = message.isStreaming,
-                                    contentEmpty = message.content.isBlank()
-                                )
-                            }
-                            if (isThinking) {
-                                Text(
-                                    text = if (isStreaming) "思考中" else "思考",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                                )
-                            }
+                            BubbleThinkingHeader(
+                                thinking = message.thinking,
+                                isStreaming = isStreaming,
+                                contentEmpty = content.isBlank(),
+                                isThinking = isThinking
+                            )
                             if (isStreaming && content.isEmpty()) {
                                 TypingIndicator()
                             } else {
@@ -615,23 +614,33 @@ fun MessageBubble(
                             .border(1.dp, bubbleBorderColor, BubbleShape(isUser))
                             .background(bubbleColor)
                     ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.Bottom
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 10.dp)
                         ) {
-                            if (isStreaming && content.isEmpty()) {
-                                TypingIndicator()
-                            } else {
-                                SelectableMessageText(
-                                    text = displayWithMarkdown,
-                                    textColor = textColor,
-                                    onBubbleClick = if (multiSelectMode) onSelectToggle else (if (isUser) onBubbleClick else null),
-                                    onLongClick = if (multiSelectMode || !isUser) null else onLongClick,
-                                    modifier = Modifier.widthIn(max = BubbleInnerMaxWidth)
-                                )
-                                if (isStreaming) {
-                                    Spacer(modifier = Modifier.size(2.dp))
-                                    StreamingCursor()
+                            // ===== 应用内本地思考：气泡内可展开/收起（思考中为高亮滑块） =====
+                            BubbleThinkingHeader(
+                                thinking = message.thinking,
+                                isStreaming = isStreaming,
+                                contentEmpty = content.isBlank(),
+                                isThinking = isThinking
+                            )
+                            Row(verticalAlignment = Alignment.Bottom) {
+                                if (isStreaming && content.isEmpty()) {
+                                    TypingIndicator()
+                                } else {
+                                    SelectableMessageText(
+                                        text = displayWithMarkdown,
+                                        textColor = textColor,
+                                        onBubbleClick = if (multiSelectMode) onSelectToggle else (if (isUser) onBubbleClick else null),
+                                        onLongClick = if (multiSelectMode || !isUser) null else onLongClick,
+                                        modifier = Modifier.widthIn(max = BubbleInnerMaxWidth)
+                                    )
+                                    if (isStreaming) {
+                                        Spacer(modifier = Modifier.size(2.dp))
+                                        StreamingCursor()
+                                    }
                                 }
                             }
                         }
@@ -798,6 +807,34 @@ private data class ParsedMessageContent(
     val blocks: List<MarkdownParser.Block>,
     val markdown: MarkdownParser.ParsedMarkdown
 )
+
+/**
+ * 气泡内思考头部：应用内本地思考块（可展开/收起）+ 独立思考消息标签。
+ * 供全部渲染模式（纯文本 / 纯代码 / 混合）共用，保证任何消息都能展示思考。
+ */
+@Composable
+private fun BubbleThinkingHeader(
+    thinking: String,
+    isStreaming: Boolean,
+    contentEmpty: Boolean,
+    isThinking: Boolean
+) {
+    if (thinking.isNotBlank()) {
+        com.quiddity.app.ui.components.ThinkingBlock(
+            thinking = thinking,
+            isStreaming = isStreaming,
+            contentEmpty = contentEmpty
+        )
+    }
+    if (isThinking) {
+        Text(
+            text = if (isStreaming) "思考中" else "思考",
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+        )
+    }
+}
 
 /**
  * 消息渲染模式。

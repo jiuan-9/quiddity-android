@@ -478,8 +478,37 @@ class ChatRepository(
                 return false
             }
         }
+        attachThinkingUnavailableReportIfNeeded(request, coordinator, thinkingActive, onEvent)
         onEvent(Event.Done)
         return true
+    }
+
+    /**
+     * DeepSeek 本身有概率不配合【思考】标记（业界广泛已知，非本客户端问题）：
+     * 用户开启思考但整轮未产出任何思考内容时，在首条正式回复上附报告，
+     * 保证开启思考后气泡内始终有可展开的内容，而不是静默空白。
+     */
+    private suspend fun attachThinkingUnavailableReportIfNeeded(
+        request: ChatRoundRequest,
+        coordinator: StreamCoordinator,
+        thinkingActive: Boolean,
+        onEvent: suspend (Event) -> Unit
+    ) {
+        val snapshot = coordinator.snapshot()
+        if (!thinkingActive || !isDeepSeekModel(request)) return
+        if (snapshot.any { it.thinking.isNotBlank() }) return
+        val target = snapshot.firstOrNull {
+            it.role == Role.ASSISTANT && !it.isNotice && !it.isThinking && it.content.isNotBlank()
+        } ?: return
+        onEvent(Event.UpdateMessage(target.copy(thinking = DEEPSEEK_THINKING_UNAVAILABLE_REPORT)))
+    }
+
+    private fun isDeepSeekModel(request: ChatRoundRequest): Boolean {
+        val model = when (request) {
+            is ChatRoundRequest.Completions -> request.request.model
+            is ChatRoundRequest.Responses -> request.request.model
+        }
+        return model.contains("deepseek", ignoreCase = true)
     }
 
     /**
@@ -755,6 +784,9 @@ class ChatRepository(
 
         /** 工具结果回填模型的最大字符数（超出截断，防止第二轮请求过大返回 400）。 */
         private const val MAX_TOOL_RESULT_CHARS = 6000
+
+        /** DeepSeek 未返回思考内容时附在首条回复上的报告文案。 */
+        private const val DEEPSEEK_THINKING_UNAVAILABLE_REPORT = "deepseek本身模型有概率不配合，思考内容不返回"
 
         /**
          * 仅 AGENT 会话且注册表可用时分发；否则返回 null（走原 read_memory/search_chat 逻辑）。
