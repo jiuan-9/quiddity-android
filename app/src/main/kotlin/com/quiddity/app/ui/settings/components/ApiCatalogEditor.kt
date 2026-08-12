@@ -110,7 +110,7 @@ fun ApiCatalogEditor(
 
     var visible by rememberSaveable { mutableStateOf(false) }
     // 安全规则：不把解密后的 API Key 明文写入 rememberSaveable（可能落盘），
-    // 恢复编辑状态时 apiKey 置空；保存时未重输密钥则保留原密文（见 SettingsViewModel.upsertCatalog）。
+    // 恢复编辑状态时 apiKey 置空；编辑时由点击回调解密回显，保存时未重输密钥则保留原密文。
     val editingStateSaver = remember {
         Saver<ApiCatalogEditFormState?, List<String>>(
             save = { state ->
@@ -261,16 +261,15 @@ fun ApiCatalogEditor(
                                 isActive = entry.id == settings.activeCatalogId,
                                 catalogManager = apiCatalogManager,
                                 onClick = {
-                                    // 设计：编辑不预填解密后的密钥（密钥是秘密，解密展示无必要）。
-                                    // 已存密钥时表单提示"已保存，留空保持不变"；
-                                    // 输入新密钥则替换。避免"解密失败被误认为没保存"。
+                                    // 编辑回显已保存密钥：解密后预填，用户可直接核对；
+                                    // 解密失败时置空并保留原密文（保存走 upsertCatalog 空值分支）。
                                     editingState = ApiCatalogEditFormState(
                                         id = entry.id,
                                         name = entry.name,
                                         providerId = entry.providerId,
                                         apiUrl = entry.apiUrl,
                                         apiModel = entry.apiModel,
-                                        apiKey = "",
+                                        apiKey = apiCatalogManager.decryptKey(entry) ?: "",
                                         maxTemperature = entry.maxTemperature
                                     )
                                 },

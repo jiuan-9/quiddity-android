@@ -127,8 +127,8 @@ fun ApiEditForm(
     var apiKey by remember { mutableStateOf(initial?.apiKey ?: "") }
     var providerPickerVisible by remember { mutableStateOf(false) }
     var modelPickerVisible by remember { mutableStateOf(false) }
-    // 新增时 Key 可见（鼓励用户核对），编辑时默认隐藏
-    var keyVisible by rememberSaveable { mutableStateOf(initial == null) }
+    // Key 默认可见：编辑时回显已保存密钥，用户可直接核对是否已填
+    var keyVisible by rememberSaveable { mutableStateOf(true) }
     var testing by remember { mutableStateOf(false) }
     var testResult by remember { mutableStateOf<String?>(null) }
     var testIsSuccess by remember { mutableStateOf(false) }

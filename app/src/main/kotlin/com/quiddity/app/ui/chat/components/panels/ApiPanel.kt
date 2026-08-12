@@ -1,5 +1,6 @@
 package com.quiddity.app.ui.chat.components.panels
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -16,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -76,7 +78,9 @@ fun ApiSelectorPanel(
     catalog: List<ApiCatalogEntry>,
     currentSelection: String?,
     onBack: () -> Unit,
-    onSelect: (String?) -> Unit
+    onSelect: (String?) -> Unit,
+    activeCatalogId: String? = null,
+    onSetDefault: (String?) -> Unit = {}
 ) {
     SubPanelScaffold(title = "选择模型", onBack = onBack) {
         if (catalog.isEmpty()) {
@@ -87,20 +91,31 @@ fun ApiSelectorPanel(
             )
         } else {
             catalog.forEach { entry ->
-                Surface(
+                val isDefault = entry.id == activeCatalogId
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(vertical = 3.dp)
                         .clip(RoundedCornerShape(12.dp))
+                        .background(
+                            if (entry.id == currentSelection) {
+                                MaterialTheme.colorScheme.primaryContainer
+                            } else {
+                                com.quiddity.app.ui.components.glassCardColor()
+                            }
+                        )
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null
-                        ) { onSelect(entry.id) },
-                    color = if (entry.id == currentSelection)
-                        MaterialTheme.colorScheme.primaryContainer
-                    else com.quiddity.app.ui.components.glassCardColor()
+                        ) { onSelect(entry.id) }
+                        .padding(start = 16.dp, end = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(vertical = 16.dp)
+                    ) {
                         Text(
                             entry.name,
                             style = MaterialTheme.typography.bodyLarge,
@@ -111,6 +126,28 @@ fun ApiSelectorPanel(
                             text = entry.apiModel,
                             style = MaterialTheme.typography.bodySmall,
                             maxCollapsedLines = 1
+                        )
+                    }
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null
+                            ) {
+                                onSetDefault(if (isDefault) null else entry.id)
+                            }
+                            .padding(horizontal = 6.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = isDefault,
+                            onCheckedChange = null
+                        )
+                        Text(
+                            text = "默认",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -133,25 +170,27 @@ fun ApiEditorPanel(
     onDeleteCatalog: (String) -> Unit
 ) {
     // 编辑/新建状态在配置变更后不丢失，保持底部面板保持打开。
+    // 安全规则：不把解密后的 API Key 明文写入 rememberSaveable（可能落盘），
+    // 恢复编辑状态时 apiKey 置空；编辑时由点击回调解密回显。
     val editingStateSaver = remember {
         Saver<ApiCatalogEditFormState?, List<String>>(
             save = { state ->
                 if (state == null) emptyList()
                 else listOf(
-                    state.id, state.name, state.providerId, state.apiUrl, state.apiModel, state.apiKey,
+                    state.id, state.name, state.providerId, state.apiUrl, state.apiModel,
                     state.maxTemperature?.toString().orEmpty()
                 )
             },
             restore = { saved ->
-                if (saved.size < 6) null
+                if (saved.size < 5) null
                 else ApiCatalogEditFormState(
                     id = saved[0],
                     name = saved[1],
                     providerId = saved[2],
                     apiUrl = saved[3],
                     apiModel = saved[4],
-                    apiKey = saved[5],
-                    maxTemperature = saved.getOrNull(6)?.toDoubleOrNull()
+                    apiKey = "",
+                    maxTemperature = saved.getOrNull(5)?.toDoubleOrNull()
                 )
             }
         )
@@ -214,14 +253,14 @@ fun ApiEditorPanel(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null
                         ) {
-                            // 设计：编辑不预填解密后的密钥；已存密钥时表单提示"留空保持不变"
+                            // 编辑回显已保存密钥：解密后预填，用户可直接核对
                             editingState = ApiCatalogEditFormState(
                                 id = entry.id,
                                 name = entry.name,
                                 providerId = entry.providerId,
                                 apiUrl = entry.apiUrl,
                                 apiModel = entry.apiModel,
-                                apiKey = "",
+                                apiKey = catalogManager.decryptKey(entry) ?: "",
                                 maxTemperature = entry.maxTemperature
                             )
                         },

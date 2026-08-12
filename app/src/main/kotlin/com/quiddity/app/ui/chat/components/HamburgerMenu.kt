@@ -689,7 +689,9 @@ fun HamburgerMenu(
                                 onSelect = { id ->
                                     if (id != null) viewModel.setConversationApi(id)
                                     currentPanel = null
-                                }
+                                },
+                                activeCatalogId = settings.activeCatalogId,
+                                onSetDefault = { id -> settingsViewModel.setActiveCatalog(id) }
                             )
                         }
                         HamburgerPanel.ApiEditor -> {

@@ -253,15 +253,16 @@ fun VisionCatalogEditor(
                                 isActive = entry.id == settings.activeVisionCatalogId,
                                 catalogManager = apiCatalogManager,
                                 onClick = {
+                                    // 编辑回显已保存密钥：解密后预填，用户可直接核对
                                     editingState = ApiCatalogEditFormState(
                                         id = entry.id,
                                         name = entry.name,
-                                  providerId = entry.providerId,
-                                  apiUrl = entry.apiUrl,
-                                  apiModel = entry.apiModel,
-                                  apiKey = "",
-                                  maxTemperature = entry.maxTemperature
-                              )
+                                        providerId = entry.providerId,
+                                        apiUrl = entry.apiUrl,
+                                        apiModel = entry.apiModel,
+                                        apiKey = apiCatalogManager.decryptKey(entry) ?: "",
+                                        maxTemperature = entry.maxTemperature
+                                    )
                                 },
                                 onSetActive = { viewModel.setActiveVisionCatalog(entry.id) },
                                 onDelete = { pendingDelete = entry }
