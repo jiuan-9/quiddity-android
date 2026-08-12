@@ -695,29 +695,37 @@ class ChatRepository(
         onEvent: suspend (Event) -> Unit
     ): String {
         val raw: String
-        if (conv.type == ConversationType.AGENT) {
-            val dispatched = dispatchAgentToolIfNeeded(
-                type = conv.type,
-                name = call.name,
-                args = call.arguments,
-                registry = agentToolRegistry,
-                ctx = agentContext(conv, onEvent)
-            )
-            if (dispatched != null) raw = dispatched
-            else raw = "工具 ${call.name} 不存在"
-        } else {
-            raw = when (call.name) {
-                "read_memory" -> {
-                    MemorySearch.search(memory, parseToolQuery(call.arguments)).content
+        raw = try {
+            if (conv.type == ConversationType.AGENT) {
+                val dispatched = dispatchAgentToolIfNeeded(
+                    type = conv.type,
+                    name = call.name,
+                    args = call.arguments,
+                    registry = agentToolRegistry,
+                    ctx = agentContext(conv, onEvent)
+                )
+                if (dispatched != null) dispatched
+                else "工具 ${call.name} 不存在"
+            } else {
+                when (call.name) {
+                    "read_memory" -> {
+                        MemorySearch.search(memory, parseToolQuery(call.arguments)).content
+                    }
+                    "search_chat" -> {
+                        val query = parseToolQuery(call.arguments)
+                        val messages = conversationRepo.observeMessages(conv.id).value
+                            .filterNot { it.isNotice }
+                        ChatRecordSearch.search(messages, query).content
+                    }
+                    else -> "工具 ${call.name} 不存在"
                 }
-                "search_chat" -> {
-                    val query = parseToolQuery(call.arguments)
-                    val messages = conversationRepo.observeMessages(conv.id).value
-                        .filterNot { it.isNotice }
-                    ChatRecordSearch.search(messages, query).content
-                }
-                else -> "工具 ${call.name} 不存在"
             }
+        } catch (c: kotlinx.coroutines.CancellationException) {
+            throw c
+        } catch (t: Throwable) {
+            // 工具执行失败（权限异常 / 服务不可用 / 参数错误等）不中断整轮回复：
+            // 把报错信息作为工具结果回填，让模型知道该工具用不了并继续输出
+            "工具 ${call.name} 执行失败：${t.message?.take(200) ?: t.javaClass.simpleName}"
         }
         // 异常结果明确标注：让模型知道工具报错及类型，如实报告而不是假装成功
         val marked = if (com.quiddity.app.domain.LocalThinker.isToolError(raw)) {

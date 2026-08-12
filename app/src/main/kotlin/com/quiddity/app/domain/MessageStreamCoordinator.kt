@@ -393,6 +393,7 @@ class MessageStreamCoordinator(
             signals += StreamCoordinator.Signal.Complete(finalMsg)
         }
         completed += finalMsg
+        currentIndex++
         buffer.clear()
         return signals
     }

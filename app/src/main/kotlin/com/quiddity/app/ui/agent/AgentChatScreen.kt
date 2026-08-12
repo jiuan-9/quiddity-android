@@ -433,10 +433,14 @@ fun AgentChatScreen(
                                             .padding(vertical = 6.dp),
                                         horizontalArrangement = Arrangement.Start
                                     ) {
-                                        com.quiddity.app.ui.components.ShimmerHighlightText(
-                                            text = "思考中…",
-                                            icon = Icons.Filled.AutoAwesome
-                                        )
+                                        if (conversation?.thinkingEnabled == true) {
+                                            com.quiddity.app.ui.components.ShimmerHighlightText(
+                                                text = "思考中…",
+                                                icon = Icons.Filled.AutoAwesome
+                                            )
+                                        } else {
+                                            TypingIndicator()
+                                        }
                                     }
                                 }
                             }
