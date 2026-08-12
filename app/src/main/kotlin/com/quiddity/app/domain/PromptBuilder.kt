@@ -455,6 +455,19 @@ object PromptBuilder {
             sb.append("- 本次是「重说」请求：重新构思这句话该怎么回，换一种表达方式、结构和角度重写，不要沿用上一版的原句或句式。\n")
             sb.append("上一版回复（仅作对照，禁止复述）：").append(regeneratePreviousReply.take(600)).append("\n\n")
         }
+        if (thinkingDepth != null) {
+            sb.append("- 输出格式（最高优先级，必须严格遵守）：先输出【思考】标记，标记后紧跟你的内心独白；")
+                .append("再输出【回答】标记，标记后紧跟正式回复。示例：【思考】九俊问的是手机信息，我得先查一下再说。【回答】已查到。")
+                .append("【思考】和【回答】标记必须原样输出，缺一不可。")
+                .append("思考必须以第一人称「我」的口吻书写，像角色本人内心的自然独白，")
+                .append("提到对方时用名字或「你」，不得用「用户」「TA」「她」等第三人称指代；思考简短自然，不写套话。")
+            if (thinkingDepth == com.quiddity.app.util.QuiddityConstants.THINKING_DEPTH_DEEP) {
+                sb.append("思考要详细充分。")
+            } else {
+                sb.append("思考简明扼要即可。")
+            }
+            sb.append("\n\n")
+        }
 
         // ===== 7. 时间库说明（主动消息开启且有查看密码时） =====
         // 让 AI 确切知道时间库查看密码与告知状态，避免在对话中编造错误密码

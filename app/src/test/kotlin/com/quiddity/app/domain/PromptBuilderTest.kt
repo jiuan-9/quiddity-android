@@ -424,6 +424,29 @@ class PromptBuilderTest {
     }
 
     @Test
+    fun `system prompt includes thinking markers when thinking enabled`() {
+        val conv = conv().copy(
+            thinkingEnabled = true,
+            thinkingDepth = com.quiddity.app.util.QuiddityConstants.THINKING_DEPTH_SHALLOW
+        )
+        val system = PromptBuilder.buildSystemPrompt(
+            conv = conv,
+            thinkingDepth = conv.thinkingDepth
+        )
+        assertTrue(system.contains("【思考】"), "开启思考时应引导模型输出【思考】标记")
+        assertTrue(system.contains("【回答】"), "开启思考时应引导模型输出【回答】标记")
+        assertTrue(system.contains("第一人称"), "思考应要求第一人称")
+    }
+
+    @Test
+    fun `system prompt omits thinking markers when thinking disabled`() {
+        val system = PromptBuilder.buildSystemPrompt(
+            conv().copy(thinkingEnabled = false)
+        )
+        assertFalse(system.contains("【思考】"), "关闭思考时不应引导【思考】标记")
+    }
+
+    @Test
     fun `group rules are generic and minimal`() {
         assertTrue(PromptBuilder.GROUP_RULES.contains("不替其他成员或用户发言"))
         assertFalse(PromptBuilder.GROUP_RULES.contains("必须包含"), "不再强制台词硬规则（由切分器根因修复兜底）")
