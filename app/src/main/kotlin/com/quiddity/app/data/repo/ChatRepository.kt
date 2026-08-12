@@ -239,12 +239,17 @@ class ChatRepository(
             ?: QuiddityConstants.MEMORY_STRATEGY_CARRY
         val isAgent = conv.type == ConversationType.AGENT
         val systemPrompt = if (isAgent) {
-            PromptBuilder.buildAgentSystemPrompt(conv, effectiveStrategy)
+            PromptBuilder.buildAgentSystemPrompt(
+                conv,
+                effectiveStrategy,
+                thinkingDepth = if (conv.thinkingEnabled) conv.thinkingDepth else null
+            )
         } else {
             PromptBuilder.buildSystemPrompt(
                 conv = conv,
                 memoryStrategy = effectiveStrategy,
-                regeneratePreviousReply = regeneratePreviousReply
+                regeneratePreviousReply = regeneratePreviousReply,
+                thinkingDepth = if (conv.thinkingEnabled) conv.thinkingDepth else null
             )
         }
         val contextLimit = if (conv.contextLimit > 0) conv.contextLimit else settings.globalContextLimit
@@ -303,7 +308,7 @@ class ChatRepository(
             ),
             conv = conv,
             onEvent = onEvent,
-            thinkingActive = false
+            thinkingActive = conv.thinkingEnabled
         )
     }
 
@@ -332,12 +337,17 @@ class ChatRepository(
             ?: QuiddityConstants.MEMORY_STRATEGY_CARRY
         val isAgent = conv.type == ConversationType.AGENT
         val systemPrompt = if (isAgent) {
-            PromptBuilder.buildAgentSystemPrompt(conv, effectiveStrategy)
+            PromptBuilder.buildAgentSystemPrompt(
+                conv,
+                effectiveStrategy,
+                thinkingDepth = if (conv.thinkingEnabled) conv.thinkingDepth else null
+            )
         } else {
             PromptBuilder.buildSystemPrompt(
                 conv = conv,
                 memoryStrategy = effectiveStrategy,
-                regeneratePreviousReply = regeneratePreviousReply
+                regeneratePreviousReply = regeneratePreviousReply,
+                thinkingDepth = if (conv.thinkingEnabled) conv.thinkingDepth else null
             )
         }
         // 引导：让 AI 主动发起对话
@@ -393,7 +403,7 @@ class ChatRepository(
             ),
             conv = conv,
             onEvent = onEvent,
-            thinkingActive = false
+            thinkingActive = conv.thinkingEnabled
         )
     }
 
@@ -449,15 +459,6 @@ class ChatRepository(
             val memory = PromptBuilder.buildMemoryDrawerContent(conv)
             val resolved = firstRoundCalls.map { call ->
                 call to resolveToolContent(call, conv, memory, onEvent)
-            }
-            // 工具系列使用后的第一人称思考（开启思考时）：评估数据是否正常 + 下一步规划
-            if (conv.thinkingEnabled) {
-                coordinator.appendThinking(
-                    com.quiddity.app.domain.LocalThinker.thinkAfterTools(
-                        results = resolved.map { (call, content) -> call.name to content },
-                        aiName = conv.persona.name.ifBlank { "Agent" }
-                    )
-                )
             }
             val secondRequest = try {
                 buildSecondRoundRequest(request, conv, resolved, onEvent)
@@ -971,7 +972,7 @@ class ChatRepository(
             senderNames = senderNames,
             userName = member.userPersona.name.takeIf { it.isNotBlank() },
             webSearchResponsesUrl = resolveWebSearch(settings, member),
-            thinkingDepth = null,
+            thinkingDepth = if (member.thinkingEnabled) member.thinkingDepth else null,
             regeneratePreviousReply = regeneratePreviousReply
         )
         // 模型有时会误输出「名字：」前缀（如回复开头带其他成员名），
@@ -1015,7 +1016,7 @@ class ChatRepository(
                     ?: ChatRoundRequest.Completions(p.request, p.apiUrl)
                 runWithToolRound(
                     api, p.apiKey, roundRequest, coordinator, group, cleanEvent,
-                    thinkingActive = false
+                    thinkingActive = member.thinkingEnabled
                 ) { prefixStripper.accept(it) }
             },
             onFailure = { emitError(onEvent, it, "") }

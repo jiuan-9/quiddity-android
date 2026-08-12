@@ -629,21 +629,13 @@ class ChatViewModel(
                 replyRunStart = System.currentTimeMillis()
                 replyRunChars = 0
                 val history = _messages.value
-                // 本地思考仅在开启思考开关时生成；关闭时完全不做思考展示
-                val localThinking = if (conv.thinkingEnabled) {
-                    com.quiddity.app.domain.LocalThinker.think(
-                        userMessage = history.lastOrNull { it.role == Role.USER }?.content.orEmpty(),
-                        isAgent = conv.type == ConversationType.AGENT,
-                        aiName = conv.persona.name.ifBlank { if (conv.type == ConversationType.AGENT) "Agent" else "AI" }
-                    )
-                } else {
-                    ""
-                }
+                // 思考由提示词引导模型输出【思考】/【回答】标记，客户端拆分展示；
+                // 本地不再拼接模板思考，关闭思考开关时提示词也不带引导，自然无思考内容。
                 chatRepository.streamAssistantReply(
                     conv,
                     history,
                     effectiveMemoryStrategy(conv),
-                    thinking = localThinking
+                    thinking = ""
                 ) { event ->
                     if (event is ChatRepository.Event.Error) {
                         streamError = event.throwable

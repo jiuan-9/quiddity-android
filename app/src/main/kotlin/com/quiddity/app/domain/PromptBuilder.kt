@@ -303,11 +303,13 @@ object PromptBuilder {
      */
     fun buildAgentSystemPrompt(
         conv: Conversation,
-        memoryStrategy: String? = null
+        memoryStrategy: String? = null,
+        thinkingDepth: String? = null
     ): String {
         val base = buildSystemPrompt(
             conv = conv,
-            memoryStrategy = memoryStrategy
+            memoryStrategy = memoryStrategy,
+            thinkingDepth = thinkingDepth
         )
         val aiName = conv.persona.name.ifBlank { "Agent" }
         return buildString {
@@ -773,7 +775,9 @@ $persona
             sb.append("上一版回复（仅作对照，禁止复述）：").append(regeneratePreviousReply.take(600)).append("\n")
         }
         if (thinkingDepth != null) {
-            sb.append("- 回答前先思考：思考内容用【思考】标记包裹，正式回答用【回答】标记包裹，先【思考】后【回答】。")
+            sb.append("- 输出格式（最高优先级，必须严格遵守）：先输出【思考】标记，标记后紧跟你的内心独白；")
+                .append("再输出【回答】标记，标记后紧跟正式回复。示例：【思考】她问的是手机信息，我先查一下。【回答】已查到。")
+                .append("【思考】和【回答】标记必须原样输出，缺一不可。")
             if (thinkingDepth == com.quiddity.app.util.QuiddityConstants.THINKING_DEPTH_DEEP) {
                 sb.append("思考要详细充分。")
             } else {

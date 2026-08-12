@@ -773,7 +773,7 @@ class MessageStreamCoordinatorTest {
     }
 
     @Test
-    fun `server reasoning ignored and local thinking attaches to first reply`() {
+    fun `server reasoning attaches to first reply alongside local thinking`() {
         val coord = MessageStreamCoordinator(
             "conv1", "run1", singleMessageTokens = 1000,
             thinking = "用户想了解代码"
@@ -784,10 +784,14 @@ class MessageStreamCoordinatorTest {
         coord.accept("println 1。")
         coord.finalize()
         val snap = coord.snapshot()
-        assertEquals(1, snap.size, "服务端 reasoning 不再生成独立思考消息")
+        assertEquals(1, snap.size, "reasoning 与正文合并为同一条消息")
         assertEquals("好的，代码是：println 1。", snap.first().content)
         assertTrue(snap.first().isThinking.not())
-        assertEquals("用户想了解代码", snap.first().thinking, "本地思考附着在首条回复上")
+        assertEquals(
+            "用户想了解代码\n用户想要一段代码，\n先分析需求。",
+            snap.first().thinking,
+            "本地思考与 reasoning 思考合并附着在首条回复上"
+        )
     }
 
     @Test
@@ -834,5 +838,57 @@ class MessageStreamCoordinatorTest {
         assertEquals(1, snap.size)
         assertEquals("正常回复。", snap.first().content)
         assertTrue(snap.first().isThinking.not())
+    }
+
+    // ============================================================
+    // 提示词引导思考：【思考】/【回答】标记拆分
+    // ============================================================
+
+    @Test
+    fun `think marker attaches thinking and keeps answer as content`() {
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("【思考】嗯，这个问题得先查一下手机。")
+        coord.accept("【回答】好的，已查到。")
+        coord.finalize()
+        val snap = coord.snapshot()
+        assertEquals(1, snap.size, "思考与回答应合并在同一条消息")
+        assertEquals("好的，已查到。", snap.first().content)
+        assertEquals("嗯，这个问题得先查一下手机。", snap.first().thinking)
+    }
+
+    @Test
+    fun `think marker split across deltas is still parsed`() {
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("【思")
+        coord.accept("考】先想想。")
+        coord.accept("【回")
+        coord.accept("答】最终回答。")
+        coord.finalize()
+        val snap = coord.snapshot()
+        assertEquals(1, snap.size)
+        assertEquals("最终回答。", snap.first().content)
+        assertEquals("先想想。", snap.first().thinking)
+    }
+
+    @Test
+    fun `think marker without close marker falls back to content on finalize`() {
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("【思考】只有思考没有回答标记。")
+        coord.finalize()
+        val snap = coord.snapshot()
+        assertEquals(1, snap.size, "未闭合思考且无正文时应转为正文，避免内容丢失")
+        assertEquals("只有思考没有回答标记。", snap.first().content)
+        assertTrue(snap.first().thinking.isBlank())
+    }
+
+    @Test
+    fun `plain content without markers keeps original behavior`() {
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("没有思考标记的普通回复。")
+        coord.finalize()
+        val snap = coord.snapshot()
+        assertEquals(1, snap.size)
+        assertEquals("没有思考标记的普通回复。", snap.first().content)
+        assertTrue(snap.first().thinking.isBlank())
     }
 }

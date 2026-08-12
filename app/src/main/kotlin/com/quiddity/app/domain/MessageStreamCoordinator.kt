@@ -148,9 +148,19 @@ class MessageStreamCoordinator(
     private var currentStartTs = startTimestamp
     /** 流末尾可能独立补发的 "0" 结束标记：先暂存，后续仍有内容则补回正文，流结束则丢弃。 */
     private var pendingZeroArtifact: String? = null
+    /** 是否处于【思考】段内（提示词引导的模型思考，客户端按标记拆分展示）。 */
+    private var inThinkingMarker = false
+    /** 当前思考段已累积的文本（未闭合前不进入正文 buffer）。 */
+    private val thinkingChunk = StringBuilder()
+    /** 跨 delta 保留的尾部（可能是【思考】/【回答】标记的开头，等待下一个分片补全）。 */
+    private var markerTail = ""
 
     override fun acceptReasoning(delta: String): List<StreamCoordinator.Signal> {
-        // 思考全程在应用内（本地生成）：忽略厂商服务器返回的 reasoning_content
+        // 思考优先由提示词引导（【思考】/【回答】标记）产生；
+        // 模型返回 reasoning_content 时同样附着为思考内容，双通道兜底，
+        // 保证开启思考的模型（如 DeepSeek 思考模型）也能展示真实思考。
+        if (delta.isBlank()) return emptyList()
+        appendThinking(delta.trim())
         return emptyList()
     }
 
@@ -163,6 +173,60 @@ class MessageStreamCoordinator(
 
     override fun accept(delta: String): List<StreamCoordinator.Signal> {
         if (delta.isEmpty()) return emptyList()
+        val signals = mutableListOf<StreamCoordinator.Signal>()
+        val combined = markerTail + delta
+        markerTail = ""
+        var cursor = 0
+        while (cursor < combined.length) {
+            if (!inThinkingMarker) {
+                val idx = combined.indexOf(THINK_OPEN, cursor)
+                if (idx < 0) {
+                    val keep = markerPrefixTailLen(combined, cursor, THINK_OPEN)
+                    val end = combined.length - keep
+                    if (end > cursor) {
+                        signals += acceptContent(combined.substring(cursor, end))
+                    }
+                    markerTail = combined.substring(end)
+                    cursor = combined.length
+                } else {
+                    if (idx > cursor) {
+                        signals += acceptContent(combined.substring(cursor, idx))
+                    }
+                    cursor = idx + THINK_OPEN.length
+                    inThinkingMarker = true
+                    thinkingChunk.clear()
+                }
+            } else {
+                val idx = combined.indexOf(THINK_CLOSE, cursor)
+                if (idx < 0) {
+                    val keep = markerPrefixTailLen(combined, cursor, THINK_CLOSE)
+                    val end = combined.length - keep
+                    if (end > cursor) {
+                        thinkingChunk.append(combined.substring(cursor, end))
+                    }
+                    markerTail = combined.substring(end)
+                    cursor = combined.length
+                } else {
+                    if (idx > cursor) {
+                        thinkingChunk.append(combined.substring(cursor, idx))
+                    }
+                    cursor = idx + THINK_CLOSE.length
+                    inThinkingMarker = false
+                    if (thinkingChunk.isNotBlank()) {
+                        appendThinking(thinkingChunk.toString().trim())
+                        thinkingChunk.clear()
+                    }
+                }
+            }
+        }
+        return signals
+    }
+
+    /**
+     * 正文段进入原有切分逻辑（句末标点 + 括号切分，含 "0" 结束标记暂存）。
+     * 与旧 [accept] 主体行为完全一致。
+     */
+    private fun acceptContent(delta: String): List<StreamCoordinator.Signal> {
         // 上一块若是暂存的独立 "0"，说明它并非结束标记（后续还有内容），先补回正文
         pendingZeroArtifact?.let { pending ->
             pendingZeroArtifact = null
@@ -220,8 +284,52 @@ class MessageStreamCoordinator(
         return signals
     }
 
+    /**
+     * 计算 [text] 从 [start] 到末尾中，与 [marker] 开头匹配的最大保留长度
+     * （0 ～ marker.length-1）。用于跨 delta 分片识别【思考】/【回答】标记：
+     * 尾部恰好是标记前缀时留到下一个分片，避免把半个标记当正文输出。
+     */
+    private fun markerPrefixTailLen(text: String, start: Int, marker: String): Int {
+        val remain = text.length - start
+        if (remain <= 0) return 0
+        val maxKeep = minOf(remain, marker.length - 1)
+        for (keep in maxKeep downTo 1) {
+            val tail = text.substring(text.length - keep)
+            if (marker.startsWith(tail)) return keep
+        }
+        return 0
+    }
+
     override fun finalize(): List<StreamCoordinator.Signal> {
         val signals = mutableListOf<StreamCoordinator.Signal>()
+        // 流结束时仍未闭合的思考段：
+        // - 已有正文 → 附着到 pendingThinking（思考正常展示）；
+        // - 无任何正文 → 视为模型未输出【回答】标记，思考内容转正文，避免整段丢失。
+        if (inThinkingMarker && thinkingChunk.isNotBlank()) {
+            val leftover = thinkingChunk.toString().trim()
+            thinkingChunk.clear()
+            if (buffer.isBlank() && completed.isEmpty()) {
+                buffer.append(leftover)
+            } else {
+                appendThinking(leftover)
+            }
+        }
+        // 跨分片保留的标记尾部在流结束时已无后续：按当前模式收尾
+        if (markerTail.isNotEmpty()) {
+            if (inThinkingMarker) {
+                thinkingChunk.append(markerTail)
+                val leftover = thinkingChunk.toString().trim()
+                thinkingChunk.clear()
+                if (buffer.isBlank() && completed.isEmpty()) {
+                    buffer.append(leftover)
+                } else {
+                    appendThinking(leftover)
+                }
+            } else {
+                signals += acceptContent(markerTail)
+            }
+            markerTail = ""
+        }
         // 流结束时仍有滞留括号段：合并进最后一条已发消息（或作为整条回复发出），
         // 根因修复——不再留下"只有动作没有下文"的悬空气泡。
         if (pendingBrackets.isNotEmpty()) {
@@ -658,5 +766,9 @@ class MessageStreamCoordinator(
         const val HARD_LIMIT_MULTIPLIER = QuiddityConstants.SPLITTER_HARD_LIMIT_MULTIPLIER
         const val CHARS_PER_TOKEN = QuiddityConstants.SPLITTER_CHARS_PER_TOKEN
         const val MAX_HARD_LIMIT_CHARS = QuiddityConstants.SPLITTER_MAX_HARD_LIMIT_CHARS
+        /** 提示词引导的思考开始标记。 */
+        const val THINK_OPEN = "【思考】"
+        /** 提示词引导的思考结束标记。 */
+        const val THINK_CLOSE = "【回答】"
     }
 }
