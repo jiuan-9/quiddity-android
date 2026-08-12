@@ -629,10 +629,15 @@ class ChatViewModel(
                 replyRunStart = System.currentTimeMillis()
                 replyRunChars = 0
                 val history = _messages.value
-                val localThinking = com.quiddity.app.domain.LocalThinker.think(
-                    userMessage = history.lastOrNull { it.role == Role.USER }?.content.orEmpty(),
-                    isAgent = conv.type == ConversationType.AGENT
-                )
+                // 本地思考仅在开启思考开关时生成；关闭时完全不做思考展示
+                val localThinking = if (conv.thinkingEnabled) {
+                    com.quiddity.app.domain.LocalThinker.think(
+                        userMessage = history.lastOrNull { it.role == Role.USER }?.content.orEmpty(),
+                        isAgent = conv.type == ConversationType.AGENT
+                    )
+                } else {
+                    ""
+                }
                 chatRepository.streamAssistantReply(
                     conv,
                     history,

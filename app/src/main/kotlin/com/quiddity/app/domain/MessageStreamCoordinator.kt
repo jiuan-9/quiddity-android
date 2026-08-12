@@ -51,6 +51,8 @@ interface StreamCoordinator {
      * 思考内容单独成一条 isThinking 消息，普通内容开始或流结束时自动完成。
      */
     fun acceptReasoning(delta: String): List<Signal>
+    /** 追加一段应用内思考（如工具系列使用后的评估），附着到下一条新建消息。 */
+    fun appendThinking(extra: String)
     fun finalize(): List<Signal>
     fun snapshot(): List<Message>
 }
@@ -133,6 +135,10 @@ class MessageStreamCoordinator(
     private val buffer = StringBuilder()
     private val completed: MutableList<Message> = mutableListOf()
     private val knownIds: MutableSet<String> = LinkedHashSet()
+    /** 待附着到下一条新建消息上的思考文本（可被工具系列后的思考追加）。 */
+    private var pendingThinking: String = thinking
+    /** 思考应附着的消息索引（null = 不附着；赋值后该索引消息持续携带）。 */
+    private var thinkingForIndex: Int? = if (thinking.isNotBlank()) 0 else null
     /**
      * 已完整闭合但尚未发出的括号段：`(预占索引, 文本)`。
      * 预占索引保证与后续流式消息的 id 不冲突。
@@ -146,6 +152,13 @@ class MessageStreamCoordinator(
     override fun acceptReasoning(delta: String): List<StreamCoordinator.Signal> {
         // 思考全程在应用内（本地生成）：忽略厂商服务器返回的 reasoning_content
         return emptyList()
+    }
+
+    /** 追加一段思考（如工具系列使用后的第一人称评估），附着到下一条新建消息。 */
+    override fun appendThinking(extra: String) {
+        if (extra.isBlank()) return
+        pendingThinking = if (pendingThinking.isBlank()) extra else "$pendingThinking\n$extra"
+        thinkingForIndex = currentIndex
     }
 
     override fun accept(delta: String): List<StreamCoordinator.Signal> {
@@ -616,8 +629,8 @@ class MessageStreamCoordinator(
         timestamp = currentStartTs,
         tokenCount = TokenEstimator.estimate(buffer.toString()),
         isStreaming = streaming,
-        // 本地思考附着在首条回复消息上，随消息一起持久化
-        thinking = if (currentIndex == 0) thinking else "",
+        // 本地思考附着到指定索引的消息上（首条或工具系列后追加），随消息一起持久化
+        thinking = if (thinkingForIndex == currentIndex) pendingThinking else "",
         senderId = senderId
     )
 
@@ -636,8 +649,8 @@ class MessageStreamCoordinator(
         timestamp = currentStartTs,
         tokenCount = TokenEstimator.estimate(content),
         isStreaming = streaming,
-        // 本地思考附着在首条回复消息上，随消息一起持久化
-        thinking = if (index == 0) thinking else "",
+        // 本地思考附着到指定索引的消息上（首条或工具系列后追加），随消息一起持久化
+        thinking = if (thinkingForIndex == index) pendingThinking else "",
         senderId = senderId
     )
 

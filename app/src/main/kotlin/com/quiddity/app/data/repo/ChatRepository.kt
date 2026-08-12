@@ -446,8 +446,21 @@ class ChatRepository(
             firstRoundCalls.forEach { call ->
                 onEvent(Event.ToolUse(call.name))
             }
+            val memory = PromptBuilder.buildMemoryDrawerContent(conv)
+            val resolved = firstRoundCalls.map { call ->
+                call to resolveToolContent(call, conv, memory, onEvent)
+            }
+            // 工具系列使用后的第一人称思考（开启思考时）：评估数据是否正常 + 下一步规划
+            if (conv.thinkingEnabled) {
+                coordinator.appendThinking(
+                    com.quiddity.app.domain.LocalThinker.thinkAfterTools(
+                        results = resolved.map { (call, content) -> call.name to content },
+                        aiName = conv.persona.name.ifBlank { "Agent" }
+                    )
+                )
+            }
             val secondRequest = try {
-                buildSecondRoundRequest(request, conv, firstRoundCalls, onEvent)
+                buildSecondRoundRequest(request, conv, resolved, onEvent)
             } catch (c: kotlinx.coroutines.CancellationException) {
                 throw c
             } catch (t: Throwable) {
@@ -545,11 +558,11 @@ class ChatRepository(
     private suspend fun buildSecondRoundRequest(
         request: ChatRoundRequest,
         conv: Conversation,
-        calls: List<ChatStreamParser.AggregatedToolCall>,
+        resolved: List<Pair<ChatStreamParser.AggregatedToolCall, String>>,
         onEvent: suspend (Event) -> Unit
     ): ChatRoundRequest = when (request) {
         is ChatRoundRequest.Completions -> {
-            val toolMessages = buildToolResultMessages(request.request.messages, conv, calls, onEvent)
+            val toolMessages = buildToolResultMessages(request.request.messages, resolved)
             ChatRoundRequest.Completions(
                 request.request.copy(
                     messages = toolMessages,
@@ -560,7 +573,7 @@ class ChatRepository(
             )
         }
         is ChatRoundRequest.Responses -> {
-            val items = buildResponsesToolResultItems(request.request.input, conv, calls, onEvent)
+            val items = buildResponsesToolResultItems(request.request.input, resolved)
             ChatRoundRequest.Responses(
                 request.request.copy(
                     input = items,
@@ -578,15 +591,13 @@ class ChatRepository(
      */
     private suspend fun buildToolResultMessages(
         originalMessages: List<ChatMessage>,
-        conv: Conversation,
-        calls: List<ChatStreamParser.AggregatedToolCall>,
-        onEvent: suspend (Event) -> Unit
+        resolved: List<Pair<ChatStreamParser.AggregatedToolCall, String>>
     ): List<ChatMessage> {
         val result = originalMessages.toMutableList()
         result += ChatMessage(
             role = "assistant",
             content = null,
-            tool_calls = calls.map { call ->
+            tool_calls = resolved.map { (call, _) ->
                 AssistantToolCall(
                     id = call.id ?: "call_${call.index}",
                     type = "function",
@@ -597,13 +608,12 @@ class ChatRepository(
                 )
             }
         )
-        val memory = PromptBuilder.buildMemoryDrawerContent(conv)
-        calls.forEach { call ->
+        resolved.forEach { (call, content) ->
             val toolCallId = call.id ?: "call_${call.index}"
             result += ChatMessage(
                 role = "tool",
                 tool_call_id = toolCallId,
-                content = resolveToolContent(call, conv, memory, onEvent)
+                content = content
             )
         }
         return result
@@ -615,12 +625,10 @@ class ChatRepository(
      */
     private suspend fun buildResponsesToolResultItems(
         originalInput: List<ResponsesInputItem>,
-        conv: Conversation,
-        calls: List<ChatStreamParser.AggregatedToolCall>,
-        onEvent: suspend (Event) -> Unit
+        resolved: List<Pair<ChatStreamParser.AggregatedToolCall, String>>
     ): List<ResponsesInputItem> {
         val result = originalInput.toMutableList()
-        calls.forEach { call ->
+        resolved.forEach { (call, _) ->
             result += ResponsesInputItem(
                 type = "function_call",
                 call_id = call.id ?: "call_${call.index}",
@@ -628,12 +636,11 @@ class ChatRepository(
                 arguments = sanitizeToolArguments(call.arguments)
             )
         }
-        val memory = PromptBuilder.buildMemoryDrawerContent(conv)
-        calls.forEach { call ->
+        resolved.forEach { (call, content) ->
             result += ResponsesInputItem(
                 type = "function_call_output",
                 call_id = call.id ?: "call_${call.index}",
-                output = resolveToolContent(call, conv, memory, onEvent)
+                output = content
             )
         }
         return result
@@ -682,9 +689,15 @@ class ChatRepository(
                 else -> "工具 ${call.name} 不存在"
             }
         }
+        // 异常结果明确标注：让模型知道工具报错及类型，如实报告而不是假装成功
+        val marked = if (com.quiddity.app.domain.LocalThinker.isToolError(raw)) {
+            "【工具返回异常】$raw"
+        } else {
+            raw
+        }
         // 超大工具结果（如应用列表/系统日志）会撑爆第二轮请求导致 400：截断并注明
-        return raw.take(MAX_TOOL_RESULT_CHARS).let {
-            if (raw.length > MAX_TOOL_RESULT_CHARS) "$it\n（结果过长，已截断）" else it
+        return marked.take(MAX_TOOL_RESULT_CHARS).let {
+            if (marked.length > MAX_TOOL_RESULT_CHARS) "$it\n（结果过长，已截断）" else it
         }
     }
 

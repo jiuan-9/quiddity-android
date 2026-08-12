@@ -71,4 +71,44 @@ object LocalThinker {
             }
         }
     }
+
+    /** 工具结果是否判定为异常（权限缺失 / 未找到 / 失败 / 未执行等）。 */
+    fun isToolError(text: String): Boolean {
+        val t = text.trim()
+        if (t.isEmpty()) return true
+        val markers = listOf(
+            "未获得", "未找到", "失败", "无法", "不存在", "尚未", "拒绝",
+            "需要用户确认", "执行失败", "读取失败", "未启用", "不可用", "无效",
+            "异常", "报错", "未授权", "未开启"
+        )
+        return markers.any { t.contains(it) }
+    }
+
+    /**
+     * 工具系列使用后的第一人称思考（人设视角）：评估各工具返回的数据是否正常，
+     * 然后给出下一步规划；无论成功失败都会生成，供开启思考时展示。
+     */
+    fun thinkAfterTools(
+        results: List<Pair<String, String>>,
+        aiName: String
+    ): String {
+        if (results.isEmpty()) return ""
+        val bad = results.filter { isToolError(it.second) }
+        val good = results.filterNot { isToolError(it.second) }
+        return buildString {
+            append("我是「").append(aiName).append("」，刚调用了一系列工具：")
+                .append(results.joinToString("、") { it.first }).append("。")
+            if (bad.isEmpty()) {
+                append("返回的数据看起来正常，可以据此回答。")
+            } else {
+                append("其中 ").append(bad.joinToString("、") { it.first })
+                    .append(" 没有拿到正常数据（").append(bad.first().second.take(30))
+                    .append("）。")
+                if (good.isNotEmpty()) {
+                    append(good.joinToString("、") { it.first }).append(" 正常。")
+                }
+            }
+            append("下一步：如实告诉用户哪些工具成功、哪些失败及原因，不编造，用已有数据完成回答。")
+        }
+    }
 }

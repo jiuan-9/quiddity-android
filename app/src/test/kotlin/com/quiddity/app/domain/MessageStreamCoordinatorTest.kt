@@ -791,6 +791,20 @@ class MessageStreamCoordinatorTest {
     }
 
     @Test
+    fun `appendThinking merges post tool reflection onto next message`() {
+        val coord = MessageStreamCoordinator(
+            "conv1", "run1", singleMessageTokens = 1000,
+            thinking = "pre thinking"
+        )
+        coord.appendThinking("post tool thinking")
+        coord.accept("hello world。")
+        coord.finalize()
+        val snap = coord.snapshot()
+        assertEquals(1, snap.size)
+        assertEquals("pre thinking\npost tool thinking", snap.first().thinking)
+    }
+
+    @Test
     fun `reasoning only without content produces no message`() {
         val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
         coord.acceptReasoning("只思考没有回复。")
