@@ -106,7 +106,12 @@ data class UserPersona(
     val identity: String = "",
     val gender: String = "",
     val age: String = "",
-    val appearance: String = ""
+    val appearance: String = "",
+    /**
+     * AI 对用户的称呼（如何称呼用户，如「宝宝」「宝贝」）。
+     * 空 = 未设置，思考与回复中回退为 [name]（大名）。
+     */
+    val callName: String = ""
 ) {
     companion object {
         val Empty = UserPersona()

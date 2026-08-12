@@ -46,10 +46,17 @@ object LocalThinker {
     private val QUESTION_MARKERS = listOf("吗", "呢", "怎么", "什么", "如何", "为啥", "为什么", "多少", "？", "?")
 
     /**
-     * 生成本地思考：按意图生成自然的第一人称内心独白（打招呼 / 提问 / 涉及手机信息 / 闲聊）。
-     * 不使用固定模板前缀，随消息内容自然展开。
+     * 生成本地思考：按意图生成角色第一人称的自然内心独白（打招呼 / 提问 / 涉及手机信息 / 闲聊）。
+     * 称呼用户时优先使用 [userCallName]（如「宝宝」）并放在句首，未设置时回退为 [userName]；
+     * 不使用固定模板，句式随消息内容与长度自然变化。
      */
-    fun think(userMessage: String, isAgent: Boolean, aiName: String): String {
+    fun think(
+        userMessage: String,
+        isAgent: Boolean,
+        aiName: String,
+        userName: String,
+        userCallName: String = ""
+    ): String {
         val msg = userMessage.trim()
         val needsTool = TOOL_KEYWORDS.any { msg.contains(it) }
         val isQuestion = QUESTION_MARKERS.any { msg.contains(it) } || msg.endsWith("？") || msg.endsWith("?")
@@ -57,24 +64,60 @@ object LocalThinker {
             msg.contains("嗨") || msg.contains("你好") || msg.contains("在吗") ||
                 msg.contains("哈喽") || msg.contains("hello", true) || msg.contains("hi", true)
             )
+        val call = userCallName.ifBlank { userName }.ifBlank { "用户" }
+        val topic = msg.take(24)
+        val variant = (msg.hashCode() and Int.MAX_VALUE) % 3
         return when {
             needsTool -> {
-                "TA 提到的是手机上的信息（${msg.take(24)}）。" +
-                    "我得先实际查一下再回答，不能凭印象说。查不到的就直说，别让 TA 以为我糊弄。"
+                when (variant) {
+                    0 -> "$call，这事涉及手机里的真实数据，我先查一下再回你，不凭印象说。查到什么就报什么，查不到也直说。"
+                    1 -> "$call，这个（$topic）我得先实际查一遍，数据正常就照报，异常就告诉你哪一步没查成。"
+                    else -> "$call，光凭印象说不准，我先查手机。查得到就上数据，查不到就明说原因，不糊弄。"
+                }
             }
             isGreeting -> {
-                if (isAgent) "TA 主动打招呼了，先自然应一声，再看 TA 接下来想让我做什么。" else {
-                    "TA 来打招呼了，用「$aiName」的语气轻松回应一下，看看 TA 今天想聊什么。"
+                if (isAgent) {
+                    when (variant) {
+                        0 -> "$call 来找我了，先应一声，再看看 $call 接下来想让我做什么。"
+                        1 -> "$call 主动打了个招呼，我自然接上，别显得生硬。"
+                        else -> "$call 来了，先回一句，然后等着看 $call 今天要我帮什么忙。"
+                    }
+                } else {
+                    when (variant) {
+                        0 -> "$call 来打招呼了，用「$aiName」的性子轻松回一句，看看 $call 今天想聊什么。"
+                        1 -> "$call 主动找我，先应下这声招呼，再顺着往下聊。"
+                        else -> "$call 啊，先自然应一声，气氛松快点，再听 $call 想说什么。"
+                    }
                 }
             }
             isQuestion -> {
-                if (isAgent) "TA 问了个问题。先把问题想清楚：能直接答的就答，要查手机信息的就查了再说。" else {
-                    "TA 在问我。按「$aiName」的性子想想怎么回最自然，别答得干巴巴的。"
+                if (isAgent) {
+                    when (variant) {
+                        0 -> "$call 问了个问题，先把问题想清楚：能直接答就直接答，要查手机的就查了再说。"
+                        1 -> "$call 在问我（$topic），我心里先过一遍怎么答，该查的先查。"
+                        else -> "$call 这个问题得想清楚再回，别答得含含糊糊的。"
+                    }
+                } else {
+                    when (variant) {
+                        0 -> "$call 在问我，按「$aiName」的性子想想怎么回最自然，别答得干巴巴的。"
+                        1 -> "$call 问的是（$topic），我先琢磨一下语气，再顺着人设回。"
+                        else -> "$call 问的这事，我得想想怎么回才像「$aiName」会说的话，自然点，别端着。"
+                    }
                 }
             }
             else -> {
-                if (isAgent) "TA 在跟我说话，顺着 TA 的意思接，简洁清楚，不绕弯。" else {
-                    "TA 随口说了句，我顺着话题接住，保持「$aiName」一贯的感觉就好。"
+                if (isAgent) {
+                    when (variant) {
+                        0 -> "$call 在跟我说话，顺着 $call 的意思接，简洁清楚，不绕弯。"
+                        1 -> "$call 随口说了句（$topic），我接住话题，看看 $call 真正想要什么。"
+                        else -> "$call 这句话我听完再决定怎么接，别抢话。"
+                    }
+                } else {
+                    when (variant) {
+                        0 -> "$call 随口说了句，我顺着话题接住，保持「$aiName」一贯的感觉就好。"
+                        1 -> "$call 说（$topic），我按「$aiName」的习惯接一句，自然往下聊。"
+                        else -> "$call 这话题我顺着走，用「$aiName」的口吻回，别让气氛冷下来。"
+                    }
                 }
             }
         }
@@ -98,11 +141,14 @@ object LocalThinker {
      */
     fun thinkAfterTools(
         results: List<Pair<String, String>>,
-        aiName: String
+        aiName: String,
+        userName: String,
+        userCallName: String = ""
     ): String {
         if (results.isEmpty()) return ""
         val bad = results.filter { isToolError(it.second) }
         val good = results.filterNot { isToolError(it.second) }
+        val call = userCallName.ifBlank { userName }.ifBlank { "用户" }
         return buildString {
             append("我查了 ").append(results.joinToString("、") { it.first }).append("。")
             if (bad.isEmpty()) {
@@ -112,7 +158,7 @@ object LocalThinker {
                     .append(" 这边没查成（").append(bad.first().second.take(24))
                     .append("）。")
                 if (good.isNotEmpty()) append(good.joinToString("、") { it.first }).append(" 没问题。")
-                append("那就如实告诉 TA 哪个没查成、为什么，别糊弄。")
+                append("那就如实告诉 $call 哪个没查成、为什么，别糊弄。")
             }
         }
     }

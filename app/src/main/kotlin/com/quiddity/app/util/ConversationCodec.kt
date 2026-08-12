@@ -292,6 +292,7 @@ object ConversationCodec {
             persona.desired.isNotBlank() ||
             userPersona.name.isNotBlank() ||
             userPersona.identity.isNotBlank() ||
+            userPersona.callName.isNotBlank() ||
             conversation.scene.isNotBlank() ||
             conversation.memory.isNotBlank()
 
@@ -338,12 +339,16 @@ object ConversationCodec {
 
         if (userPersona.name.isNotBlank() || userPersona.identity.isNotBlank() ||
             userPersona.gender.isNotBlank() || userPersona.age.isNotBlank() ||
-            userPersona.appearance.isNotBlank()
+            userPersona.appearance.isNotBlank() || userPersona.callName.isNotBlank()
         ) {
             if (isMarkdown) sb.append("### 用户人设\n\n") else sb.append("[用户人设]\n")
             if (userPersona.name.isNotBlank()) {
                 if (isMarkdown) sb.append("- **名字**：${userPersona.name}\n")
                 else sb.append("名字：${userPersona.name}\n")
+            }
+            if (userPersona.callName.isNotBlank()) {
+                if (isMarkdown) sb.append("- **AI 怎么称呼你**：${userPersona.callName}\n")
+                else sb.append("AI 怎么称呼你：${userPersona.callName}\n")
             }
             if (userPersona.identity.isNotBlank()) {
                 if (isMarkdown) sb.append("- **身份**：${userPersona.identity}\n")
@@ -629,6 +634,7 @@ object ConversationCodec {
         var userGender = ""
         var userAge = ""
         var userAppearance = ""
+        var userCallName = ""
         var scene = ""
         var memory = ""
 
@@ -660,6 +666,7 @@ object ConversationCodec {
 
         // 用户人设字段
         userName = extractField(section, isMarkdown, "名字", "用户人设") ?: ""
+        userCallName = extractField(section, isMarkdown, "AI 怎么称呼你", "用户人设") ?: ""
         userIdentity = extractField(section, isMarkdown, "身份", "用户人设") ?: ""
         userGender = extractField(section, isMarkdown, "性别", "用户人设") ?: ""
         userAge = extractField(section, isMarkdown, "年龄", "用户人设") ?: ""
@@ -684,7 +691,8 @@ object ConversationCodec {
             identity = userIdentity,
             gender = userGender,
             age = userAge,
-            appearance = userAppearance
+            appearance = userAppearance,
+            callName = userCallName
         )
         return Quadruple(persona, userPersona, scene, memory)
     }

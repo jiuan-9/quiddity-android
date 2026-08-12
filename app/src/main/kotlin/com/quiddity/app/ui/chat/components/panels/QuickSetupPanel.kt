@@ -486,6 +486,7 @@ private fun QuickSetupResultDialog(
     var userGender by rememberSaveable(parsed.userPersona.gender) { mutableStateOf(parsed.userPersona.gender) }
     var userAge by rememberSaveable(parsed.userPersona.age) { mutableStateOf(parsed.userPersona.age) }
     var userAppearance by rememberSaveable(parsed.userPersona.appearance) { mutableStateOf(parsed.userPersona.appearance) }
+    var userCallName by rememberSaveable(parsed.userPersona.callName) { mutableStateOf(parsed.userPersona.callName) }
     var scene by rememberSaveable(parsed.scene) { mutableStateOf(parsed.scene) }
     var memory by rememberSaveable(parsed.memory) { mutableStateOf(parsed.memory) }
 
@@ -506,6 +507,7 @@ private fun QuickSetupResultDialog(
         sb.append("[性别]").append(userGender).append("\n")
         sb.append("[年龄]").append(userAge).append("\n")
         sb.append("[外观]").append(userAppearance).append("\n")
+        sb.append("[AI怎么称呼你]").append(userCallName).append("\n")
         sb.append("\n")
         sb.append("【场景设置】\n")
         sb.append("[当前场景]").append(scene).append("\n")
@@ -614,6 +616,10 @@ private fun QuickSetupResultDialog(
                     SectionField(
                         label = "外观", value = userAppearance, onValueChange = { userAppearance = it },
                         isError = "user_appearance" in currentMissing
+                    )
+                    SectionField(
+                        label = "AI 怎么称呼你", value = userCallName, onValueChange = { userCallName = it },
+                        singleLine = true, isError = false
                     )
 
                     SectionHeader(title = "场景设置")
