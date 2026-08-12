@@ -1000,126 +1000,52 @@ private fun applyMarkdownStyles(
 }
 
 /**
- * 图片消息气泡：固定卡片样式（参考 DeepSeek 网页版等聊天界面）。
- *
- * 布局：
- * - 固定尺寸的「图片」图标卡片（图标 + 文字），点击弹出全屏大图；
- * - 图标卡片下方展示用户输入的文字（纯图片消息则只有卡片）。
+ * 固定图片卡片（132x92「图片」图标卡 + 全屏查看器），私聊/群聊/Agent 共用同一 UI。
+ * [onClick] 非空时点击优先回调（如多选切换选中），否则弹出全屏大图。
  */
 @Composable
-private fun ImageMessageBubble(
+internal fun ImageMessageCard(
     imageUri: String,
-    text: AnnotatedString,
-    isUser: Boolean,
-    isStreaming: Boolean,
-    textColor: Color,
-    multiSelectMode: Boolean,
-    onSelectToggle: (() -> Unit)?,
-    onBubbleClick: (() -> Unit)?,
-    onLongClick: (() -> Unit)?,
-    bubbleScaleState: androidx.compose.runtime.State<Float>,
-    bubbleInteractionSource: MutableInteractionSource,
-    bubbleColor: Color,
-    bubbleBorderColor: Color
+    modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null
 ) {
     var showImage by remember(imageUri) { mutableStateOf(false) }
     Box(
-        modifier = Modifier
-            .widthIn(max = BubbleMaxWidth)
-            .graphicsLayer {
-                scaleX = bubbleScaleState.value
-                scaleY = bubbleScaleState.value
+        modifier = modifier
+            .size(width = 132.dp, height = 92.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .border(
+                1.dp,
+                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                RoundedCornerShape(12.dp)
+            )
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .semantics { contentDescription = "查看图片" }
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null
+            ) {
+                if (onClick != null) onClick() else showImage = true
             }
-            .let { mod ->
-                when {
-                    multiSelectMode && onSelectToggle != null -> {
-                        mod.clickable(
-                            interactionSource = bubbleInteractionSource,
-                            indication = null,
-                            onClick = onSelectToggle
-                        )
-                    }
-                    isUser && onBubbleClick != null -> {
-                        mod.clickable(
-                            interactionSource = bubbleInteractionSource,
-                            indication = null,
-                            onClick = onBubbleClick
-                        )
-                    }
-                    else -> mod
-                }
-            }
-            .clip(BubbleShape(isUser))
-            .border(1.dp, bubbleBorderColor, BubbleShape(isUser))
-            .background(bubbleColor)
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
-            horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
+            modifier = Modifier.align(Alignment.Center),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // 图片图标卡片：点击弹出全屏大图
-            Box(
-                modifier = Modifier
-                    .size(width = 132.dp, height = 92.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .border(
-                        1.dp,
-                        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-                        RoundedCornerShape(12.dp)
-                    )
-                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
-                    .semantics { contentDescription = "查看图片" }
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) {
-                        if (multiSelectMode) {
-                            onSelectToggle?.invoke()
-                        } else {
-                            showImage = true
-                        }
-                    }
-            ) {
-                Column(
-                    modifier = Modifier
-                        .align(Alignment.Center),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Image,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(28.dp)
-                    )
-                    Spacer(modifier = Modifier.size(6.dp))
-                    Text(
-                        text = "图片",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-            // 用户输入的文字（纯图片消息时省略）
-            if (text.text.isNotBlank() || isStreaming) {
-                Spacer(modifier = Modifier.size(8.dp))
-                Row(verticalAlignment = Alignment.Bottom) {
-                    SelectableMessageText(
-                        text = text,
-                        textColor = textColor,
-                        onBubbleClick = if (multiSelectMode) onSelectToggle else onBubbleClick,
-                        onLongClick = if (multiSelectMode || !isUser) null else onLongClick,
-                        modifier = Modifier.widthIn(max = BubbleInnerMaxWidth)
-                    )
-                    if (isStreaming) {
-                        Spacer(modifier = Modifier.size(2.dp))
-                        StreamingCursor()
-                    }
-                }
-            }
+            Icon(
+                imageVector = Icons.Filled.Image,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(28.dp)
+            )
+            Spacer(modifier = Modifier.size(6.dp))
+            Text(
+                text = "图片",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
-
-    // 全屏图片查看器：点击图标卡片后弹出
     if (showImage) {
         Dialog(
             onDismissRequest = { showImage = false },
@@ -1156,6 +1082,89 @@ private fun ImageMessageBubble(
                         ) { showImage = false }
                         .padding(8.dp)
                 )
+            }
+        }
+    }
+}
+
+/**
+ * 图片消息气泡：固定卡片样式（参考 DeepSeek 网页版等聊天界面）。
+ *
+ * 布局：
+ * - 固定尺寸的「图片」图标卡片（图标 + 文字），点击弹出全屏大图；
+ * - 图标卡片下方展示用户输入的文字（纯图片消息则只有卡片）。
+ */
+@Composable
+private fun ImageMessageBubble(
+    imageUri: String,
+    text: AnnotatedString,
+    isUser: Boolean,
+    isStreaming: Boolean,
+    textColor: Color,
+    multiSelectMode: Boolean,
+    onSelectToggle: (() -> Unit)?,
+    onBubbleClick: (() -> Unit)?,
+    onLongClick: (() -> Unit)?,
+    bubbleScaleState: androidx.compose.runtime.State<Float>,
+    bubbleInteractionSource: MutableInteractionSource,
+    bubbleColor: Color,
+    bubbleBorderColor: Color
+) {
+    Box(
+        modifier = Modifier
+            .widthIn(max = BubbleMaxWidth)
+            .graphicsLayer {
+                scaleX = bubbleScaleState.value
+                scaleY = bubbleScaleState.value
+            }
+            .let { mod ->
+                when {
+                    multiSelectMode && onSelectToggle != null -> {
+                        mod.clickable(
+                            interactionSource = bubbleInteractionSource,
+                            indication = null,
+                            onClick = onSelectToggle
+                        )
+                    }
+                    isUser && onBubbleClick != null -> {
+                        mod.clickable(
+                            interactionSource = bubbleInteractionSource,
+                            indication = null,
+                            onClick = onBubbleClick
+                        )
+                    }
+                    else -> mod
+                }
+            }
+            .clip(BubbleShape(isUser))
+            .border(1.dp, bubbleBorderColor, BubbleShape(isUser))
+            .background(bubbleColor)
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
+            horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
+        ) {
+            // 图片图标卡片：点击弹出全屏大图（私聊/群聊/Agent 共用固定 UI）
+            ImageMessageCard(
+                imageUri = imageUri,
+                onClick = if (multiSelectMode) onSelectToggle else null
+            )
+            // 用户输入的文字（纯图片消息时省略）
+            if (text.text.isNotBlank() || isStreaming) {
+                Spacer(modifier = Modifier.size(8.dp))
+                Row(verticalAlignment = Alignment.Bottom) {
+                    SelectableMessageText(
+                        text = text,
+                        textColor = textColor,
+                        onBubbleClick = if (multiSelectMode) onSelectToggle else onBubbleClick,
+                        onLongClick = if (multiSelectMode || !isUser) null else onLongClick,
+                        modifier = Modifier.widthIn(max = BubbleInnerMaxWidth)
+                    )
+                    if (isStreaming) {
+                        Spacer(modifier = Modifier.size(2.dp))
+                        StreamingCursor()
+                    }
+                }
             }
         }
     }

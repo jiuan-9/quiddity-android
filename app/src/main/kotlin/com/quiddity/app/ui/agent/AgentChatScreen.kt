@@ -707,6 +707,13 @@ private fun AgentMessageLine(
                     color = colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                 )
             }
+            // 图片消息：Agent 无气泡直排，使用与私聊一致的固定图片卡片，避免纯图片消息显示为空
+            if (message.imageUri?.isNotBlank() == true) {
+                com.quiddity.app.ui.chat.components.ImageMessageCard(
+                    imageUri = message.imageUri,
+                    modifier = Modifier.padding(bottom = if (message.content.isNotBlank()) 6.dp else 0.dp)
+                )
+            }
             AgentMarkdownText(
                 content = message.content,
                 isStreaming = message.isStreaming,
