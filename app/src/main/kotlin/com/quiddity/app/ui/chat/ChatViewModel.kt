@@ -633,7 +633,8 @@ class ChatViewModel(
                 val localThinking = if (conv.thinkingEnabled) {
                     com.quiddity.app.domain.LocalThinker.think(
                         userMessage = history.lastOrNull { it.role == Role.USER }?.content.orEmpty(),
-                        isAgent = conv.type == ConversationType.AGENT
+                        isAgent = conv.type == ConversationType.AGENT,
+                        aiName = conv.persona.name.ifBlank { if (conv.type == ConversationType.AGENT) "Agent" else "AI" }
                     )
                 } else {
                     ""

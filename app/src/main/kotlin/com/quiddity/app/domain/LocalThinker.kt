@@ -36,38 +36,46 @@ object LocalThinker {
 
     /** 工具关键词 → 涉及的能力说明（命中即认为需要读取手机信息/执行操作）。 */
     private val TOOL_KEYWORDS = listOf(
-        "应用" to "读取应用列表",
-        "权限" to "查询应用权限清单",
-        "安装" to "查询安装时间与来源",
-        "耗电" to "统计后台耗电",
-        "流量" to "统计网络流量",
-        "屏幕" to "读取屏幕内容",
-        "通知" to "读取通知",
-        "前台" to "读取前台应用",
-        "日志" to "读取全局日志",
-        "截图" to "截取屏幕",
-        "文件" to "查询文件访问能力",
-        "停用" to "停用应用（需确认）",
-        "卸载" to "卸载应用（需确认）",
-        "强停" to "强制停止（需确认）"
+        "应用", "权限", "安装", "耗电", "流量", "屏幕", "通知", "前台",
+        "日志", "截图", "文件", "停用", "卸载", "强停", "电量", "内存", "网速",
+        "install", "app", "battery", "permission", "traffic", "screen",
+        "notification", "foreground", "log", "screenshot", "file", "stop",
+        "uninstall", "kill", "apps"
     )
 
-    /** 生成本地思考文本：识别意图 → 是否需要工具 → 回答策略。 */
-    fun think(userMessage: String, isAgent: Boolean): String {
+    private val QUESTION_MARKERS = listOf("吗", "呢", "怎么", "什么", "如何", "为啥", "为什么", "多少", "？", "?")
+
+    /**
+     * 生成本地思考：按意图生成自然的第一人称内心独白（打招呼 / 提问 / 涉及手机信息 / 闲聊）。
+     * 不使用固定模板前缀，随消息内容自然展开。
+     */
+    fun think(userMessage: String, isAgent: Boolean, aiName: String): String {
         val msg = userMessage.trim()
-        val toolHits = TOOL_KEYWORDS
-            .filter { (kw, _) -> msg.contains(kw) }
-            .map { it.second }
-            .distinct()
-        return buildString {
-            append("用户想：").append(msg.take(50))
-            if (toolHits.isNotEmpty()) {
-                append("\n这涉及手机信息/操作：").append(toolHits.take(3).joinToString("、"))
-                append("\n先查询确认，再如实回答")
-            } else if (isAgent) {
-                append("\n直接回答即可，语气贴合人设，简洁清晰")
-            } else {
-                append("\n围绕人设自然回应，无需调用工具")
+        val needsTool = TOOL_KEYWORDS.any { msg.contains(it) }
+        val isQuestion = QUESTION_MARKERS.any { msg.contains(it) } || msg.endsWith("？") || msg.endsWith("?")
+        val isGreeting = msg.length <= 12 && (
+            msg.contains("嗨") || msg.contains("你好") || msg.contains("在吗") ||
+                msg.contains("哈喽") || msg.contains("hello", true) || msg.contains("hi", true)
+            )
+        return when {
+            needsTool -> {
+                "TA 提到的是手机上的信息（${msg.take(24)}）。" +
+                    "我得先实际查一下再回答，不能凭印象说。查不到的就直说，别让 TA 以为我糊弄。"
+            }
+            isGreeting -> {
+                if (isAgent) "TA 主动打招呼了，先自然应一声，再看 TA 接下来想让我做什么。" else {
+                    "TA 来打招呼了，用「$aiName」的语气轻松回应一下，看看 TA 今天想聊什么。"
+                }
+            }
+            isQuestion -> {
+                if (isAgent) "TA 问了个问题。先把问题想清楚：能直接答的就答，要查手机信息的就查了再说。" else {
+                    "TA 在问我。按「$aiName」的性子想想怎么回最自然，别答得干巴巴的。"
+                }
+            }
+            else -> {
+                if (isAgent) "TA 在跟我说话，顺着 TA 的意思接，简洁清楚，不绕弯。" else {
+                    "TA 随口说了句，我顺着话题接住，保持「$aiName」一贯的感觉就好。"
+                }
             }
         }
     }
@@ -96,19 +104,16 @@ object LocalThinker {
         val bad = results.filter { isToolError(it.second) }
         val good = results.filterNot { isToolError(it.second) }
         return buildString {
-            append("我是「").append(aiName).append("」，刚调用了一系列工具：")
-                .append(results.joinToString("、") { it.first }).append("。")
+            append("我查了 ").append(results.joinToString("、") { it.first }).append("。")
             if (bad.isEmpty()) {
-                append("返回的数据看起来正常，可以据此回答。")
+                append("拿到的数据都挺正常，按这个来回答。")
             } else {
-                append("其中 ").append(bad.joinToString("、") { it.first })
-                    .append(" 没有拿到正常数据（").append(bad.first().second.take(30))
+                append(bad.joinToString("、") { it.first })
+                    .append(" 这边没查成（").append(bad.first().second.take(24))
                     .append("）。")
-                if (good.isNotEmpty()) {
-                    append(good.joinToString("、") { it.first }).append(" 正常。")
-                }
+                if (good.isNotEmpty()) append(good.joinToString("、") { it.first }).append(" 没问题。")
+                append("那就如实告诉 TA 哪个没查成、为什么，别糊弄。")
             }
-            append("下一步：如实告诉用户哪些工具成功、哪些失败及原因，不编造，用已有数据完成回答。")
         }
     }
 }
