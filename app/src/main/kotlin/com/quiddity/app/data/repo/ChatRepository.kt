@@ -463,11 +463,11 @@ class ChatRepository(
         val apiUrl = request.apiUrl
         var lastError: Throwable? = null
         val recordFailure: suspend (Throwable) -> Unit = { t -> lastError = t }
-        val firstRoundCalls = runSingleStream(
+        val firstRound = runSingleStream(
             api, apiUrl, apiKey, request, coordinator, onEvent, contentTransform, thinkingActive,
             onFailure = recordFailure
         )
-        if (firstRoundCalls == null) {
+        if (firstRound == null) {
             appendFailureMessage(
                 conv, coordinator, onEvent,
                 lastError?.let {
@@ -476,6 +476,7 @@ class ChatRepository(
             )
             return false
         }
+        val firstRoundCalls = firstRound.toolCalls
         if (firstRoundCalls.isNotEmpty()) {
             firstRoundCalls.forEach { call ->
                 onEvent(Event.ToolUse(call.name))
@@ -485,7 +486,7 @@ class ChatRepository(
                 call to resolveToolContent(call, conv, memory, onEvent)
             }
             val secondRequest = try {
-                buildSecondRoundRequest(request, conv, resolved, onEvent)
+                buildSecondRoundRequest(request, resolved, firstRound.reasoningText, onEvent)
             } catch (c: kotlinx.coroutines.CancellationException) {
                 throw c
             } catch (t: Throwable) {
@@ -507,13 +508,28 @@ class ChatRepository(
                     it.role == Role.ASSISTANT && !it.isNotice && !it.isThinking && it.content.isNotBlank()
                 }
             ) {
-                appendFailureMessage(
-                    conv, coordinator, onEvent,
-                    lastError?.let {
-                        "工具已执行，但模型继续回复失败：${it.message?.take(200) ?: it.javaClass.simpleName}。请重试或检查模型配置。"
-                    } ?: "工具已执行，但模型未输出回复内容。请重试。"
+                // 工具已执行但模型回复请求被拒（如 DeepSeek 思考模式要求回传 reasoning_text）：
+                // 降级为普通对话重试，把工具结果与错误原因作为上下文交给模型，
+                // 让 AI 在回复里如实报告这次报错，而不是单开一条错误消息。
+                val fallback = buildFallbackRequest(
+                    request, resolved,
+                    lastError?.message ?: "模型未输出回复内容"
                 )
-                return false
+                val fallbackOk = runSingleStream(
+                    api, apiUrl, apiKey, fallback, coordinator, onEvent, contentTransform, thinkingActive
+                )
+                if (fallbackOk == null || coordinator.snapshot().none {
+                        it.role == Role.ASSISTANT && !it.isNotice && !it.isThinking && it.content.isNotBlank()
+                    }
+                ) {
+                    appendFailureMessage(
+                        conv, coordinator, onEvent,
+                        lastError?.let {
+                            "工具已执行，但模型继续回复失败：${it.message?.take(200) ?: it.javaClass.simpleName}。请重试或检查模型配置。"
+                        } ?: "工具已执行，但模型未输出回复内容。请重试。"
+                    )
+                    return false
+                }
             }
         }
         attachThinkingUnavailableReportIfNeeded(request, coordinator, thinkingActive, onEvent)
@@ -552,8 +568,13 @@ class ChatRepository(
     /**
      * 单轮流式驱动：消费 [ChatApi.StreamEvent] 并派发协调器信号。
      *
-     * @return 聚合到的工具调用列表；出错返回 null（错误已通过 [Event.Error] 派发）
+     * @return 本轮结果（工具调用 + 思考原文）；出错返回 null（错误已通过 [Event.Error] 派发）
      */
+    private data class StreamRoundResult(
+        val toolCalls: List<ChatStreamParser.AggregatedToolCall>,
+        val reasoningText: String
+    )
+
     private suspend fun runSingleStream(
         api: ChatApi,
         apiUrl: String,
@@ -564,8 +585,9 @@ class ChatRepository(
         contentTransform: (String) -> String = { it },
         thinkingActive: Boolean = true,
         onFailure: (suspend (Throwable) -> Unit)? = null
-    ): List<ChatStreamParser.AggregatedToolCall>? {
+    ): StreamRoundResult? {
         var toolCalls: List<ChatStreamParser.AggregatedToolCall> = emptyList()
+        val reasoningText = StringBuilder()
         var truncated = false
         try {
             // 打字机延迟已在 UI 层（MessageBubble）按字渲染实现，
@@ -583,11 +605,10 @@ class ChatRepository(
                         evictions.forEach { dispatch(onEvent, it) }
                     }
                     is ChatApi.StreamEvent.Reasoning -> {
-                        // 思考开关关闭时不显示思考内容（仍正常显示正式回复）
-                        if (thinkingActive) {
-                            val evictions = coordinator.acceptReasoning(event.text)
-                            evictions.forEach { dispatch(onEvent, it) }
-                        }
+                        // 思考原文不展示（由提示词引导的【思考】标记负责展示），
+                        // 但必须累积：DeepSeek 思考模式下工具轮第二轮请求需要回传 reasoning_text，
+                        // 否则服务端以 HTTP 400 拒绝（"The reasoning_text in the thinking mode must be passed back"）。
+                        reasoningText.append(event.text)
                     }
                     is ChatApi.StreamEvent.ToolCalls -> {
                         if (event.calls.isNotEmpty()) toolCalls = event.calls
@@ -617,7 +638,7 @@ class ChatRepository(
             onFailure?.invoke(t)
             return null
         }
-        return toolCalls
+        return StreamRoundResult(toolCalls, reasoningText.toString())
     }
 
     /**
@@ -651,12 +672,12 @@ class ChatRepository(
      */
     private suspend fun buildSecondRoundRequest(
         request: ChatRoundRequest,
-        conv: Conversation,
         resolved: List<Pair<ChatStreamParser.AggregatedToolCall, String>>,
+        reasoningText: String,
         onEvent: suspend (Event) -> Unit
     ): ChatRoundRequest = when (request) {
         is ChatRoundRequest.Completions -> {
-            val toolMessages = buildToolResultMessages(request.request.messages, resolved)
+            val toolMessages = buildToolResultMessages(request.request.messages, resolved, reasoningText)
             ChatRoundRequest.Completions(
                 request.request.copy(
                     messages = toolMessages,
@@ -685,12 +706,15 @@ class ChatRepository(
      */
     private suspend fun buildToolResultMessages(
         originalMessages: List<ChatMessage>,
-        resolved: List<Pair<ChatStreamParser.AggregatedToolCall, String>>
+        resolved: List<Pair<ChatStreamParser.AggregatedToolCall, String>>,
+        reasoningText: String
     ): List<ChatMessage> {
         val result = originalMessages.toMutableList()
         result += ChatMessage(
             role = "assistant",
             content = null,
+            // DeepSeek 思考模式强制要求工具轮回传上一轮 reasoning_text，否则 400
+            reasoning_content = reasoningText.takeIf { it.isNotBlank() },
             tool_calls = resolved.map { (call, _) ->
                 AssistantToolCall(
                     id = call.id ?: "call_${call.index}",
@@ -711,6 +735,47 @@ class ChatRepository(
             )
         }
         return result
+    }
+
+    /**
+     * 工具轮降级重试：第二轮被 API 拒绝时（HTTP 400 等），去掉 tool_calls 回填，
+     * 把工具结果与错误原因作为普通对话上下文交给模型，让 AI 在回复中如实报告报错。
+     */
+    private fun buildFallbackRequest(
+        request: ChatRoundRequest,
+        resolved: List<Pair<ChatStreamParser.AggregatedToolCall, String>>,
+        errorText: String
+    ): ChatRoundRequest {
+        val toolSummary = resolved.joinToString("\n") { (call, content) ->
+            "${call.name}：${content.take(300)}"
+        }
+        val context = buildString {
+            append("你刚才请求了工具调用，工具已执行，结果如下：\n").append(toolSummary)
+            append("\n\n但你的回复请求被模型接口拒绝（").append(errorText.take(300)).append("）。")
+            append("请以你的口吻向用户如实说明：这次工具调用的情况、接口返回的错误，以及接下来可以怎么办。")
+        }
+        return when (request) {
+            is ChatRoundRequest.Completions -> ChatRoundRequest.Completions(
+                request.request.copy(
+                    messages = request.request.messages + ChatMessage(role = "user", content = context),
+                    tools = null,
+                    tool_choice = null
+                ),
+                request.apiUrl
+            )
+            is ChatRoundRequest.Responses -> ChatRoundRequest.Responses(
+                request.request.copy(
+                    input = request.request.input + ResponsesInputItem(
+                        type = "message",
+                        role = "user",
+                        content = context
+                    ),
+                    tools = null,
+                    tool_choice = null
+                ),
+                request.apiUrl
+            )
+        }
     }
 
     /**

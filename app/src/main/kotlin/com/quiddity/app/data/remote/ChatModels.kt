@@ -118,6 +118,12 @@ data class ChatMessage(
     val role: String,
     val content: String? = null,
     /**
+     * DeepSeek 思考模式强制要求：assistant 工具调用消息必须回传上一轮的
+     * reasoning_content（reasoning_text），否则工具轮第二轮请求会被服务端以
+     * "The reasoning_text in the thinking mode must be passed back to the API" 拒绝（HTTP 400）。
+     */
+    val reasoning_content: String? = null,
+    /**
      * 第二次请求回填的 assistant 工具调用（6.6.4）。
      */
     val tool_calls: List<AssistantToolCall>? = null,
