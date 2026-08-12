@@ -455,9 +455,7 @@ class ChatRepository(
                 coordinator.appendThinking(
                     com.quiddity.app.domain.LocalThinker.thinkAfterTools(
                         results = resolved.map { (call, content) -> call.name to content },
-                        aiName = conv.persona.name.ifBlank { "Agent" },
-                        userName = conv.userPersona.name,
-                        userCallName = conv.userPersona.callName
+                        aiName = conv.persona.name.ifBlank { "Agent" }
                     )
                 )
             }

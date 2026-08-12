@@ -837,11 +837,10 @@ fun UserPersonaPanel(
     var gender by rememberSaveable { mutableStateOf(initial.gender) }
     var age by rememberSaveable { mutableStateOf(initial.age) }
     var appearance by rememberSaveable { mutableStateOf(initial.appearance) }
-    var callName by rememberSaveable { mutableStateOf(initial.callName) }
     var memory by rememberSaveable { mutableStateOf(initialMemory) }
 
     // 自动保存（防抖 500ms）
-    LaunchedEffect(name, identity, gender, age, appearance, callName, memory) {
+    LaunchedEffect(name, identity, gender, age, appearance, memory) {
         kotlinx.coroutines.delay(500)
         onAutoSave(
             UserPersona(
@@ -849,8 +848,7 @@ fun UserPersonaPanel(
                 identity = identity,
                 gender = gender,
                 age = age,
-                appearance = appearance,
-                callName = callName
+                appearance = appearance
             ),
             memory
         )
@@ -860,11 +858,6 @@ fun UserPersonaPanel(
         QuiddityTextField(
             value = name, onValueChange = { name = it },
             label = "你的名字", placeholder = "如 小明", singleLine = true
-        )
-        Spacer(modifier = Modifier.size(12.dp))
-        QuiddityTextField(
-            value = callName, onValueChange = { callName = it },
-            label = "AI 怎么称呼你", placeholder = "如 宝宝、亲爱的", singleLine = true
         )
         Spacer(modifier = Modifier.size(12.dp))
         QuiddityTextField(
@@ -939,8 +932,7 @@ fun UserPersonaPanel(
                         identity = identity,
                         gender = gender,
                         age = age,
-                        appearance = appearance,
-                        callName = callName
+                        appearance = appearance
                     ),
                     memory
                 )

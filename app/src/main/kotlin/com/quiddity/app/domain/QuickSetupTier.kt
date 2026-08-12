@@ -149,8 +149,7 @@ enum class UserPersonaField(val label: String) {
     IDENTITY("[身份]"),
     GENDER("[性别]"),
     AGE("[年龄]"),
-    APPEARANCE("[外观]"),
-    CALL_NAME("[AI怎么称呼你]")
+    APPEARANCE("[外观]")
 }
 
 /**

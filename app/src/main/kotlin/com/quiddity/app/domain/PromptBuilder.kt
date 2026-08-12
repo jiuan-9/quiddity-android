@@ -392,10 +392,9 @@ object PromptBuilder {
         // ===== 3. 用户信息 =====
         val user = conv.userPersona
         if (user.name.isNotBlank() || user.identity.isNotBlank() || user.gender.isNotBlank()
-            || user.age.isNotBlank() || user.appearance.isNotBlank() || user.callName.isNotBlank()) {
+            || user.age.isNotBlank() || user.appearance.isNotBlank()) {
             sb.append("【用户信息】\n")
             if (user.name.isNotBlank()) sb.append("- 名字：").append(user.name).append("\n")
-            if (user.callName.isNotBlank()) sb.append("- 你称呼对方：").append(user.callName).append("\n")
             if (user.identity.isNotBlank()) sb.append("- 身份：").append(user.identity).append("\n")
             if (user.gender.isNotBlank()) sb.append("- 性别：").append(user.gender).append("\n")
             if (user.age.isNotBlank()) sb.append("- 年龄：").append(user.age).append("\n")
@@ -790,14 +789,13 @@ $persona
      */
     private fun buildUserPersonaSnippet(user: com.quiddity.app.data.model.UserPersona): String? {
         if (user.name.isBlank() && user.identity.isBlank() && user.gender.isBlank() &&
-            user.age.isBlank() && user.appearance.isBlank() && user.callName.isBlank()
+            user.age.isBlank() && user.appearance.isBlank()
         ) {
             return null
         }
         val sb = StringBuilder()
         sb.append("【用户信息】\n")
         if (user.name.isNotBlank()) sb.append("- 名字：").append(user.name).append("\n")
-        if (user.callName.isNotBlank()) sb.append("- 你称呼对方：").append(user.callName).append("\n")
         if (user.identity.isNotBlank()) sb.append("- 身份：").append(user.identity).append("\n")
         if (user.gender.isNotBlank()) sb.append("- 性别：").append(user.gender).append("\n")
         if (user.age.isNotBlank()) sb.append("- 年龄：").append(user.age).append("\n")

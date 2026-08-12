@@ -47,7 +47,6 @@ import com.quiddity.app.data.model.UserPersona
  * [性别]…
  * [年龄]…
  * [外观]…
- * [AI怎么称呼你]…
  *
  * 【场景设置】
  * [当前场景]…
@@ -84,7 +83,6 @@ object QuickSetupPrompt {
 [性别]……
 [年龄]……
 [外观]……
-[AI怎么称呼你]……
 【场景设置】
 [当前场景]……
 【记忆设置】
@@ -123,7 +121,7 @@ object QuickSetupPrompt {
         sb.append("AI 人设：")
         sb.append(tier.aiPersonaFields().joinToString("、") { it.label })
         sb.append("\n")
-        sb.append("用户人设：[名字]、[身份]、[性别]、[年龄]、[外观]、[AI怎么称呼你]\n")
+        sb.append("用户人设：[名字]、[身份]、[性别]、[年龄]、[外观]\n")
         sb.append("场景设置：[当前场景]\n")
         if (tier.includesMemory) {
             sb.append("记忆设置：[需要记住的事]\n")
@@ -172,7 +170,6 @@ object QuickSetupPrompt {
         val userGender = rawGender.ifBlank { "暂不设置" }
         val userAge = extractField(userSection, UserPersonaField.AGE.label)
         val userAppearance = extractField(userSection, UserPersonaField.APPEARANCE.label)
-        val userCallName = extractField(userSection, UserPersonaField.CALL_NAME.label)
 
         val scene = extractField(sceneSection, "[当前场景]").trim()
 
@@ -196,8 +193,7 @@ object QuickSetupPrompt {
                 identity = userIdentity,
                 gender = userGender,
                 age = userAge,
-                appearance = userAppearance,
-                callName = userCallName
+                appearance = userAppearance
             ),
             scene = scene,
             memory = memory

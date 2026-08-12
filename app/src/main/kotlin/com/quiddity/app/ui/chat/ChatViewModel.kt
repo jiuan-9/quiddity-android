@@ -634,9 +634,7 @@ class ChatViewModel(
                     com.quiddity.app.domain.LocalThinker.think(
                         userMessage = history.lastOrNull { it.role == Role.USER }?.content.orEmpty(),
                         isAgent = conv.type == ConversationType.AGENT,
-                        aiName = conv.persona.name.ifBlank { if (conv.type == ConversationType.AGENT) "Agent" else "AI" },
-                        userName = conv.userPersona.name,
-                        userCallName = conv.userPersona.callName
+                        aiName = conv.persona.name.ifBlank { if (conv.type == ConversationType.AGENT) "Agent" else "AI" }
                     )
                 } else {
                     ""
