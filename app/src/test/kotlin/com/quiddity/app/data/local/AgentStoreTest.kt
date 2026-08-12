@@ -24,6 +24,7 @@ class AgentStoreTest {
         assertTrue(decoded.toolSwitches.read_battery)
         assertTrue(decoded.toolSwitches.read_traffic)
         assertTrue(decoded.toolSwitches.read_screenshot)
+        assertTrue(decoded.toolSwitches.read_logs)
         assertFalse(decoded.toolSwitches.write_disable)
         assertFalse(decoded.toolSwitches.write_appops)
         assertFalse(decoded.toolSwitches.write_force_stop)

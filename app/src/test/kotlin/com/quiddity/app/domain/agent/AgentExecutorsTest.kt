@@ -228,4 +228,13 @@ class AgentExecutorsTest {
         assertTrue(!lines.any { it.contains("Settings") })
         assertEquals(emptyList(), AgentExecutors.parseBatteryBlock("no stats here"))
     }
+
+    @Test
+    fun formatSystemLogs_capsLinesAndTruncatesLongLines() {
+        val lines = (1..5).map { "line_$it" }
+        val capped = AgentExecutors.formatSystemLogs(lines, 3)
+        assertEquals("line_3\nline_4\nline_5", capped)
+        val long = listOf("x".repeat(600))
+        assertEquals(400, AgentExecutors.formatSystemLogs(long, 10).length)
+    }
 }

@@ -44,7 +44,7 @@ import java.io.File
  *
  * 与工具清单一一对应：
  * - 感知类：sense_screen / sense_notifications / sense_usage
- * - 读取类：read_apps / read_system / read_app_info / read_battery / read_traffic / read_screenshot
+ * - 读取类：read_apps / read_system / read_app_info / read_battery / read_traffic / read_screenshot / read_logs
  * - 写入类：write_disable / write_appops / write_force_stop / write_uninstall
  *   （写入类默认关闭，需 Shizuku 授权后由用户在设置中开启）
  */
@@ -59,6 +59,7 @@ data class AgentToolSwitches(
     val read_battery: Boolean = true,
     val read_traffic: Boolean = true,
     val read_screenshot: Boolean = true,
+    val read_logs: Boolean = true,
     val write_disable: Boolean = false,
     val write_appops: Boolean = false,
     val write_force_stop: Boolean = false,
@@ -137,6 +138,7 @@ class AgentStore(private val context: Context) {
                 "read_battery" -> switches.copy(read_battery = enabled)
                 "read_traffic" -> switches.copy(read_traffic = enabled)
                 "read_screenshot" -> switches.copy(read_screenshot = enabled)
+                "read_logs" -> switches.copy(read_logs = enabled)
                 "write_disable" -> switches.copy(write_disable = enabled)
                 "write_appops" -> switches.copy(write_appops = enabled)
                 "write_force_stop" -> switches.copy(write_force_stop = enabled)

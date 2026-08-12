@@ -92,6 +92,9 @@ class AgentExecutors(
     }
 
     fun readScreen(maxChars: Int?): String {
+        if (!com.quiddity.app.active.ScreenReaderService.isConnected) {
+            return "读取屏幕需要先开启无障碍服务（屏幕读取权限），请在 Agent 设置 → 权限状态中开启"
+        }
         val text = truncate(AgentSensorState.screenText, maxChars)
         return AgentSecurity.wrapUntrustedScreen(text.ifBlank { "当前屏幕无可见文本" })
     }
@@ -174,6 +177,22 @@ class AgentExecutors(
         } else {
             "$pkg 耗电统计：\n" + lines.joinToString("\n")
         }
+    }
+
+    suspend fun systemLogs(maxLines: Int, filter: String?): String {
+        val shell = shizuku ?: return "未获得 Shizuku 授权，无法读取全局日志"
+        if (!shell.isGranted()) return "未获得 Shizuku 授权，无法读取全局日志"
+        val limit = maxLines.coerceIn(10, 2000)
+        val result = shell.exec(arrayOf("logcat", "-d", "-t", limit.toString()))
+        if (result.exitCode != 0) {
+            return "读取全局日志失败（退出码 ${result.exitCode}）：${result.output.ifBlank { "请检查 Shizuku 授权" }}"
+        }
+        val lines = result.output.lineSequence().toList()
+        val filtered = filter?.trim()?.takeIf { it.isNotEmpty() }?.let { q ->
+            lines.filter { it.contains(q, ignoreCase = true) }
+        } ?: lines
+        if (filtered.isEmpty()) return "未找到匹配的日志"
+        return formatSystemLogs(filtered.takeLast(limit), limit)
     }
 
     fun trafficRanking(limit: Int): String {
@@ -362,6 +381,11 @@ class AgentExecutors(
             bytes >= 1L shl 10 -> String.format(java.util.Locale.US, "%.1f KB", bytes.toDouble() / (1L shl 10))
             else -> "$bytes B"
         }
+
+        /** 日志行格式化：按条数截断，单行超长截断避免刷屏。 */
+        fun formatSystemLogs(lines: List<String>, maxLines: Int): String =
+            lines.takeLast(maxLines)
+                .joinToString("\n") { line -> if (line.length <= 400) line else line.take(400) }
 
         /** 从 dumpsys batterystats 输出中提取首个 Uid 块的关键耗电行。 */
         fun parseBatteryBlock(output: String): List<String> {

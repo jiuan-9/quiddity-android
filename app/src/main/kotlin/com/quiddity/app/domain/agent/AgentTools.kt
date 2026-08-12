@@ -321,6 +321,26 @@ class AgentToolRegistry(
                     }
                 ),
                 AgentTool(
+                    name = "system_logs",
+                    description = "读取全局系统日志（logcat），可查看所有应用的日志报告（需要 Shizuku 授权）。",
+                    params = paramsObject(
+                        properties = mapOf(
+                            "maxLines" to intParam("最多返回日志条数，可选，默认 200，上限 2000"),
+                            "filter" to stringParam("按关键字过滤日志（包名/标签/关键词），可选")
+                        ),
+                        required = emptyList()
+                    ),
+                    level = AgentPermissionLevel.BASIC,
+                    confirm = AgentConfirmPolicy.AUTO,
+                    enabledByDefault = true,
+                    execute = { _, args ->
+                        executors?.systemLogs(
+                            maxLines = argInt(args, "maxLines") ?: 200,
+                            filter = argString(args, "filter")
+                        ) ?: "尚未接入执行器"
+                    }
+                ),
+                AgentTool(
                     name = "disable_app",
                     description = "停用指定的应用（需要授权通道、白名单与用户确认）。",
                     params = paramsObject(
@@ -431,6 +451,7 @@ class AgentToolRegistry(
             "traffic_ranking" -> "流量排行"
             "file_access" -> "文件访问能力"
             "screenshot" -> "截图"
+            "system_logs" -> "全局日志"
             "disable_app" -> "停用应用"
             "enable_app" -> "启用应用"
             "set_appops" -> "设置应用权限"
@@ -452,6 +473,7 @@ class AgentToolRegistry(
             "traffic_ranking" -> "正在统计流量排行"
             "file_access" -> "正在查询文件访问能力"
             "screenshot" -> "正在截取屏幕"
+            "system_logs" -> "正在读取全局日志"
             "disable_app" -> "正在停用应用"
             "enable_app" -> "正在启用应用"
             "set_appops" -> "正在修改应用权限"

@@ -85,6 +85,7 @@ object AgentSecurity {
             "app_battery" -> switches.read_battery
             "traffic_ranking" -> switches.read_traffic
             "screenshot" -> switches.read_screenshot
+            "system_logs" -> switches.read_logs
             "disable_app" -> switches.write_disable
             "enable_app" -> switches.write_disable
             "set_appops" -> switches.write_appops

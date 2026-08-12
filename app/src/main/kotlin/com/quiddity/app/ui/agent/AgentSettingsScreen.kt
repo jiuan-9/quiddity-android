@@ -44,6 +44,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Article
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.BatteryFull
 import androidx.compose.material.icons.filled.CheckCircle
@@ -514,6 +515,17 @@ fun AgentSettingsScreen(
                                     helpText = "打开后，Agent 才能截取当前屏幕（需要无障碍权限与 Android 11+）。",
                                     onHelpClick = { helpText = "打开后，Agent 才能截取当前屏幕（需要无障碍权限与 Android 11+）。" },
                                     enabled = accessibilityEnabled
+                                )
+                                ToggleRow(
+                                    icon = Icons.Filled.Article,
+                                    title = "全局日志",
+                                    subtitle = "查看所有应用的日志报告",
+                                    checked = settings.toolSwitches.read_logs,
+                                    onCheckedChange = { on ->
+                                        scope.launch { store.setToolSwitch("read_logs", on) }
+                                    },
+                                    helpText = "打开后，Agent 才能读取全局系统日志（logcat，覆盖所有应用；需要 Shizuku 授权）。",
+                                    onHelpClick = { helpText = "打开后，Agent 才能读取全局系统日志（logcat，覆盖所有应用；需要 Shizuku 授权）。" }
                                 )
                                 WriteLockedRow(
                                     title = "停用与启用应用",
