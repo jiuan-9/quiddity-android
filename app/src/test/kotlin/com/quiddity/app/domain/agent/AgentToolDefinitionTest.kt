@@ -54,6 +54,29 @@ class AgentToolDefinitionTest {
     }
 
     @Test
+    fun everyToolSerializesToValidOpenAiSchema() {
+        val json = kotlinx.serialization.json.Json {
+            encodeDefaults = true
+        }
+        val sb = StringBuilder()
+        registry.tools().sortedBy { it.name }.forEach { tool ->
+            val def = tool.toToolDefinition()
+            val encoded = json.encodeToString(
+                com.quiddity.app.data.remote.ToolDefinition.serializer(),
+                def
+            )
+            sb.append(encoded).append('\n')
+            val type = def.function.parameters["type"] as? JsonPrimitive
+            assertEquals("object", type?.content, "工具 ${tool.name} parameters.type 应为 object")
+            assertTrue(def.function.name.isNotBlank(), "工具 name 非空")
+            assertTrue(def.function.description.isNotBlank(), "工具 ${tool.name} description 非空")
+            val parsed = json.parseToJsonElement(encoded) as? kotlinx.serialization.json.JsonObject
+            assertEquals("function", parsed?.get("type")?.let { (it as? JsonPrimitive)?.content }, tool.name)
+        }
+        java.io.File("build/tool-defs.json").writeText(sb.toString())
+    }
+
+    @Test
     fun dispatchAgentToolIfNeeded_soloConversation_returnsNull() {
         val result = runBlocking {
             ChatRepository.dispatchAgentToolIfNeeded(

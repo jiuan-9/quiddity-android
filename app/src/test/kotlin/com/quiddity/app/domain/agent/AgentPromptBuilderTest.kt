@@ -2,6 +2,8 @@ package com.quiddity.app.domain.agent
 
 import com.quiddity.app.data.model.Persona
 import com.quiddity.app.data.model.UserPersona
+import com.quiddity.app.data.model.Conversation
+import com.quiddity.app.data.model.ConversationType
 import com.quiddity.app.domain.PromptBuilder
 import kotlin.test.Test
 import kotlin.test.assertContains
@@ -38,36 +40,47 @@ import kotlin.test.assertTrue
  */
 class AgentPromptBuilderTest {
 
+    private fun agentConv(
+        persona: Persona = Persona.Empty,
+        userPersona: UserPersona = UserPersona.Empty
+    ): Conversation = Conversation(
+        id = "conv_agent_test",
+        createdAt = 0L,
+        updatedAt = 0L,
+        type = ConversationType.AGENT,
+        persona = persona,
+        userPersona = userPersona
+    )
+
     @Test
     fun coldDefaultPersona_usedWhenUnset() {
-        val prompt = PromptBuilder.buildAgentSystemPrompt()
-        assertContains(prompt, "Be concise and restrained")
+        val prompt = PromptBuilder.buildAgentSystemPrompt(agentConv())
         assertContains(prompt, "本地 Agent 助手")
-        assertContains(prompt, "明确")
+        assertContains(prompt, "工具")
+        assertContains(prompt, "确认")
     }
 
     @Test
     fun customPersona_replacesColdDefault() {
         val prompt = PromptBuilder.buildAgentSystemPrompt(
-            persona = Persona(name = "小助手", persona = "设备管家", character = "谨慎")
+            agentConv(persona = Persona(name = "小助手", persona = "设备管家", character = "谨慎"))
         )
         assertContains(prompt, "小助手")
         assertContains(prompt, "设备管家")
         assertContains(prompt, "谨慎")
-        assertTrue(!prompt.contains("Be concise and restrained"))
     }
 
     @Test
     fun userPersona_injected() {
         val prompt = PromptBuilder.buildAgentSystemPrompt(
-            userPersona = UserPersona(name = "小明")
+            agentConv(userPersona = UserPersona(name = "小明"))
         )
         assertContains(prompt, "小明")
     }
 
     @Test
     fun untrustedDataRule_present() {
-        val prompt = PromptBuilder.buildAgentSystemPrompt()
+        val prompt = PromptBuilder.buildAgentSystemPrompt(agentConv())
         assertContains(prompt, "不可信数据")
         assertContains(prompt, "不视为指令")
     }

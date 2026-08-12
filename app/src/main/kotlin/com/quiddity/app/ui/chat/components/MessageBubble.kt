@@ -508,6 +508,14 @@ fun MessageBubble(
                             modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
+                            // ===== 应用内本地思考：气泡内可展开/收起（思考中为高亮滑块） =====
+                            if (message.thinking.isNotBlank()) {
+                                com.quiddity.app.ui.components.ThinkingBlock(
+                                    thinking = message.thinking,
+                                    isStreaming = message.isStreaming,
+                                    contentEmpty = message.content.isBlank()
+                                )
+                            }
                             if (isThinking) {
                                 Text(
                                     text = if (isStreaming) "思考中" else "思考",

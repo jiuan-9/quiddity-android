@@ -51,6 +51,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
@@ -432,7 +433,10 @@ fun AgentChatScreen(
                                             .padding(vertical = 6.dp),
                                         horizontalArrangement = Arrangement.Start
                                     ) {
-                                        TypingIndicator()
+                                        com.quiddity.app.ui.components.ShimmerHighlightText(
+                                            text = "思考中…",
+                                            icon = Icons.Filled.AutoAwesome
+                                        )
                                     }
                                 }
                             }
@@ -712,6 +716,14 @@ private fun AgentMessageLine(
                 com.quiddity.app.ui.chat.components.ImageMessageCard(
                     imageUri = message.imageUri,
                     modifier = Modifier.padding(bottom = if (message.content.isNotBlank()) 6.dp else 0.dp)
+                )
+            }
+            // ===== 应用内本地思考：气泡内可展开/收起（思考中为高亮滑块） =====
+            if (message.thinking.isNotBlank()) {
+                com.quiddity.app.ui.components.ThinkingBlock(
+                    thinking = message.thinking,
+                    isStreaming = message.isStreaming,
+                    contentEmpty = message.content.isBlank()
                 )
             }
             AgentMarkdownText(

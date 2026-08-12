@@ -50,6 +50,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
@@ -1374,10 +1375,9 @@ private fun ThinkingBubble(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 if (thinkingLabel != null) {
-                    Text(
+                    com.quiddity.app.ui.components.ShimmerHighlightText(
                         text = thinkingLabel,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        icon = Icons.Filled.AutoAwesome
                     )
                 }
                 TypingIndicator()

@@ -629,10 +629,15 @@ class ChatViewModel(
                 replyRunStart = System.currentTimeMillis()
                 replyRunChars = 0
                 val history = _messages.value
+                val localThinking = com.quiddity.app.domain.LocalThinker.think(
+                    userMessage = history.lastOrNull { it.role == Role.USER }?.content.orEmpty(),
+                    isAgent = conv.type == ConversationType.AGENT
+                )
                 chatRepository.streamAssistantReply(
                     conv,
                     history,
-                    effectiveMemoryStrategy(conv)
+                    effectiveMemoryStrategy(conv),
+                    thinking = localThinking
                 ) { event ->
                     if (event is ChatRepository.Event.Error) {
                         streamError = event.throwable
@@ -1020,16 +1025,19 @@ class ChatViewModel(
                 if (!conversationRepository.updateMessage(event.message)) raiseStorageError()
             }
             is ChatRepository.Event.CompleteMessage -> {
+                // 模型偶发在正式回答开头复述思考内容/系统指令：剥离重复前缀，
+                // 避免「思考一条 + 回答一条」两条消息内容雷同（防御性去重）
+                val target = stripThinkingEcho(event.message)
                 // 1.5.0 延迟输出：加载动画时长 = 累计回复字数 × 每字毫秒数。
                 // 流式文字自然显示（MessageBubble 不再逐字停顿），消息保持
                 // streaming 状态直到该时长结束（气泡光标 / 群聊头像三点不提前停止）。
                 // 思考消息不计入打字延迟（思考单独一条消息，不应拖慢回复动画）
-                if (!event.message.isThinking) {
-                    replyRunChars += event.message.content.length
+                if (!target.isThinking) {
+                    replyRunChars += target.content.length
                 }
                 val settings = settingsRepository.currentSnapshot()
                 if (settings.typingDelayEnabled && settings.typingDelayMsPerChar > 0 &&
-                    replyRunStart > 0 && event.message.content.isNotEmpty()
+                    replyRunStart > 0 && target.content.isNotEmpty()
                 ) {
                     val targetDuration = replyRunChars.toLong() * settings.typingDelayMsPerChar
                     val elapsed = System.currentTimeMillis() - replyRunStart
@@ -1039,14 +1047,14 @@ class ChatViewModel(
                             kotlinx.coroutines.delay(remainder)
                         } catch (c: kotlinx.coroutines.CancellationException) {
                             // 停止生成：先把消息落盘为完成态，避免加载光标卡住，再继续取消
-                            if (!conversationRepository.updateMessage(event.message)) raiseStorageError()
+                            if (!conversationRepository.updateMessage(target)) raiseStorageError()
                             throw c
                         }
                     }
                 }
-                if (!conversationRepository.updateMessage(event.message)) raiseStorageError()
+                if (!conversationRepository.updateMessage(target)) raiseStorageError()
                 // AI 消息完成时累加 token 用量
-                accumulateTokenUsage(event.message.tokenCount)
+                accumulateTokenUsage(target.tokenCount)
             }
             is ChatRepository.Event.ToolUse -> {
                 _toolUse.value = event.toolName
@@ -1096,6 +1104,26 @@ class ChatViewModel(
                 _chatError.value = chatRepository.classify(event.throwable)
             }
         }
+    }
+
+    /**
+     * 防御性去重：若正式回复开头整段复述了最近一条思考消息的内容
+     * （模型回显系统指令/思考文本的常见行为），剥离重复前缀，只保留正式回答。
+     */
+    private fun stripThinkingEcho(msg: Message): Message {
+        if (msg.isThinking || msg.isNotice || msg.content.isBlank()) return msg
+        val thinking = _messages.value.asReversed()
+            .firstOrNull { it.isThinking }
+            ?.content?.trim().orEmpty()
+        if (thinking.length < 6) return msg
+        val content = msg.content.trimStart()
+        if (!content.startsWith(thinking)) return msg
+        val rest = content.removePrefix(thinking).trimStart()
+        if (rest.isBlank()) return msg
+        return msg.copy(
+            content = rest,
+            tokenCount = com.quiddity.app.util.TokenEstimator.estimate(rest)
+        )
     }
 
     /** 存储写盘失败时上报，避免"显示已发送但实际未落盘"被静默吞掉。 */

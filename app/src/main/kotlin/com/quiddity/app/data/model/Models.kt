@@ -367,6 +367,14 @@ data class Message(
      */
     val isThinking: Boolean = false,
     /**
+     * 应用内本地思考内容（客户端生成，不依赖厂商服务器）。
+     *
+     * - 非空 = 回复消息头部展示可展开/收起的思考块（默认收起，箭头展开）；
+     * - 思考中（isStreaming 且 content 为空）时以高亮滑块样式提示；
+     * - 不发送给 LLM、不参与压缩。
+     */
+    val thinking: String = "",
+    /**
      * 发言人会话 id（2.0.0 群聊消息使用）。
      * - 群聊消息带 senderId（指向成员私聊会话 id）
      * - 私聊消息为 null（默认值，兼容旧数据）

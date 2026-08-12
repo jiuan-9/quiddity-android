@@ -171,12 +171,12 @@ class ChatRepository(
      * 每轮新 run 都注入新 runId（基于 UUID），保证消息 id 全局唯一。
      * [senderId] 为群聊发言人会话 id（2.0.0 使用），私聊传 null。
      */
-    private val coordinatorFactory: (conversationId: String, runId: String, splitEnabled: Boolean, singleMessageTokens: Int, senderId: String?, internalThinking: Boolean) -> StreamCoordinator =
-        { conversationId, runId, splitEnabled, singleMessageTokens, senderId, internalThinking ->
+    private val coordinatorFactory: (conversationId: String, runId: String, splitEnabled: Boolean, singleMessageTokens: Int, senderId: String?, thinking: String) -> StreamCoordinator =
+        { conversationId, runId, splitEnabled, singleMessageTokens, senderId, thinking ->
             MessageStreamCoordinator(
                 conversationId, runId, singleMessageTokens, splitEnabled,
                 senderId = senderId,
-                internalThinking = internalThinking
+                thinking = thinking
             )
         }
 ) {
@@ -224,6 +224,7 @@ class ChatRepository(
         history: List<Message>,
         memoryStrategy: String? = null,
         regeneratePreviousReply: String? = null,
+        thinking: String = "",
         onEvent: suspend (Event) -> Unit
     ) {
         val settings = settingsRepo.currentSnapshot()
@@ -236,17 +237,14 @@ class ChatRepository(
         val effectiveStrategy = memoryStrategy
             ?: conv.memoryStrategy
             ?: QuiddityConstants.MEMORY_STRATEGY_CARRY
-        val reasoningEffort = resolveThinkingEffort(settings, conv)
-        val thinkingActive = reasoningEffort != null
         val isAgent = conv.type == ConversationType.AGENT
         val systemPrompt = if (isAgent) {
-            PromptBuilder.buildAgentSystemPrompt(conv.persona, conv.userPersona)
+            PromptBuilder.buildAgentSystemPrompt(conv, effectiveStrategy)
         } else {
             PromptBuilder.buildSystemPrompt(
                 conv = conv,
                 memoryStrategy = effectiveStrategy,
-                regeneratePreviousReply = regeneratePreviousReply,
-                thinkingDepth = if (thinkingActive) conv.thinkingDepth else null
+                regeneratePreviousReply = regeneratePreviousReply
             )
         }
         val contextLimit = if (conv.contextLimit > 0) conv.contextLimit else settings.globalContextLimit
@@ -301,11 +299,11 @@ class ChatRepository(
                 settings.multilineAutoSplit && !isAgent,
                 singleMsgTokens,
                 null,
-                thinkingActive
+                thinking
             ),
             conv = conv,
             onEvent = onEvent,
-            thinkingActive = thinkingActive
+            thinkingActive = false
         )
     }
 
@@ -319,6 +317,7 @@ class ChatRepository(
         conv: Conversation,
         memoryStrategy: String? = null,
         regeneratePreviousReply: String? = null,
+        thinking: String = "",
         onEvent: suspend (Event) -> Unit
     ) {
         val settings = settingsRepo.currentSnapshot()
@@ -331,17 +330,14 @@ class ChatRepository(
         val effectiveStrategy = memoryStrategy
             ?: conv.memoryStrategy
             ?: QuiddityConstants.MEMORY_STRATEGY_CARRY
-        val reasoningEffort = resolveThinkingEffort(settings, conv)
-        val thinkingActive = reasoningEffort != null
         val isAgent = conv.type == ConversationType.AGENT
         val systemPrompt = if (isAgent) {
-            PromptBuilder.buildAgentSystemPrompt(conv.persona, conv.userPersona)
+            PromptBuilder.buildAgentSystemPrompt(conv, effectiveStrategy)
         } else {
             PromptBuilder.buildSystemPrompt(
                 conv = conv,
                 memoryStrategy = effectiveStrategy,
-                regeneratePreviousReply = regeneratePreviousReply,
-                thinkingDepth = if (thinkingActive) conv.thinkingDepth else null
+                regeneratePreviousReply = regeneratePreviousReply
             )
         }
         // 引导：让 AI 主动发起对话
@@ -393,11 +389,11 @@ class ChatRepository(
                 settings.multilineAutoSplit && !isAgent,
                 singleMsgTokens,
                 null,
-                thinkingActive
+                thinking
             ),
             conv = conv,
             onEvent = onEvent,
-            thinkingActive = thinkingActive
+            thinkingActive = false
         )
     }
 
@@ -413,20 +409,6 @@ class ChatRepository(
         val entry = manager.resolveEntry(settings, conv) ?: return null
         if (!manager.supportsServerWebSearch(entry)) return null
         return manager.responsesApiUrl(entry)
-    }
-
-    /**
-     * 判断会话思考功能是否应生效（思考开关 + DeepSeek 官方模型）。
-     * 返回值 low / high 标识深度，但当前仅用于判定 thinkingActive（思考内容显不显示）：
-     * reasoning_effort 参数实测会导致该服务端返回空响应，因此不发送，
-     * 思考内容完全依赖服务端返回的 reasoning_content 字段。
-     */
-    private fun resolveThinkingEffort(settings: AppSettings, conv: Conversation): String? {
-        if (!conv.thinkingEnabled) return null
-        val manager = apiCatalogManager ?: return null
-        val entry = manager.resolveEntry(settings, conv) ?: return null
-        if (entry.providerId != QuiddityConstants.DEEPSEEK_PROVIDER_ID) return null
-        return if (conv.thinkingDepth == QuiddityConstants.THINKING_DEPTH_DEEP) "high" else "low"
     }
 
     /**
@@ -610,7 +592,7 @@ class ChatRepository(
                     type = "function",
                     function = com.quiddity.app.data.remote.AssistantToolCallFunction(
                         name = call.name,
-                        arguments = call.arguments
+                        arguments = sanitizeToolArguments(call.arguments)
                     )
                 )
             }
@@ -643,7 +625,7 @@ class ChatRepository(
                 type = "function_call",
                 call_id = call.id ?: "call_${call.index}",
                 name = call.name,
-                arguments = call.arguments
+                arguments = sanitizeToolArguments(call.arguments)
             )
         }
         val memory = PromptBuilder.buildMemoryDrawerContent(conv)
@@ -675,6 +657,7 @@ class ChatRepository(
         memory: String,
         onEvent: suspend (Event) -> Unit
     ): String {
+        val raw: String
         if (conv.type == ConversationType.AGENT) {
             val dispatched = dispatchAgentToolIfNeeded(
                 type = conv.type,
@@ -683,20 +666,41 @@ class ChatRepository(
                 registry = agentToolRegistry,
                 ctx = agentContext(conv, onEvent)
             )
-            if (dispatched != null) return dispatched
+            if (dispatched != null) raw = dispatched
+            else raw = "工具 ${call.name} 不存在"
+        } else {
+            raw = when (call.name) {
+                "read_memory" -> {
+                    MemorySearch.search(memory, parseToolQuery(call.arguments)).content
+                }
+                "search_chat" -> {
+                    val query = parseToolQuery(call.arguments)
+                    val messages = conversationRepo.observeMessages(conv.id).value
+                        .filterNot { it.isNotice }
+                    ChatRecordSearch.search(messages, query).content
+                }
+                else -> "工具 ${call.name} 不存在"
+            }
         }
-        return when (call.name) {
-        "read_memory" -> {
-            MemorySearch.search(memory, parseToolQuery(call.arguments)).content
+        // 超大工具结果（如应用列表/系统日志）会撑爆第二轮请求导致 400：截断并注明
+        return raw.take(MAX_TOOL_RESULT_CHARS).let {
+            if (raw.length > MAX_TOOL_RESULT_CHARS) "$it\n（结果过长，已截断）" else it
         }
-        "search_chat" -> {
-            val query = parseToolQuery(call.arguments)
-            val messages = conversationRepo.observeMessages(conv.id).value
-                .filterNot { it.isNotice }
-            ChatRecordSearch.search(messages, query).content
-        }
-        else -> "工具 ${call.name} 不存在"
-        }
+    }
+
+    /**
+     * 清洗模型回传的工具参数：空串/非法 JSON 一律补为 "{}"，
+     * 避免第二轮请求携带非法 arguments 被 API 以 400 拒绝。
+     */
+    private fun sanitizeToolArguments(arguments: String): String {
+        val trimmed = arguments.trim()
+        if (trimmed.isEmpty()) return "{}"
+        return runCatching {
+            kotlinx.serialization.json.Json.parseToJsonElement(trimmed)
+        }.fold(
+            onSuccess = { trimmed },
+            onFailure = { "{}" }
+        )
     }
 
     private fun agentContext(
@@ -734,6 +738,9 @@ class ChatRepository(
     }
 
     companion object {
+
+        /** 工具结果回填模型的最大字符数（超出截断，防止第二轮请求过大返回 400）。 */
+        private const val MAX_TOOL_RESULT_CHARS = 6000
 
         /**
          * 仅 AGENT 会话且注册表可用时分发；否则返回 null（走原 read_memory/search_chat 逻辑）。
@@ -932,7 +939,6 @@ class ChatRepository(
         onEvent: suspend (Event) -> Unit
     ) {
         val settings = settingsRepo.currentSnapshot()
-        val memberThinkingActive = resolveThinkingEffort(settings, member) != null
         // 思考消息不进入群聊转述（避免把成员思考内容发给其他成员）
         val cleanTranscript = transcript.filterNot { it.isThinking }
         // 方案六.2：群聊记录只取最近 N 条（默认 50，范围 1～200），在点击定格快照上截断。
@@ -952,7 +958,7 @@ class ChatRepository(
             senderNames = senderNames,
             userName = member.userPersona.name.takeIf { it.isNotBlank() },
             webSearchResponsesUrl = resolveWebSearch(settings, member),
-            thinkingDepth = if (memberThinkingActive) member.thinkingDepth else null,
+            thinkingDepth = null,
             regeneratePreviousReply = regeneratePreviousReply
         )
         // 模型有时会误输出「名字：」前缀（如回复开头带其他成员名），
@@ -989,14 +995,14 @@ class ChatRepository(
                     settings.multilineAutoSplit,
                     p.singleMessageTokens,
                     p.senderId,
-                    memberThinkingActive
+                    ""
                 )
                 val roundRequest = p.responsesRequest
                     ?.let { ChatRoundRequest.Responses(it, p.responsesApiUrl ?: p.apiUrl) }
                     ?: ChatRoundRequest.Completions(p.request, p.apiUrl)
                 runWithToolRound(
                     api, p.apiKey, roundRequest, coordinator, group, cleanEvent,
-                    thinkingActive = memberThinkingActive
+                    thinkingActive = false
                 ) { prefixStripper.accept(it) }
             },
             onFailure = { emitError(onEvent, it, "") }
