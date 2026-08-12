@@ -242,7 +242,7 @@ class GlossaryProvider {
             category = "数据与备份"
         ),
         Term(
-            name = "人设卡导出",
+            name = "角色卡导出",
             pinyin = "rensekadaochu",
             explanation = "仅导出人设相关数据（AI 人设、用户人设、场景、记忆），" +
                 "不包含消息记录。方便把人设分享给其他会话使用。",

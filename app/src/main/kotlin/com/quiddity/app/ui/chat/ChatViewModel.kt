@@ -1430,7 +1430,7 @@ class ChatViewModel(
      *
      * 流程：
      * 1. 接收 UI 选定的档位（[tier]），由 UI 控制；
-     * 2. 调用 [ChatRepository.quickSetup] 让 AI 生成结构化人设卡文本；
+     * 2. 调用 [ChatRepository.quickSetup] 让 AI 生成结构化角色卡文本；
      * 3. 成功：返回原始文本，由 UI 展示给用户预览/编辑；
      * 4. 失败：抛异常给调用方（UI 据此显示「生成失败 / API 未配置」）。
      *
@@ -1644,7 +1644,7 @@ class ChatViewModel(
         }
     }
 
-    /** 导出当前会话的人设卡。 */
+    /** 导出当前会话的角色卡（覆盖「人设」一栏全部设置，含快速设定内容）。 */
     fun exportPersonaCard(): PersonaCard? {
         val conv = conversation.value ?: return null
         return PersonaCard(
@@ -1653,22 +1653,24 @@ class ChatViewModel(
             persona = conv.persona,
             userPersona = conv.userPersona,
             scene = conv.scene,
-            memory = conv.memory
+            memory = conv.memory,
+            quickSetupDraft = conv.quickSetupDraft
         )
     }
 
-    /** 导入人设卡到当前会话。 */
+    /** 导入角色卡到当前会话（覆盖「人设」一栏全部设置，含快速设定内容）。 */
     fun importPersonaCard(card: PersonaCard) {
         viewModelScope.launch {
             val conv = conversation.value ?: return@launch
-            // 场景可能随人设卡变更，重置 sceneInjected 让下次对话重新注入
+            // 场景可能随角色卡变更，重置 sceneInjected 让下次对话重新注入
             conversationRepository.updateConversation(
                 conv.copy(
                     persona = card.persona,
                     userPersona = card.userPersona,
                     scene = card.scene,
                     sceneInjected = false,
-                    memory = card.memory
+                    memory = card.memory,
+                    quickSetupDraft = card.quickSetupDraft
                 )
             )
         }
@@ -1722,7 +1724,7 @@ class ChatViewModel(
      * 行为：
      * - 解析 [text] 为 [com.quiddity.app.util.ConversationCodec.ImportResult]
      * - 替换当前会话的所有消息为新解析的 messages（覆盖式导入）
-     * - 若解析到人设卡信息，更新当前会话的 persona / userPersona / scene / memory
+     * - 若解析到角色卡信息，更新当前会话的 persona / userPersona / scene / memory / quickSetupDraft
      * - 若解析到会话标题且当前会话仍是默认标题，更新会话标题
      *
      * 不影响：
@@ -1744,7 +1746,7 @@ class ChatViewModel(
                 // 1. 替换消息列表（覆盖式导入）
                 conversationRepository.replaceMessages(conversationId, result.messages)
 
-                // 2. 更新人设卡信息（仅在解析到非空内容时更新对应字段）
+                // 2. 更新角色卡信息（仅在解析到非空内容时更新对应字段）
                 val updatedPersona = if (
                     result.persona != Persona.Empty ||
                     result.userPersona != UserPersona.Empty
@@ -1806,8 +1808,8 @@ class ChatViewModel(
      * 导出当前会话为 Markdown / 纯文本格式。
      *
      * 与 [exportPersonaCard] 的差异：
-     * - 本方法导出消息记录（人设卡 + 所有消息）
-     * - exportPersonaCard 仅导出人设卡（无消息）
+     * - 本方法导出消息记录（角色卡 + 所有消息）
+     * - exportPersonaCard 仅导出角色卡（无消息）
      *
      * @param format 目标格式（MARKDOWN 或 TEXT）；JSON 格式请使用 ExportPayload + DataPorter
      * @return 格式化后的字符串

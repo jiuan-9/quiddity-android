@@ -638,7 +638,7 @@ data class ExportPayload(
 }
 
 /**
- * 人设卡导出（仅 Persona + UserPersona + Scene + Memory）。
+ * 角色卡导出（覆盖「人设」一栏全部设置：Persona + UserPersona + Scene + Memory + 快速设定内容）。
  */
 @Serializable
 data class PersonaCard(
@@ -647,5 +647,6 @@ data class PersonaCard(
     val persona: Persona,
     val userPersona: UserPersona,
     val scene: String,
-    val memory: String
+    val memory: String,
+    val quickSetupDraft: String = ""
 )
