@@ -462,9 +462,9 @@ object PromptBuilder {
                 .append("思考必须以第一人称「我」的口吻书写，像角色本人内心的自然独白，")
                 .append("提到对方时用名字或「你」，不得用「用户」「TA」「她」等第三人称指代；思考简短自然，不写套话。")
             if (thinkingDepth == com.quiddity.app.util.QuiddityConstants.THINKING_DEPTH_DEEP) {
-                sb.append("思考要详细充分。")
+                sb.append("思考要详细充分：先在心中拆解对方的话，梳理要点、权衡不同回应方式，再决定怎么回答。")
             } else {
-                sb.append("思考简明扼要即可。")
+                sb.append("思考简明扼要：凭直觉快速判断对方意图，想清楚回应方向即可，不要长篇大论。")
             }
             sb.append("\n\n")
         }
@@ -794,9 +794,9 @@ $persona
                 .append("思考必须以第一人称「我」的口吻书写，像角色本人内心的自然独白，")
                 .append("提到对方时用名字或「你」，不得用「用户」「TA」「她」等第三人称指代；思考简短自然，不写套话。")
             if (thinkingDepth == com.quiddity.app.util.QuiddityConstants.THINKING_DEPTH_DEEP) {
-                sb.append("思考要详细充分。")
+                sb.append("思考要详细充分：先在心中拆解对方的话，梳理要点、权衡不同回应方式，再决定怎么回答。")
             } else {
-                sb.append("思考简明扼要即可。")
+                sb.append("思考简明扼要：凭直觉快速判断对方意图，想清楚回应方向即可，不要长篇大论。")
             }
             sb.append("\n")
         }

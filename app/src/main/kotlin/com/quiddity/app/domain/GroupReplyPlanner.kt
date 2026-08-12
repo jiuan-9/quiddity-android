@@ -120,7 +120,11 @@ object GroupReplyPlanner {
             max_tokens = maxTokens,
             temperature = temperature,
             stream = true,
-            reasoning_effort = null,
+            reasoning_effort = if (access.model.contains("deepseek", ignoreCase = true)) {
+                com.quiddity.app.util.QuiddityConstants.reasoningEffortForDepth(thinkingDepth)
+            } else {
+                null
+            },
             tools = if (useSearchTool) listOf(PromptBuilder.buildSearchChatTool()) else null,
             tool_choice = if (useSearchTool) "auto" else null
         )
@@ -139,7 +143,11 @@ object GroupReplyPlanner {
                 max_output_tokens = maxTokens,
                 temperature = temperature,
                 stream = true,
-                reasoning_effort = null,
+                reasoning_effort = if (access.model.contains("deepseek", ignoreCase = true)) {
+                    com.quiddity.app.util.QuiddityConstants.reasoningEffortForDepth(thinkingDepth)
+                } else {
+                    null
+                },
                 tools = responsesTools
             )
         }

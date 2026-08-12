@@ -41,9 +41,11 @@ object LocalThinker {
         val markers = listOf(
             "未获得", "未找到", "失败", "无法", "不存在", "尚未", "拒绝",
             "需要用户确认", "执行失败", "读取失败", "未启用", "不可用", "无效",
-            "异常", "报错", "未授权", "未开启"
+            "异常", "报错", "未授权", "未开启", "超时",
+            "error", "failed", "failure", "denied", "permission", "unauthorized",
+            "not found", "not granted", "exception", "timeout", "empty", "null"
         )
-        return markers.any { t.contains(it) }
+        return markers.any { t.contains(it, ignoreCase = true) }
     }
 
 }

@@ -73,6 +73,12 @@ object QuiddityConstants {
     const val THINKING_DEPTH_SHALLOW = "SHALLOW"
     /** 思考深度：深（reasoning_effort=high）。 */
     const val THINKING_DEPTH_DEEP = "DEEP"
+    /** 思考深度 → API reasoning_effort（浅=low，深=high；null = 不携带，模型默认）。 */
+    fun reasoningEffortForDepth(depth: String?): String? = when (depth) {
+        THINKING_DEPTH_DEEP -> "high"
+        THINKING_DEPTH_SHALLOW -> "low"
+        else -> null
+    }
 
     /** 单条消息 Token 上下界。 */
     const val MIN_SINGLE_MESSAGE_TOKENS = 32

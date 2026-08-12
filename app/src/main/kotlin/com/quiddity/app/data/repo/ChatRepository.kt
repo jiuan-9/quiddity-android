@@ -280,9 +280,15 @@ class ChatRepository(
                 maxTokens = maxTokens,
                 temperature = temperature,
                 responsesUrl = resolveWebSearch(settings, conv),
-                // 内部思考：不发送 reasoning_effort（该服务端不认，会空响应）；
-                // 思考内容由提示词引导模型输出【思考】/【回答】，客户端按标记拆分显示。
-                reasoningEffort = null,
+                // 思考深度映射到 API reasoning_effort（浅=low / 深=high），
+                // 控制模型内部推理强度；仅 DeepSeek 模型携带，其他模型忽略。
+                reasoningEffort = if (conv.thinkingEnabled &&
+                    access.model.contains("deepseek", ignoreCase = true)
+                ) {
+                    QuiddityConstants.reasoningEffortForDepth(conv.thinkingDepth)
+                } else {
+                    null
+                },
                 tools = agentTools ?: if (toolStrategyActive) {
                     listOf(
                         PromptBuilder.buildReadMemoryTool(),
@@ -377,7 +383,13 @@ class ChatRepository(
                 maxTokens = maxTokens,
                 temperature = temperature,
                 responsesUrl = resolveWebSearch(settings, conv),
-                reasoningEffort = null,
+                reasoningEffort = if (conv.thinkingEnabled &&
+                    access.model.contains("deepseek", ignoreCase = true)
+                ) {
+                    QuiddityConstants.reasoningEffortForDepth(conv.thinkingDepth)
+                } else {
+                    null
+                },
                 tools = agentTools ?: if (toolStrategyActive) {
                     listOf(
                         PromptBuilder.buildReadMemoryTool(),
@@ -449,9 +461,21 @@ class ChatRepository(
         contentTransform: (String) -> String = { it }
     ): Boolean {
         val apiUrl = request.apiUrl
+        var lastError: Throwable? = null
+        val recordFailure: suspend (Throwable) -> Unit = { t -> lastError = t }
         val firstRoundCalls = runSingleStream(
-            api, apiUrl, apiKey, request, coordinator, onEvent, contentTransform, thinkingActive
-        ) ?: return false
+            api, apiUrl, apiKey, request, coordinator, onEvent, contentTransform, thinkingActive,
+            onFailure = recordFailure
+        )
+        if (firstRoundCalls == null) {
+            appendFailureMessage(
+                conv, coordinator, onEvent,
+                lastError?.let {
+                    "回复失败：${it.message?.take(200) ?: it.javaClass.simpleName}。请检查网络或模型配置后重试。"
+                } ?: "回复失败，请检查网络或模型配置后重试。"
+            )
+            return false
+        }
         if (firstRoundCalls.isNotEmpty()) {
             firstRoundCalls.forEach { call ->
                 onEvent(Event.ToolUse(call.name))
@@ -468,13 +492,27 @@ class ChatRepository(
                 // 第二轮不再聚合工具调用（模型若再次请求工具则忽略），直接流式输出最终答复
                 // 工具回填失败不影响主流程：派发错误并结束本轮，避免异常上抛导致崩溃
                 emitError(onEvent, t, coordinator.snapshot().joinToString("\n") { it.content })
+                appendFailureMessage(
+                    conv, coordinator, onEvent,
+                    "工具结果准备失败，无法继续回复（${t.message?.take(120) ?: t.javaClass.simpleName}）。请重试。"
+                )
                 return false
             }
             // 第二轮失败时错误事件已派发，与第一轮失败语义一致：不派发 Done
             val secondRoundOk = runSingleStream(
-                api, apiUrl, apiKey, secondRequest, coordinator, onEvent, contentTransform, thinkingActive
+                api, apiUrl, apiKey, secondRequest, coordinator, onEvent, contentTransform, thinkingActive,
+                onFailure = recordFailure
             )
-            if (secondRoundOk == null) {
+            if (secondRoundOk == null || coordinator.snapshot().none {
+                    it.role == Role.ASSISTANT && !it.isNotice && !it.isThinking && it.content.isNotBlank()
+                }
+            ) {
+                appendFailureMessage(
+                    conv, coordinator, onEvent,
+                    lastError?.let {
+                        "工具已执行，但模型继续回复失败：${it.message?.take(200) ?: it.javaClass.simpleName}。请重试或检查模型配置。"
+                    } ?: "工具已执行，但模型未输出回复内容。请重试。"
+                )
                 return false
             }
         }
@@ -524,7 +562,8 @@ class ChatRepository(
         coordinator: StreamCoordinator,
         onEvent: suspend (Event) -> Unit,
         contentTransform: (String) -> String = { it },
-        thinkingActive: Boolean = true
+        thinkingActive: Boolean = true,
+        onFailure: (suspend (Throwable) -> Unit)? = null
     ): List<ChatStreamParser.AggregatedToolCall>? {
         var toolCalls: List<ChatStreamParser.AggregatedToolCall> = emptyList()
         var truncated = false
@@ -575,9 +614,34 @@ class ChatRepository(
             throw c
         } catch (t: Throwable) {
             emitError(onEvent, t, coordinator.snapshot().joinToString("\n") { it.content })
+            onFailure?.invoke(t)
             return null
         }
         return toolCalls
+    }
+
+    /**
+     * 回复失败兜底：在聊天界面追加一条可见的错误消息（isError 样式），
+     * 避免工具已执行 / 请求失败后模型静默无话、用户只看到一闪而过的 Toast。
+     */
+    private suspend fun appendFailureMessage(
+        conv: Conversation,
+        coordinator: StreamCoordinator,
+        onEvent: suspend (Event) -> Unit,
+        text: String
+    ) {
+        if (coordinator.snapshot().any { it.isError && it.content == text }) return
+        val msg = Message(
+            id = IdGenerator.newId(IdGenerator.Prefix.AI_MESSAGE),
+            conversationId = conv.id,
+            role = Role.ASSISTANT,
+            content = text,
+            timestamp = System.currentTimeMillis(),
+            isError = true,
+            isStreaming = false
+        )
+        onEvent(Event.NewMessage(msg))
+        onEvent(Event.CompleteMessage(msg))
     }
 
     /**
