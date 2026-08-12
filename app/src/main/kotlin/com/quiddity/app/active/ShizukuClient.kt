@@ -163,9 +163,17 @@ class ShizukuClient(private val context: Context) : ShizukuShell {
         private const val REQUEST_CODE = 1101
         private const val BIND_TIMEOUT_MS = 10_000L
 
-        fun isInstalled(context: Context): Boolean = runCatching {
-            context.packageManager.getPackageInfo("moe.shizuku.xyz", 0)
-            true
-        }.getOrDefault(false)
+        fun isInstalled(context: Context): Boolean {
+            val packages = listOf(
+                "moe.shizuku.privileged.api",
+                "moe.shizuku.xyz"
+            )
+            return packages.any { pkg ->
+                runCatching {
+                    context.packageManager.getPackageInfo(pkg, 0)
+                    true
+                }.getOrDefault(false)
+            }
+        }
     }
 }
