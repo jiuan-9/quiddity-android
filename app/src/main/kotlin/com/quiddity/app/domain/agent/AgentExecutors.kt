@@ -4,6 +4,7 @@ import android.app.AppOpsManager
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.pm.PackageManager
+import android.net.TrafficStats
 import android.os.Process
 import android.os.Build
 
@@ -135,6 +136,109 @@ class AgentExecutors(
         return pkg?.let { "当前前台应用：$it" } ?: "未检测到前台应用"
     }
 
+    fun appPermissions(pkg: String): String {
+        val info = packageInfo(pkg, PackageManager.GET_PERMISSIONS) ?: return "未找到应用 $pkg"
+        val flags = info.requestedPermissionsFlags ?: IntArray(0)
+        val perms = info.requestedPermissions ?: emptyArray()
+        val entries = perms.mapIndexedNotNull { index, name ->
+            if (name.isBlank()) null
+            else name to ((flags.getOrNull(index) ?: 0) and REQUESTED_PERMISSION_GRANTED_FLAG != 0)
+        }
+        if (entries.isEmpty()) return "$pkg 未声明任何权限"
+        return "$pkg 权限清单（${entries.count { it.second }}/${entries.size} 已授予）：\n" +
+            formatPermissions(entries)
+    }
+
+    fun appInstallInfo(pkg: String): String {
+        val info = packageInfo(pkg, 0) ?: return "未找到应用 $pkg"
+        val installer = if (Build.VERSION.SDK_INT >= 30) {
+            runCatching { context.packageManager.getInstallSourceInfo(pkg).installingPackageName }
+                .getOrNull()
+        } else {
+            @Suppress("DEPRECATION")
+            context.packageManager.getInstallerPackageName(pkg)
+        }
+        return "$pkg 安装信息：\n" + formatInstallInfo(info.firstInstallTime, info.lastUpdateTime, installer)
+    }
+
+    suspend fun appBattery(pkg: String): String {
+        val shell = shizuku ?: return "未获得 Shizuku 授权，无法读取耗电统计"
+        if (!shell.isGranted()) return "未获得 Shizuku 授权，无法读取耗电统计"
+        val result = shell.exec(arrayOf("dumpsys", "batterystats", "--package", pkg))
+        if (result.exitCode != 0) {
+            return "读取耗电统计失败（退出码 ${result.exitCode}）：${result.output.ifBlank { "请检查包名" }}"
+        }
+        val lines = parseBatteryBlock(result.output)
+        return if (lines.isEmpty()) {
+            "未找到 $pkg 的耗电统计（系统统计可能未启用，或该应用暂无后台耗电记录）"
+        } else {
+            "$pkg 耗电统计：\n" + lines.joinToString("\n")
+        }
+    }
+
+    fun trafficRanking(limit: Int): String {
+        if (!hasUsageAccess()) {
+            return "未获得「使用情况访问」权限：请在系统设置 → 应用 → 特殊应用权限中开启"
+        }
+        val apps = runCatching {
+            val pm = context.packageManager
+            val infos = if (Build.VERSION.SDK_INT >= 33) {
+                pm.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(0L))
+            } else {
+                @Suppress("DEPRECATION")
+                pm.getInstalledApplications(0)
+            }
+            infos.map { info -> info.packageName to info.uid }
+        }.getOrDefault(emptyList())
+        val entries = apps.mapNotNull { (pkg, uid) ->
+            val rx = TrafficStats.getUidRxBytes(uid)
+            val tx = TrafficStats.getUidTxBytes(uid)
+            val rxBytes = rx.takeIf { it > 0 } ?: 0L
+            val txBytes = tx.takeIf { it > 0 } ?: 0L
+            if (rxBytes + txBytes <= 0L) null else Triple(pkg, rxBytes, txBytes)
+        }
+        if (entries.isEmpty()) return "未获取到流量统计（设备可能不支持按应用统计）"
+        return formatTraffic(entries, limit.coerceIn(1, 50))
+    }
+
+    fun fileAccess(pkg: String): String {
+        val info = packageInfo(pkg, PackageManager.GET_PERMISSIONS) ?: return "未找到应用 $pkg"
+        val flags = info.requestedPermissionsFlags ?: IntArray(0)
+        val perms = info.requestedPermissions ?: emptyArray()
+        val entries = perms.mapIndexedNotNull { index, name ->
+            if (name in FILE_ACCESS_PERMISSIONS) {
+                name to ((flags.getOrNull(index) ?: 0) and REQUESTED_PERMISSION_GRANTED_FLAG != 0)
+            } else {
+                null
+            }
+        }
+        if (entries.isEmpty()) return "$pkg 未声明文件/存储相关权限"
+        val granted = entries.count { it.second }
+        val summary = buildString {
+            append("文件访问能力：已授予 $granted/${entries.size} 项")
+            if (entries.any { it.first == "android.permission.MANAGE_EXTERNAL_STORAGE" && it.second }) {
+                append("（可管理全部文件）")
+            }
+        }
+        return "$pkg $summary：\n" + formatPermissions(entries)
+    }
+
+    suspend fun screenshot(): String =
+        com.quiddity.app.active.ScreenReaderService.captureScreenshot(context)
+
+    private fun packageInfo(pkg: String, flags: Int): android.content.pm.PackageInfo? =
+        runCatching {
+            if (Build.VERSION.SDK_INT >= 33) {
+                context.packageManager.getPackageInfo(
+                    pkg,
+                    PackageManager.PackageInfoFlags.of(flags.toLong())
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                context.packageManager.getPackageInfo(pkg, flags)
+            }
+        }.getOrNull()
+
     suspend fun disableApp(pkg: String): String =
         writeViaShizuku(disableCommand(pkg), "已停用 $pkg")
 
@@ -169,6 +273,9 @@ class AgentExecutors(
     companion object {
 
         private const val DAY_MS = 86_400_000L
+
+        /** PackageInfo.requestedPermissionsFlags：该权限已授予（API 23+ 隐藏常量值）。 */
+        private const val REQUESTED_PERMISSION_GRANTED_FLAG = 0x00000002
 
         /** 按 query 大小写不敏感过滤（包名/标签），按标签排序输出「包名：标签」。 */
         fun formatApps(apps: List<Pair<String, String>>, query: String?): String {
@@ -205,6 +312,91 @@ class AgentExecutors(
                     val seconds = (ms % 60_000) / 1_000
                     if (minutes > 0) "$pkg：$minutes 分钟 $seconds 秒" else "$pkg：$seconds 秒"
                 }
+
+        private val FILE_ACCESS_PERMISSIONS = setOf(
+            "android.permission.READ_EXTERNAL_STORAGE",
+            "android.permission.WRITE_EXTERNAL_STORAGE",
+            "android.permission.MANAGE_EXTERNAL_STORAGE",
+            "android.permission.READ_MEDIA_IMAGES",
+            "android.permission.READ_MEDIA_VIDEO",
+            "android.permission.READ_MEDIA_AUDIO",
+            "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
+            "android.permission.ACCESS_MEDIA_LOCATION"
+        )
+
+        private val BATTERY_KEYWORDS = listOf(
+            "power:", "cpu:", "wake_lock:", "wifi:", "mobile:", "gps:",
+            "radio:", "sensor:", "wakeup:", "bluetooth:"
+        )
+
+        /** 权限条目格式化：权限简称：已授予/未授予。 */
+        fun formatPermissions(entries: List<Pair<String, Boolean>>): String =
+            entries.joinToString("\n") { (name, granted) ->
+                val short = name.removePrefix("android.permission.")
+                "$short：${if (granted) "已授予" else "未授予"}"
+            }
+
+        /** 安装信息格式化：首次安装 / 最近更新 / 安装来源。 */
+        fun formatInstallInfo(installedAt: Long, updatedAt: Long, installer: String?): String = buildString {
+            append("首次安装：").append(formatEpoch(installedAt))
+            append("\n最近更新：").append(formatEpoch(updatedAt))
+            append("\n安装来源：").append(
+                installer?.takeIf { it.isNotBlank() }
+                    ?: "未知（可能为系统预装或 adb 安装）"
+            )
+        }
+
+        /** 流量条目格式化：按合计流量倒序，输出接收/发送/合计。 */
+        fun formatTraffic(entries: List<Triple<String, Long, Long>>, limit: Int): String =
+            entries
+                .sortedByDescending { (_, rx, tx) -> rx + tx }
+                .take(limit)
+                .joinToString("\n") { (pkg, rx, tx) ->
+                    "$pkg：接收 ${formatBytes(rx)} / 发送 ${formatBytes(tx)}（合计 ${formatBytes(rx + tx)}）"
+                }
+
+        /** 字节数格式化：B / KB / MB / GB。 */
+        fun formatBytes(bytes: Long): String = when {
+            bytes >= 1L shl 30 -> String.format(java.util.Locale.US, "%.1f GB", bytes.toDouble() / (1L shl 30))
+            bytes >= 1L shl 20 -> String.format(java.util.Locale.US, "%.1f MB", bytes.toDouble() / (1L shl 20))
+            bytes >= 1L shl 10 -> String.format(java.util.Locale.US, "%.1f KB", bytes.toDouble() / (1L shl 10))
+            else -> "$bytes B"
+        }
+
+        /** 从 dumpsys batterystats 输出中提取首个 Uid 块的关键耗电行。 */
+        fun parseBatteryBlock(output: String): List<String> {
+            val result = mutableListOf<String>()
+            var seenHeader = false
+            output.lineSequence().forEach { line ->
+                val trimmed = line.trim()
+                if (!seenHeader) {
+                    if (trimmed.startsWith("Uid u0a") && trimmed.endsWith(":")) {
+                        seenHeader = true
+                        result.add(trimmed)
+                    }
+                    return@forEach
+                }
+                if (trimmed.startsWith("Uid u0a") && trimmed.endsWith(":")) {
+                    result.add(trimmed)
+                    return@forEach
+                }
+                if (line.isBlank()) return@forEach
+                if (!line[0].isWhitespace()) return@forEach
+                if (result.size >= 16) return@forEach
+                if (BATTERY_KEYWORDS.any { trimmed.startsWith(it) }) result.add(trimmed)
+            }
+            return result
+        }
+
+        private fun formatEpoch(ms: Long): String =
+            if (ms <= 0L) {
+                "未知"
+            } else {
+                java.text.SimpleDateFormat(
+                    "yyyy-MM-dd HH:mm",
+                    java.util.Locale.getDefault()
+                ).format(java.util.Date(ms))
+            }
 
         /** 超长文本截断；maxChars 为 null 或超过文本长度时原样返回。 */
         fun truncate(text: String, maxChars: Int?): String {

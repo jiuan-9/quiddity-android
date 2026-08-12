@@ -132,10 +132,10 @@ class AgentToolRegistry(
     companion object {
 
         /**
-         * V1 工具清单（10 个）。
+         * V1 工具清单（16 个）。
          *
-         * 读取类执行器在 P0 由 AgentExecutors 提供；写入类依赖 Shizuku（P1）。
-         * 此处 execute 为占位实现，后续任务接入真实执行器。
+         * 读取类执行器由 AgentExecutors 提供；写入类依赖 Shizuku。
+         * 新增工具遵循：BASIC 读取类默认开启，ADVANCED 写入类默认关闭且需确认。
          */
         fun defaultRegistry(executors: AgentExecutors? = null): AgentToolRegistry {
             val tools = listOf(
@@ -220,6 +220,104 @@ class AgentToolRegistry(
                     execute = { _, _ ->
                         executors?.foregroundApp()
                             ?: "尚未接入执行器"
+                    }
+                ),
+                AgentTool(
+                    name = "app_permissions",
+                    description = "列出指定应用的权限清单（每项是否已授予）。",
+                    params = paramsObject(
+                        properties = mapOf(
+                            "pkg" to stringParam("目标应用包名")
+                        ),
+                        required = listOf("pkg")
+                    ),
+                    level = AgentPermissionLevel.BASIC,
+                    confirm = AgentConfirmPolicy.AUTO,
+                    enabledByDefault = true,
+                    execute = { _, args ->
+                        val pkg = argString(args, "pkg").orEmpty()
+                        executors?.appPermissions(pkg) ?: "尚未接入执行器"
+                    }
+                ),
+                AgentTool(
+                    name = "app_install_info",
+                    description = "查询指定应用的安装时间与安装来源。",
+                    params = paramsObject(
+                        properties = mapOf(
+                            "pkg" to stringParam("目标应用包名")
+                        ),
+                        required = listOf("pkg")
+                    ),
+                    level = AgentPermissionLevel.BASIC,
+                    confirm = AgentConfirmPolicy.AUTO,
+                    enabledByDefault = true,
+                    execute = { _, args ->
+                        val pkg = argString(args, "pkg").orEmpty()
+                        executors?.appInstallInfo(pkg) ?: "尚未接入执行器"
+                    }
+                ),
+                AgentTool(
+                    name = "app_battery",
+                    description = "查询指定应用的后台耗电统计（需要 Shizuku 授权）。",
+                    params = paramsObject(
+                        properties = mapOf(
+                            "pkg" to stringParam("目标应用包名")
+                        ),
+                        required = listOf("pkg")
+                    ),
+                    level = AgentPermissionLevel.BASIC,
+                    confirm = AgentConfirmPolicy.AUTO,
+                    enabledByDefault = true,
+                    execute = { _, args ->
+                        val pkg = argString(args, "pkg").orEmpty()
+                        executors?.appBattery(pkg) ?: "尚未接入执行器"
+                    }
+                ),
+                AgentTool(
+                    name = "traffic_ranking",
+                    description = "按网络流量排行已安装应用（接收+发送，可选返回条数）。",
+                    params = paramsObject(
+                        properties = mapOf(
+                            "limit" to intParam("返回前 N 条，可选，默认 20")
+                        ),
+                        required = emptyList()
+                    ),
+                    level = AgentPermissionLevel.BASIC,
+                    confirm = AgentConfirmPolicy.AUTO,
+                    enabledByDefault = true,
+                    execute = { _, args ->
+                        executors?.trafficRanking(argInt(args, "limit") ?: 20) ?: "尚未接入执行器"
+                    }
+                ),
+                AgentTool(
+                    name = "file_access",
+                    description = "列出指定应用的文件/存储访问能力（相关权限是否授予）。",
+                    params = paramsObject(
+                        properties = mapOf(
+                            "pkg" to stringParam("目标应用包名")
+                        ),
+                        required = listOf("pkg")
+                    ),
+                    level = AgentPermissionLevel.BASIC,
+                    confirm = AgentConfirmPolicy.AUTO,
+                    enabledByDefault = true,
+                    execute = { _, args ->
+                        val pkg = argString(args, "pkg").orEmpty()
+                        executors?.fileAccess(pkg) ?: "尚未接入执行器"
+                    }
+                ),
+                AgentTool(
+                    name = "screenshot",
+                    description = "截取当前屏幕并保存为图片，返回图片保存路径（需要无障碍权限与 Android 11+）。",
+                    params = paramsObject(
+                        properties = emptyMap(),
+                        required = emptyList()
+                    ),
+                    level = AgentPermissionLevel.BASIC,
+                    confirm = AgentConfirmPolicy.AUTO,
+                    enabledByDefault = true,
+                    execute = { _, _ ->
+                        executors?.screenshot() ?: "尚未接入执行器"
                     }
                 ),
                 AgentTool(
@@ -327,6 +425,12 @@ class AgentToolRegistry(
             "read_notifications" -> "读取通知"
             "usage_stats" -> "用量统计"
             "foreground_app" -> "前台应用"
+            "app_permissions" -> "应用权限清单"
+            "app_install_info" -> "安装时间与来源"
+            "app_battery" -> "后台耗电"
+            "traffic_ranking" -> "流量排行"
+            "file_access" -> "文件访问能力"
+            "screenshot" -> "截图"
             "disable_app" -> "停用应用"
             "enable_app" -> "启用应用"
             "set_appops" -> "设置应用权限"
@@ -342,6 +446,12 @@ class AgentToolRegistry(
             "read_notifications" -> "正在读取通知"
             "usage_stats" -> "正在统计应用用量"
             "foreground_app" -> "正在读取前台应用"
+            "app_permissions" -> "正在查询应用权限"
+            "app_install_info" -> "正在查询安装信息"
+            "app_battery" -> "正在统计后台耗电"
+            "traffic_ranking" -> "正在统计流量排行"
+            "file_access" -> "正在查询文件访问能力"
+            "screenshot" -> "正在截取屏幕"
             "disable_app" -> "正在停用应用"
             "enable_app" -> "正在启用应用"
             "set_appops" -> "正在修改应用权限"

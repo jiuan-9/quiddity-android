@@ -79,6 +79,12 @@ object AgentSecurity {
             "usage_stats" -> switches.sense_usage
             "foreground_app" -> switches.sense_usage
             "read_system" -> switches.read_system
+            "app_permissions" -> switches.read_app_info
+            "app_install_info" -> switches.read_app_info
+            "file_access" -> switches.read_app_info
+            "app_battery" -> switches.read_battery
+            "traffic_ranking" -> switches.read_traffic
+            "screenshot" -> switches.read_screenshot
             "disable_app" -> switches.write_disable
             "enable_app" -> switches.write_disable
             "set_appops" -> switches.write_appops

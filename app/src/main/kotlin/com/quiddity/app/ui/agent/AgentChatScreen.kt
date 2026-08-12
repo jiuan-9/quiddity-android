@@ -176,6 +176,15 @@ fun AgentChatScreen(
     val listState = rememberLazyListState()
     var showHamburger by rememberSaveable { mutableStateOf(false) }
     var showCharacterPicker by rememberSaveable { mutableStateOf(false) }
+    var characterPickerClosing by rememberSaveable { mutableStateOf(false) }
+    // 关闭选择角色面板的统一切口：先关面板并标记「退出动画中」，
+    // 动画期间系统返回键只消费不退出会话，避免连续两次返回直接跳回会话列表。
+    fun closeCharacterPicker() {
+        if (showCharacterPicker) {
+            showCharacterPicker = false
+            characterPickerClosing = true
+        }
+    }
     // 打开会话内设置 / 选择角色等覆盖层时立即收起输入法，焦点已不在输入框
     val keyboardController = LocalSoftwareKeyboardController.current
     LaunchedEffect(showHamburger, showCharacterPicker) {
@@ -242,12 +251,19 @@ fun AgentChatScreen(
         if (messages.any { !it.isNotice }) listState.animateScrollToItem(0)
     }
 
-    BackHandler(enabled = showCharacterPicker) {
-        showCharacterPicker = false
+    BackHandler(enabled = showCharacterPicker || characterPickerClosing) {
+        closeCharacterPicker()
     }
 
-    BackHandler(enabled = !isGenerating && !showHamburger && !showCharacterPicker) {
+    BackHandler(enabled = !isGenerating && !showHamburger && !showCharacterPicker && !characterPickerClosing) {
         dragController.animateBackAndExit()
+    }
+
+    LaunchedEffect(characterPickerClosing) {
+        if (characterPickerClosing) {
+            kotlinx.coroutines.delay(Motion.DurationPageTransition + 80L)
+            characterPickerClosing = false
+        }
     }
 
     Box(
@@ -506,6 +522,7 @@ fun AgentChatScreen(
         // Agent 的「AI 人设」行 = 选择角色（角色库点选），不进入从零编辑表单
         onPersonaOverride = {
             dragController.closeMenu()
+            characterPickerClosing = false
             showCharacterPicker = true
         }
     )
@@ -528,7 +545,7 @@ fun AgentChatScreen(
                     .fillMaxSize()
                     .background(Color.Black.copy(alpha = 0.4f))
                     .pointerInput(Unit) {
-                        detectTapGestures { showCharacterPicker = false }
+                        detectTapGestures { closeCharacterPicker() }
                     }
             )
             Surface(
@@ -543,7 +560,7 @@ fun AgentChatScreen(
                 AgentCharacterPicker(
                     conversation = conversation,
                     viewModel = viewModel,
-                    onDismiss = { showCharacterPicker = false }
+                    onDismiss = { closeCharacterPicker() }
                 )
             }
         }
@@ -1022,23 +1039,35 @@ private fun AgentCharacterPicker(
     val colorScheme = MaterialTheme.colorScheme
     var candidates by remember { mutableStateOf<List<AgentCharacterCandidate>?>(null) }
     LaunchedEffect(Unit) {
-        // 角色 = 角色库全部角色（每个私聊人设已同步为唯一角色卡 uid，直接引用）；
-        // 兜底：历史私聊尚未回填角色卡时仍按会话人设合成候选
+        // 角色 = 角色库角色 + 私聊会话人设（与现有角色列表同一口径）。
+        // - 只展示被活跃会话引用的角色卡，或能按名字找回私聊会话的孤儿卡（旧数据
+        //   角色卡未回填引用时按名匹配补全），避免「已删除会话的角色卡」残留；
+        // - 未回填角色卡的历史私聊仍按会话人设合成候选，保证名单完整。
         val library = runCatching {
             ServiceLocator.characterRepository.listCharacters()
         }.getOrDefault(emptyList())
         val libraryIds = library.map { it.id }.toSet()
-        val solos = ServiceLocator.conversationRepository.conversations.value
+        val allConversations = ServiceLocator.conversationRepository.conversations.value
+        val solos = allConversations
             .filter {
                 it.type == com.quiddity.app.data.model.ConversationType.SOLO &&
                     it.id != conversation?.id
             }
+        val referencedIds = allConversations.mapNotNull { it.characterId }.toSet()
+        val unlinkedSolos = solos.filter { it.characterId.isNullOrBlank() }
+        // 孤儿卡按名字匹配未绑定会话：card id -> 匹配的会话 id
+        val cardToConv = buildMap {
+            library.forEach { c ->
+                if (c.id in referencedIds) return@forEach
+                val matched = unlinkedSolos.firstOrNull { conv -> characterNameMatches(c, conv) }
+                if (matched != null) put(c.id, matched.id)
+            }
+        }
         candidates = buildList {
             library.forEach { c ->
-                // 过滤无人设内容（仅用户昵称等）的角色卡，避免出现大量「未命名角色」
-                if (c.persona.name.isBlank() && c.persona.character.isBlank() && c.persona.persona.isBlank()) {
-                    return@forEach
-                }
+                // 无内容 / 无引用且名字找不到对应会话 → 视为已删除，不展示
+                if (!characterHasContent(c)) return@forEach
+                if (c.id !in referencedIds && c.id !in cardToConv) return@forEach
                 add(
                     AgentCharacterCandidate(
                         id = c.id,
@@ -1063,9 +1092,11 @@ private fun AgentCharacterPicker(
                 )
             }
             solos.forEach { conv ->
+                // 已被角色卡按名字匹配（该卡已在角色列表中展示），避免重复
+                if (cardToConv.values.contains(conv.id)) return@forEach
                 if (conv.characterId != null && conv.characterId in libraryIds) return@forEach
+                if (!conversationHasContent(conv)) return@forEach
                 val p = conv.persona
-                if (p.name.isBlank() && p.persona.isBlank() && p.character.isBlank()) return@forEach
                 add(
                     AgentCharacterCandidate(
                         id = "conv:${conv.id}",
@@ -1195,6 +1226,37 @@ private fun AgentCharacterPicker(
             }
         }
     }
+}
+
+/** 角色卡是否含人设内容（与私聊同步角色卡的口径一致，含用户人设与记忆）。 */
+private fun characterHasContent(c: com.quiddity.app.data.model.Character): Boolean {
+    val p = c.persona
+    val u = c.userPersona
+    return p.name.isNotBlank() || p.desired.isNotBlank() || p.persona.isNotBlank() ||
+        p.character.isNotBlank() || p.appearance.isNotBlank() || p.worldBackground.isNotBlank() ||
+        u.name.isNotBlank() || u.identity.isNotBlank() || u.gender.isNotBlank() ||
+        u.age.isNotBlank() || u.appearance.isNotBlank() || c.memory.isNotBlank()
+}
+
+/** 私聊会话是否含人设内容（AI 人设 / 用户人设 / 记忆任一非空）。 */
+private fun conversationHasContent(conv: Conversation): Boolean {
+    val p = conv.persona
+    val u = conv.userPersona
+    return p.name.isNotBlank() || p.desired.isNotBlank() || p.persona.isNotBlank() ||
+        p.character.isNotBlank() || p.appearance.isNotBlank() || p.worldBackground.isNotBlank() ||
+        u.name.isNotBlank() || u.identity.isNotBlank() || u.gender.isNotBlank() ||
+        u.age.isNotBlank() || u.appearance.isNotBlank() || conv.memory.isNotBlank()
+}
+
+/** 孤儿角色卡与私聊会话按名字匹配：角色卡名 等于 会话人设名或会话标题。 */
+private fun characterNameMatches(
+    c: com.quiddity.app.data.model.Character,
+    conv: Conversation
+): Boolean {
+    val name = c.persona.name.trim()
+    if (name.isBlank()) return false
+    val convName = conv.persona.name.trim().ifBlank { conv.title.trim() }
+    return convName.isNotBlank() && convName == name
 }
 
 /** 角色候选项：角色库角色或私聊会话合成的人设。 */

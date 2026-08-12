@@ -45,16 +45,20 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.BatteryFull
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DataUsage
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.ManageSearch
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PrivacyTip
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Speed
@@ -465,6 +469,51 @@ fun AgentSettingsScreen(
                                     },
                                     helpText = "打开后，Agent 才能列出你手机上的应用。",
                                     onHelpClick = { helpText = "打开后，Agent 才能列出你手机上的应用。" }
+                                )
+                                ToggleRow(
+                                    icon = Icons.Filled.ManageSearch,
+                                    title = "应用信息",
+                                    subtitle = "权限清单 / 安装时间来源 / 文件访问能力",
+                                    checked = settings.toolSwitches.read_app_info,
+                                    onCheckedChange = { on ->
+                                        scope.launch { store.setToolSwitch("read_app_info", on) }
+                                    },
+                                    helpText = "打开后，Agent 才能查询应用的权限清单、安装时间与来源、文件访问能力。",
+                                    onHelpClick = { helpText = "打开后，Agent 才能查询应用的权限清单、安装时间与来源、文件访问能力。" }
+                                )
+                                ToggleRow(
+                                    icon = Icons.Filled.BatteryFull,
+                                    title = "后台耗电",
+                                    subtitle = "查询应用后台耗电统计",
+                                    checked = settings.toolSwitches.read_battery,
+                                    onCheckedChange = { on ->
+                                        scope.launch { store.setToolSwitch("read_battery", on) }
+                                    },
+                                    helpText = "打开后，Agent 才能查询指定应用的后台耗电（需要 Shizuku 授权）。",
+                                    onHelpClick = { helpText = "打开后，Agent 才能查询指定应用的后台耗电（需要 Shizuku 授权）。" }
+                                )
+                                ToggleRow(
+                                    icon = Icons.Filled.DataUsage,
+                                    title = "流量排行",
+                                    subtitle = "按流量统计已安装应用",
+                                    checked = settings.toolSwitches.read_traffic,
+                                    onCheckedChange = { on ->
+                                        scope.launch { store.setToolSwitch("read_traffic", on) }
+                                    },
+                                    helpText = "打开后，Agent 才能按接收/发送流量排行应用（需要使用情况访问权限）。",
+                                    onHelpClick = { helpText = "打开后，Agent 才能按接收/发送流量排行应用（需要使用情况访问权限）。" }
+                                )
+                                ToggleRow(
+                                    icon = Icons.Filled.PhotoCamera,
+                                    title = "截图",
+                                    subtitle = "截取当前屏幕并保存",
+                                    checked = settings.toolSwitches.read_screenshot,
+                                    onCheckedChange = { on ->
+                                        scope.launch { store.setToolSwitch("read_screenshot", on) }
+                                    },
+                                    helpText = "打开后，Agent 才能截取当前屏幕（需要无障碍权限与 Android 11+）。",
+                                    onHelpClick = { helpText = "打开后，Agent 才能截取当前屏幕（需要无障碍权限与 Android 11+）。" },
+                                    enabled = accessibilityEnabled
                                 )
                                 WriteLockedRow(
                                     title = "停用与启用应用",

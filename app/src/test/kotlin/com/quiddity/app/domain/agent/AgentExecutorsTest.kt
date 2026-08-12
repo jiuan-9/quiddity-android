@@ -159,4 +159,73 @@ class AgentExecutorsTest {
             ).contains("请检查包名与权限")
         )
     }
+
+    @Test
+    fun formatPermissions_showsGrantedStateWithShortNames() {
+        val out = AgentExecutors.formatPermissions(
+            listOf(
+                "android.permission.READ_EXTERNAL_STORAGE" to true,
+                "android.permission.CAMERA" to false
+            )
+        )
+        assertTrue(out.contains("READ_EXTERNAL_STORAGE：已授予"))
+        assertTrue(out.contains("CAMERA：未授予"))
+        assertTrue(!out.contains("android.permission.READ_EXTERNAL_STORAGE：已授予"))
+    }
+
+    @Test
+    fun formatInstallInfo_listsTimesAndSource() {
+        val out = AgentExecutors.formatInstallInfo(0L, 1_750_000_000_000L, "com.android.vending")
+        assertTrue(out.contains("首次安装：未知"))
+        assertTrue(out.contains("最近更新："))
+        assertTrue(out.contains("安装来源：com.android.vending"))
+        val unknown = AgentExecutors.formatInstallInfo(0L, 0L, null)
+        assertTrue(unknown.contains("安装来源：未知"))
+    }
+
+    @Test
+    fun formatTraffic_sortsByTotalAndFormatsBytes() {
+        val entries = listOf(
+            Triple("com.small", 500L, 200L),
+            Triple("com.big", 3L shl 20, 1L shl 20)
+        )
+        val out = AgentExecutors.formatTraffic(entries, 10)
+        val bigPos = out.indexOf("com.big")
+        val smallPos = out.indexOf("com.small")
+        assertTrue(bigPos in 0 until smallPos)
+        assertTrue(out.contains("3.0 MB"))
+        assertTrue(out.contains("700 B"))
+        val limited = AgentExecutors.formatTraffic(entries, 1)
+        assertTrue(limited.contains("com.big"))
+        assertTrue(!limited.contains("com.small"))
+    }
+
+    @Test
+    fun formatBytes_convertsUnits() {
+        assertEquals("0 B", AgentExecutors.formatBytes(0L))
+        assertEquals("500 B", AgentExecutors.formatBytes(500L))
+        assertEquals("1.5 KB", AgentExecutors.formatBytes(1536L))
+        assertEquals("2.0 MB", AgentExecutors.formatBytes(2L shl 20))
+        assertEquals("1.0 GB", AgentExecutors.formatBytes(1L shl 30))
+    }
+
+    @Test
+    fun parseBatteryBlock_extractsUidPowerLines() {
+        val output = """
+            Per-app battery usage:
+              Uid u0a123:
+                power: 12.3 mAh
+                cpu: 5.2s
+                wake_lock: 3.1s
+                wifi: 1.2s
+            Settings:
+            Estimated power use:
+        """.trimIndent()
+        val lines = AgentExecutors.parseBatteryBlock(output)
+        assertTrue(lines.any { it.startsWith("Uid u0a123") })
+        assertTrue(lines.any { it.startsWith("power: 12.3 mAh") })
+        assertTrue(lines.any { it.startsWith("wake_lock: 3.1s") })
+        assertTrue(!lines.any { it.contains("Settings") })
+        assertEquals(emptyList(), AgentExecutors.parseBatteryBlock("no stats here"))
+    }
 }

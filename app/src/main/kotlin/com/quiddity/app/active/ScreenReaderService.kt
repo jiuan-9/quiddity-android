@@ -3,9 +3,16 @@ package com.quiddity.app.active
 import android.accessibilityservice.AccessibilityService
 import android.content.ComponentName
 import android.content.Context
+import android.graphics.Bitmap
+import android.os.Build
+import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.quiddity.app.domain.agent.AgentSensorState
+import java.io.File
+import java.io.FileOutputStream
+import kotlin.coroutines.resume
+import kotlinx.coroutines.suspendCancellableCoroutine
 
 /*
  * ============================================================================
@@ -42,6 +49,7 @@ class ScreenReaderService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        instance = this
         isConnected = true
         collectScreenText()
     }
@@ -58,6 +66,7 @@ class ScreenReaderService : AccessibilityService() {
     override fun onInterrupt() = Unit
 
     override fun onDestroy() {
+        instance = null
         isConnected = false
         super.onDestroy()
     }
@@ -92,8 +101,64 @@ class ScreenReaderService : AccessibilityService() {
         private const val MAX_SCREEN_CHARS = 8000
 
         @Volatile
+        private var instance: ScreenReaderService? = null
+
+        @Volatile
         var isConnected: Boolean = false
             private set
+
+        /**
+         * 截取当前屏幕并保存 PNG 到应用私有目录，返回保存路径文本；
+         * 失败时返回以「截图」开头的中文错误描述。
+         */
+        suspend fun captureScreenshot(context: Context): String {
+            if (Build.VERSION.SDK_INT < 30) return "截图需要 Android 11 及以上系统"
+            val service = instance ?: return "截图需要先开启无障碍服务（屏幕读取权限）"
+            return suspendCancellableCoroutine { cont ->
+                runCatching {
+                    service.takeScreenshot(
+                        Display.DEFAULT_DISPLAY,
+                        service.mainExecutor,
+                        object : AccessibilityService.TakeScreenshotCallback {
+                            override fun onSuccess(screenshot: AccessibilityService.ScreenshotResult) {
+                                val hardwareBuffer = screenshot.hardwareBuffer
+                                val bitmap = runCatching {
+                                    Bitmap.wrapHardwareBuffer(hardwareBuffer, screenshot.colorSpace)
+                                        ?.copy(Bitmap.Config.ARGB_8888, false)
+                                }.getOrNull()
+                                hardwareBuffer.close()
+                                if (bitmap == null) {
+                                    if (!cont.isCancelled) cont.resume("截图生成失败")
+                                    return
+                                }
+                                val dir = File(context.filesDir, "quiddity-data/screenshots")
+                                    .apply { mkdirs() }
+                                val file = File(dir, "shot_${System.currentTimeMillis()}.png")
+                                val ok = runCatching {
+                                    FileOutputStream(file).use { out ->
+                                        bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+                                    }
+                                    bitmap.recycle()
+                                    true
+                                }.getOrDefault(false)
+                                if (!cont.isCancelled) {
+                                    cont.resume(
+                                        if (ok) "已保存截图：${file.absolutePath}"
+                                        else "截图保存失败"
+                                    )
+                                }
+                            }
+
+                            override fun onFailure(errorCode: Int) {
+                                if (!cont.isCancelled) cont.resume("截图失败（错误码 $errorCode）")
+                            }
+                        }
+                    )
+                }.onFailure {
+                    if (!cont.isCancelled) cont.resume("截图失败：${it.message ?: "未知错误"}")
+                }
+            }
+        }
 
         /** 系统无障碍设置中是否已启用本服务。 */
         fun isServiceEnabled(context: Context): Boolean {

@@ -36,10 +36,14 @@ class AgentToolRegistryTest {
     private fun j(args: String) = args
 
     @Test
-    fun defaultRegistry_containsAllTenToolsWithMetadata() {
-        assertEquals(10, registry.tools().size)
+    fun defaultRegistry_containsAllSixteenToolsWithMetadata() {
+        assertEquals(16, registry.tools().size)
 
-        val basic = listOf("list_apps", "read_screen", "read_notifications", "usage_stats", "foreground_app")
+        val basic = listOf(
+            "list_apps", "read_screen", "read_notifications", "usage_stats", "foreground_app",
+            "app_permissions", "app_install_info", "app_battery", "traffic_ranking",
+            "file_access", "screenshot"
+        )
         val advanced = listOf("disable_app", "enable_app", "set_appops", "force_stop", "uninstall_app")
 
         basic.forEach { name ->
