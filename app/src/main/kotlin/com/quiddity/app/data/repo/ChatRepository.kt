@@ -862,9 +862,15 @@ class ChatRepository(
         } else {
             raw
         }
-        // 超大工具结果（如应用列表/系统日志）会撑爆第二轮请求导致 400：截断并注明
-        return marked.take(MAX_TOOL_RESULT_CHARS).let {
-            if (marked.length > MAX_TOOL_RESULT_CHARS) "$it\n（结果过长，已截断）" else it
+        // 超大工具结果（如应用列表/系统日志）会撑爆第二轮请求导致 400：截断并注明。
+        // 截断对齐到行尾，避免把「包名：显示名」配对条目切成两半、模型只看到半条。
+        return if (marked.length <= MAX_TOOL_RESULT_CHARS) {
+            marked
+        } else {
+            val cut = marked.take(MAX_TOOL_RESULT_CHARS)
+            val lastNewline = cut.lastIndexOf('\n')
+            val clean = if (lastNewline > 0) cut.substring(0, lastNewline) else cut
+            "$clean\n（结果过长，已截断，共 ${marked.length} 字符，如需完整数据请缩小范围重试）"
         }
     }
 

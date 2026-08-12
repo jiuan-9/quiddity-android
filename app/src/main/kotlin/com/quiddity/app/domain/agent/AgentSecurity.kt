@@ -86,6 +86,10 @@ object AgentSecurity {
             "traffic_ranking" -> switches.read_traffic
             "screenshot" -> switches.read_screenshot
             "system_logs" -> switches.read_logs
+            "app_logs" -> switches.read_logs
+            "open_file" -> switches.read_files
+            "reveal_file" -> switches.read_files
+            "move_file", "copy_file", "delete_file" -> switches.write_files
             "disable_app" -> switches.write_disable
             "enable_app" -> switches.write_disable
             "set_appops" -> switches.write_appops
@@ -145,6 +149,13 @@ object AgentSecurity {
                         return "参数「天数」必须为一到九十的整数"
                     }
                 }
+                "src", "dst", "path" -> {
+                    val value = (present as? JsonPrimitive)?.content.orEmpty()
+                    if (value.isBlank()) return "参数「$name」不能为空"
+                    if (value.length > 1024) return "参数「$name」过长"
+                    if (value == "/" || value == "//") return "参数「$name」不能为根目录"
+                    if (value.any { it.code == 0 }) return "参数「$name」包含非法字符"
+                }
             }
         }
         return null
@@ -157,6 +168,8 @@ object AgentSecurity {
      */
     fun whitelistGate(tool: AgentTool, args: JsonObject, whitelist: Set<String>): String? {
         if (tool.level != AgentPermissionLevel.ADVANCED) return null
+        val hasPkgParam = (tool.params["properties"] as? JsonObject)?.containsKey("pkg") == true
+        if (!hasPkgParam) return null
         val pkg = (args["pkg"] as? JsonPrimitive)?.content.orEmpty()
         if (pkg !in whitelist) {
             return "拒绝执行：$pkg 不在白名单内，请先在 Agent 设置中添加"

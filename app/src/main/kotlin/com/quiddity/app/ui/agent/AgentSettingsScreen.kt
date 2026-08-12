@@ -535,6 +535,43 @@ fun AgentSettingsScreen(
                                     onHelpClick = { helpText = "打开后，Agent 才能读取全局系统日志（logcat，覆盖所有应用；需要 Shizuku 授权）。" },
                                     enabled = shizukuReady
                                 )
+                                ToggleRow(
+                                    icon = Icons.Filled.Article,
+                                    title = "应用日志",
+                                    subtitle = toolStatusSubtitle("按应用读取实时日志（需该应用正在运行）", "Shizuku 授权", shizukuReady),
+                                    checked = settings.toolSwitches.read_logs,
+                                    onCheckedChange = { on ->
+                                        scope.launch { store.setToolSwitch("read_logs", on) }
+                                    },
+                                    helpText = "打开后，Agent 才能按应用读取实时日志（logcat --pid）；需要 Shizuku 授权，且目标应用正在运行。",
+                                    onHelpClick = { helpText = "打开后，Agent 才能按应用读取实时日志（logcat --pid）；需要 Shizuku 授权，且目标应用正在运行。" },
+                                    enabled = shizukuReady
+                                )
+                                // ===== 文件操作：读取/跳转与写入分离，均需 Shizuku 授权 =====
+                                ToggleRow(
+                                    icon = Icons.Filled.Description,
+                                    title = "文件读取",
+                                    subtitle = toolStatusSubtitle("读取文件内容 / 跳转文件管理器", "Shizuku 授权", shizukuReady),
+                                    checked = settings.toolSwitches.read_files,
+                                    onCheckedChange = { on ->
+                                        scope.launch { store.setToolSwitch("read_files", on) }
+                                    },
+                                    helpText = "打开后，Agent 才能读取文件内容（后台读取）或用文件管理器跳转定位；需要 Shizuku 授权。",
+                                    onHelpClick = { helpText = "打开后，Agent 才能读取文件内容（后台读取）或用文件管理器跳转定位；需要 Shizuku 授权。" },
+                                    enabled = shizukuReady
+                                )
+                                ToggleRow(
+                                    icon = Icons.Filled.Delete,
+                                    title = "文件写入",
+                                    subtitle = toolStatusSubtitle("移动 / 复制 / 删除文件", "Shizuku 授权", shizukuReady),
+                                    checked = settings.toolSwitches.write_files,
+                                    onCheckedChange = { on ->
+                                        scope.launch { store.setToolSwitch("write_files", on) }
+                                    },
+                                    helpText = "打开后，Agent 才能移动、复制、删除文件；每次操作都会弹窗确认，删除不可恢复。",
+                                    onHelpClick = { helpText = "打开后，Agent 才能移动、复制、删除文件；每次操作都会弹窗确认，删除不可恢复。" },
+                                    enabled = shizukuReady
+                                )
                                 // ===== 写入类：无论是否授权都有开关；Shizuku 未授权/未配对时置灰 =====
                                 ToggleRow(
                                     icon = Icons.Filled.Block,

@@ -36,15 +36,19 @@ class AgentToolRegistryTest {
     private fun j(args: String) = args
 
     @Test
-    fun defaultRegistry_containsAllSeventeenToolsWithMetadata() {
-        assertEquals(17, registry.tools().size)
+    fun defaultRegistry_containsAllTwentyThreeToolsWithMetadata() {
+        assertEquals(23, registry.tools().size)
 
         val basic = listOf(
             "list_apps", "read_screen", "read_notifications", "usage_stats", "foreground_app",
             "app_permissions", "app_install_info", "app_battery", "traffic_ranking",
-            "file_access", "screenshot", "system_logs"
+            "file_access", "screenshot", "system_logs", "app_logs"
         )
-        val advanced = listOf("disable_app", "enable_app", "set_appops", "force_stop", "uninstall_app")
+        val advancedConfirm = listOf(
+            "disable_app", "enable_app", "set_appops", "force_stop", "uninstall_app",
+            "move_file", "copy_file", "delete_file"
+        )
+        val advancedAuto = listOf("open_file", "reveal_file")
 
         basic.forEach { name ->
             val tool = registry[name]
@@ -53,11 +57,18 @@ class AgentToolRegistryTest {
             assertEquals(AgentConfirmPolicy.AUTO, tool.confirm, name)
             assertTrue(tool.enabledByDefault, name)
         }
-        advanced.forEach { name ->
+        advancedConfirm.forEach { name ->
             val tool = registry[name]
             assertNotNull(tool, name)
             assertEquals(AgentPermissionLevel.ADVANCED, tool.level, name)
             assertEquals(AgentConfirmPolicy.ALWAYS_CONFIRM, tool.confirm, name)
+            assertEquals(false, tool.enabledByDefault, name)
+        }
+        advancedAuto.forEach { name ->
+            val tool = registry[name]
+            assertNotNull(tool, name)
+            assertEquals(AgentPermissionLevel.ADVANCED, tool.level, name)
+            assertEquals(AgentConfirmPolicy.AUTO, tool.confirm, name)
             assertEquals(false, tool.enabledByDefault, name)
         }
     }

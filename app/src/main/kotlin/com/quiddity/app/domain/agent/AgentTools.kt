@@ -141,7 +141,7 @@ class AgentToolRegistry(
             val tools = listOf(
                 AgentTool(
                     name = "list_apps",
-                    description = "列出设备上已安装的应用（可选按名称过滤）。",
+                    description = "列出设备上已安装的应用，每条输出「包名：显示名」一一对应（可选按名称过滤）。",
                     params = paramsObject(
                         properties = mapOf(
                             "query" to stringParam("按名称模糊过滤，可选")
@@ -341,6 +341,120 @@ class AgentToolRegistry(
                     }
                 ),
                 AgentTool(
+                    name = "app_logs",
+                    description = "读取指定应用的实时日志（logcat --pid，需要该应用正在运行；需要 Shizuku 授权）。",
+                    params = paramsObject(
+                        properties = mapOf(
+                            "pkg" to stringParam("目标应用包名"),
+                            "maxLines" to intParam("最多返回日志条数，可选，默认 200，上限 2000"),
+                            "filter" to stringParam("按关键字过滤日志，可选")
+                        ),
+                        required = listOf("pkg")
+                    ),
+                    level = AgentPermissionLevel.BASIC,
+                    confirm = AgentConfirmPolicy.AUTO,
+                    enabledByDefault = true,
+                    execute = { _, args ->
+                        executors?.appLogs(
+                            pkg = argString(args, "pkg").orEmpty(),
+                            maxLines = argInt(args, "maxLines"),
+                            filter = argString(args, "filter")
+                        ) ?: "尚未接入执行器"
+                    }
+                ),
+                AgentTool(
+                    name = "open_file",
+                    description = "打开文件并后台读取文本内容（返回文件文本，需要 Shizuku 授权）。",
+                    params = paramsObject(
+                        properties = mapOf(
+                            "path" to stringParam("文件绝对路径，如 /sdcard/Download/note.txt"),
+                            "maxChars" to intParam("最多返回字符数，可选，默认 2000，上限 8000")
+                        ),
+                        required = listOf("path")
+                    ),
+                    level = AgentPermissionLevel.ADVANCED,
+                    confirm = AgentConfirmPolicy.AUTO,
+                    enabledByDefault = false,
+                    execute = { _, args ->
+                        executors?.openFile(
+                            path = argString(args, "path").orEmpty(),
+                            maxChars = argInt(args, "maxChars")
+                        ) ?: "尚未接入执行器"
+                    }
+                ),
+                AgentTool(
+                    name = "reveal_file",
+                    description = "跳转文件：用系统文件管理器打开指定路径定位（需要 Shizuku 授权）。",
+                    params = paramsObject(
+                        properties = mapOf(
+                            "path" to stringParam("文件或目录绝对路径")
+                        ),
+                        required = listOf("path")
+                    ),
+                    level = AgentPermissionLevel.ADVANCED,
+                    confirm = AgentConfirmPolicy.AUTO,
+                    enabledByDefault = false,
+                    execute = { _, args ->
+                        executors?.revealFile(argString(args, "path").orEmpty()) ?: "尚未接入执行器"
+                    }
+                ),
+                AgentTool(
+                    name = "move_file",
+                    description = "移动文件或目录（需要 Shizuku 授权与用户确认）。",
+                    params = paramsObject(
+                        properties = mapOf(
+                            "src" to stringParam("源路径"),
+                            "dst" to stringParam("目标路径")
+                        ),
+                        required = listOf("src", "dst")
+                    ),
+                    level = AgentPermissionLevel.ADVANCED,
+                    confirm = AgentConfirmPolicy.ALWAYS_CONFIRM,
+                    enabledByDefault = false,
+                    execute = { _, args ->
+                        executors?.moveFile(
+                            src = argString(args, "src").orEmpty(),
+                            dst = argString(args, "dst").orEmpty()
+                        ) ?: "尚未接入执行器"
+                    }
+                ),
+                AgentTool(
+                    name = "copy_file",
+                    description = "复制文件或目录（需要 Shizuku 授权与用户确认）。",
+                    params = paramsObject(
+                        properties = mapOf(
+                            "src" to stringParam("源路径"),
+                            "dst" to stringParam("目标路径")
+                        ),
+                        required = listOf("src", "dst")
+                    ),
+                    level = AgentPermissionLevel.ADVANCED,
+                    confirm = AgentConfirmPolicy.ALWAYS_CONFIRM,
+                    enabledByDefault = false,
+                    execute = { _, args ->
+                        executors?.copyFile(
+                            src = argString(args, "src").orEmpty(),
+                            dst = argString(args, "dst").orEmpty()
+                        ) ?: "尚未接入执行器"
+                    }
+                ),
+                AgentTool(
+                    name = "delete_file",
+                    description = "删除文件或目录（不可恢复，需要 Shizuku 授权与用户确认）。",
+                    params = paramsObject(
+                        properties = mapOf(
+                            "path" to stringParam("待删除路径")
+                        ),
+                        required = listOf("path")
+                    ),
+                    level = AgentPermissionLevel.ADVANCED,
+                    confirm = AgentConfirmPolicy.ALWAYS_CONFIRM,
+                    enabledByDefault = false,
+                    execute = { _, args ->
+                        executors?.deleteFile(argString(args, "path").orEmpty()) ?: "尚未接入执行器"
+                    }
+                ),
+                AgentTool(
                     name = "disable_app",
                     description = "停用指定的应用（需要授权通道、白名单与用户确认）。",
                     params = paramsObject(
@@ -452,6 +566,12 @@ class AgentToolRegistry(
             "file_access" -> "文件访问能力"
             "screenshot" -> "截图"
             "system_logs" -> "全局日志"
+            "app_logs" -> "应用日志"
+            "open_file" -> "读取文件"
+            "reveal_file" -> "跳转文件"
+            "move_file" -> "移动文件"
+            "copy_file" -> "复制文件"
+            "delete_file" -> "删除文件"
             "disable_app" -> "停用应用"
             "enable_app" -> "启用应用"
             "set_appops" -> "设置应用权限"
@@ -474,6 +594,12 @@ class AgentToolRegistry(
             "file_access" -> "正在查询文件访问能力"
             "screenshot" -> "正在截取屏幕"
             "system_logs" -> "正在读取全局日志"
+            "app_logs" -> "正在读取应用日志"
+            "open_file" -> "正在读取文件"
+            "reveal_file" -> "正在跳转文件"
+            "move_file" -> "正在移动文件"
+            "copy_file" -> "正在复制文件"
+            "delete_file" -> "正在删除文件"
             "disable_app" -> "正在停用应用"
             "enable_app" -> "正在启用应用"
             "set_appops" -> "正在修改应用权限"

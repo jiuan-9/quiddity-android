@@ -91,11 +91,15 @@ class AgentExecutors(
         return formatApps(apps, query).ifBlank { "未找到匹配的应用" }
     }
 
-    fun readScreen(maxChars: Int?): String {
+    suspend fun readScreen(maxChars: Int?): String {
         if (!com.quiddity.app.active.ScreenReaderService.isConnected) {
             return "读取屏幕需要先开启无障碍服务（屏幕读取权限），请在 Agent 设置 → 权限状态中开启"
         }
-        val text = truncate(AgentSensorState.screenText, maxChars)
+        // 主动采集一次当前屏幕（不依赖窗口变化事件），避免界面静止时读到空内容
+        val text = truncate(
+            com.quiddity.app.active.ScreenReaderService.refreshAndReadScreenText(),
+            maxChars
+        )
         return AgentSecurity.wrapUntrustedScreen(text.ifBlank { "当前屏幕无可见文本" })
     }
 
@@ -193,6 +197,75 @@ class AgentExecutors(
         } ?: lines
         if (filtered.isEmpty()) return "未找到匹配的日志"
         return formatSystemLogs(filtered.takeLast(limit), limit)
+    }
+
+    /** 读取指定应用的实时日志（logcat --pid，需要 Shizuku 授权）。 */
+    suspend fun appLogs(pkg: String, maxLines: Int?, filter: String?): String {
+        val shell = shizuku ?: return "未获得 Shizuku 授权，无法读取应用日志"
+        if (!shell.isGranted()) return "未获得 Shizuku 授权，无法读取应用日志"
+        val limit = (maxLines ?: 200).coerceIn(10, 2000)
+        val pidResult = shell.exec(arrayOf("pidof", pkg))
+        val pid = pidResult.output.trim()
+            .split(Regex("\\s+"))
+            .firstOrNull { it.isNotBlank() && it.all(Char::isDigit) }
+        if (pid == null) {
+            return "应用 $pkg 当前没有运行进程，无法读取实时日志。请先打开该应用再试，或使用「全局日志」查看历史记录。"
+        }
+        val logResult = shell.exec(arrayOf("logcat", "-d", "-t", limit.toString(), "--pid=$pid"))
+        if (logResult.exitCode != 0) {
+            return "读取应用日志失败（退出码 ${logResult.exitCode}）：${logResult.output.ifBlank { "请检查 Shizuku 授权" }}"
+        }
+        val lines = logResult.output.lineSequence().toList()
+        val filtered = filter?.trim()?.takeIf { it.isNotEmpty() }?.let { q ->
+            lines.filter { it.contains(q, ignoreCase = true) }
+        } ?: lines
+        if (filtered.isEmpty()) return "未找到 $pkg 的匹配日志"
+        return formatSystemLogs(filtered.takeLast(limit), limit)
+    }
+
+    /** 移动文件 / 目录（需要 Shizuku 授权，命令数组直传不经过 shell 解析）。 */
+    suspend fun moveFile(src: String, dst: String): String =
+        writeViaShizuku(arrayOf("mv", src, dst), "文件已移动：$src → $dst")
+
+    /** 复制文件 / 目录（需要 Shizuku 授权，命令数组直传不经过 shell 解析）。 */
+    suspend fun copyFile(src: String, dst: String): String =
+        writeViaShizuku(arrayOf("cp", "-r", src, dst), "文件已复制：$src → $dst")
+
+    /** 删除文件 / 目录（需要 Shizuku 授权，命令数组直传不经过 shell 解析）。 */
+    suspend fun deleteFile(path: String): String =
+        writeViaShizuku(arrayOf("rm", "-rf", path), "已删除：$path")
+
+    /** 打开文件并后台读取文本内容（需要 Shizuku 授权）。 */
+    suspend fun openFile(path: String, maxChars: Int?): String {
+        val shell = shizuku ?: return "未获得 Shizuku 授权，无法读取文件"
+        if (!shell.isGranted()) return "未获得 Shizuku 授权，无法读取文件"
+        val result = shell.exec(arrayOf("cat", path))
+        if (result.exitCode != 0) {
+            return "读取文件失败（退出码 ${result.exitCode}）：${result.output.ifBlank { "请检查路径与权限" }}"
+        }
+        val limit = (maxChars ?: 2000).coerceIn(200, 8000)
+        val text = result.output
+        val shown = truncate(text, limit)
+        return if (text.length > limit) "$shown\n（内容过长，已截断，共 ${text.length} 字符）" else shown
+    }
+
+    /** 跳转文件：用系统文件管理器打开指定路径（需要 Shizuku 授权）。 */
+    suspend fun revealFile(path: String): String {
+        val shell = shizuku ?: return "未获得 Shizuku 授权，无法跳转文件"
+        if (!shell.isGranted()) return "未获得 Shizuku 授权，无法跳转文件"
+        val result = shell.exec(
+            arrayOf(
+                "am", "start",
+                "-a", "android.intent.action.VIEW",
+                "-d", "file://$path",
+                "-t", "*/*"
+            )
+        )
+        return if (result.exitCode == 0) {
+            "已打开文件管理器定位：$path"
+        } else {
+            "跳转文件失败（退出码 ${result.exitCode}）：${result.output.ifBlank { "没有可处理该文件的应用" }}"
+        }
     }
 
     fun trafficRanking(limit: Int): String {

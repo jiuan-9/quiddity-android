@@ -60,6 +60,8 @@ data class AgentToolSwitches(
     val read_traffic: Boolean = true,
     val read_screenshot: Boolean = true,
     val read_logs: Boolean = true,
+    val read_files: Boolean = false,
+    val write_files: Boolean = false,
     val write_disable: Boolean = false,
     val write_appops: Boolean = false,
     val write_force_stop: Boolean = false,
@@ -139,6 +141,8 @@ class AgentStore(private val context: Context) {
                 "read_traffic" -> switches.copy(read_traffic = enabled)
                 "read_screenshot" -> switches.copy(read_screenshot = enabled)
                 "read_logs" -> switches.copy(read_logs = enabled)
+                "read_files" -> switches.copy(read_files = enabled)
+                "write_files" -> switches.copy(write_files = enabled)
                 "write_disable" -> switches.copy(write_disable = enabled)
                 "write_appops" -> switches.copy(write_appops = enabled)
                 "write_force_stop" -> switches.copy(write_force_stop = enabled)

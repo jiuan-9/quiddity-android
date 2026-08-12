@@ -71,6 +71,11 @@ class ScreenReaderService : AccessibilityService() {
         super.onDestroy()
     }
 
+    /** 在主线程主动采集一次当前屏幕文本（供 read_screen 工具调用，不依赖窗口事件）。 */
+    internal fun refreshScreenTextNow() {
+        runCatching { collectScreenText() }
+    }
+
     private fun collectScreenText() {
         val root = rootInActiveWindow ?: return
         val sb = StringBuilder()
@@ -106,6 +111,29 @@ class ScreenReaderService : AccessibilityService() {
         @Volatile
         var isConnected: Boolean = false
             private set
+
+        /**
+         * 主动采集一次当前屏幕文本并等待完成。
+         * 界面静止时无障碍事件不触发，screenText 会停留在旧值/空值；
+         * read_screen 工具调用本方法确保拿到的是当前屏幕内容。
+         */
+        suspend fun refreshAndReadScreenText(timeoutMs: Long = 800): String {
+            val service = instance ?: return AgentSensorState.screenText
+            val executor = runCatching { service.mainExecutor }.getOrNull()
+                ?: return AgentSensorState.screenText
+            return kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
+                suspendCancellableCoroutine { cont ->
+                    runCatching {
+                        executor.execute {
+                            service.refreshScreenTextNow()
+                            if (!cont.isCancelled) cont.resume(AgentSensorState.screenText)
+                        }
+                    }.onFailure {
+                        if (!cont.isCancelled) cont.resume(AgentSensorState.screenText)
+                    }
+                }
+            } ?: AgentSensorState.screenText
+        }
 
         /**
          * 截取当前屏幕并保存 PNG 到应用私有目录，返回保存路径文本；
