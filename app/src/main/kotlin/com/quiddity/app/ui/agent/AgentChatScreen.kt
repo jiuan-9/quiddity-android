@@ -530,25 +530,22 @@ fun AgentChatScreen(
         },
         // Agent 的「AI 人设」行 = 选择角色（角色库点选），不进入从零编辑表单
         onPersonaOverride = {
-            dragController.closeMenuImmediately()
+            // 保留汉堡菜单作为上一级：角色面板关闭（返回）后回到菜单
             characterPickerClosing = false
             showCharacterPicker = true
-        }
+        },
+        // 角色面板打开时禁用菜单自身 BackHandler，避免抢先消费返回键
+        backHandlerEnabled = !showCharacterPicker && !characterPickerClosing
     )
 
-    // ===== 选择角色浮层（右侧滑入子面板：半透明遮罩 + 340dp 侧栏，与汉堡菜单一致） =====
-    AnimatedVisibility(
-        visible = showCharacterPicker,
-        enter = slideInHorizontally(
-            initialOffsetX = { it },
-            animationSpec = tween(Motion.DurationPageTransition, easing = Motion.EasingStandard)
-        ) + fadeIn(tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedDecelerate)),
-        exit = slideOutHorizontally(
-            targetOffsetX = { it },
-            animationSpec = tween(Motion.DurationPageTransition, easing = Motion.EasingStandard)
-        ) + fadeOut(tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate))
-    ) {
-        Box(modifier = Modifier.fillMaxSize()) {
+    // ===== 选择角色浮层（与设置面板同款写法：遮罩淡入淡出，340dp 侧栏单独滑入） =====
+    Box(modifier = Modifier.fillMaxSize()) {
+        AnimatedVisibility(
+            visible = showCharacterPicker,
+            enter = fadeIn(tween(Motion.DurationMedium)),
+            exit = fadeOut(tween(Motion.DurationShort)),
+            modifier = Modifier.fillMaxSize()
+        ) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -557,9 +554,21 @@ fun AgentChatScreen(
                         detectTapGestures { closeCharacterPicker() }
                     }
             )
+        }
+        AnimatedVisibility(
+            visible = showCharacterPicker,
+            enter = slideInHorizontally(
+                initialOffsetX = { it },
+                animationSpec = tween(Motion.DurationPageTransition, easing = Motion.EasingStandard)
+            ) + fadeIn(tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedDecelerate)),
+            exit = slideOutHorizontally(
+                targetOffsetX = { it },
+                animationSpec = tween(Motion.DurationPageTransition, easing = Motion.EasingStandard)
+            ) + fadeOut(tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate)),
+            modifier = Modifier.align(Alignment.TopEnd)
+        ) {
             Surface(
                 modifier = Modifier
-                    .align(Alignment.TopEnd)
                     .fillMaxHeight()
                     .width(340.dp),
                 color = MaterialTheme.colorScheme.surface,

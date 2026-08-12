@@ -169,7 +169,9 @@ fun HamburgerMenu(
     onDeleteConversation: () -> Unit = {},
     onJumpToMessage: ((String) -> Unit)? = null,
     // Agent 模式：AI 人设行改为「选择角色」（角色库点选），不进入 PersonaPanel 编辑表单
-    onPersonaOverride: (() -> Unit)? = null
+    onPersonaOverride: (() -> Unit)? = null,
+    // 上层覆盖层（如选择角色面板）打开时禁用菜单 BackHandler，避免抢先消费返回键
+    backHandlerEnabled: Boolean = true
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -217,7 +219,7 @@ fun HamburgerMenu(
     }
 
     // ===== 退回行为：子面板 -> 主菜单；主菜单 -> 关闭 =====
-    BackHandler(enabled = visible) {
+    BackHandler(enabled = visible && backHandlerEnabled) {
         if (currentPanel != null) {
             currentPanel = null
         } else {

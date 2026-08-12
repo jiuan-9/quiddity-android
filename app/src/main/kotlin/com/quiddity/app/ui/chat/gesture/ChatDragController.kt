@@ -208,17 +208,6 @@ class ChatDragController(
         if (menuOpen) animateMenuTo(open = false)
     }
 
-    /**
-     * 立即关闭菜单（无淡出动画）：供覆盖层（如选择角色面板）打开时调用，
-     * 避免菜单淡出窗口内菜单 BackHandler 仍启用、抢先消费返回键。
-     * 覆盖层自带全屏遮罩，菜单淡出被遮挡，无需保留动画。
-     */
-    fun closeMenuImmediately() {
-        menuAlpha = 0f
-        menuOpen = false
-        onMenuVisibilityChange(false)
-    }
-
     // ===== 内部 settle 工具（统一 0.4s） =====
 
     private fun animateContentTo(target: Float, onEnd: (() -> Unit)? = null) {
