@@ -594,12 +594,15 @@ object PromptBuilder {
                 if (systemSeen) {
                     out += ResponsesInputItem(
                         role = "user",
-                        content = "【系统记录】\n${msg.content}"
+                        content = kotlinx.serialization.json.JsonPrimitive("【系统记录】\n${msg.content}")
                     )
                 }
                 systemSeen = true
             } else {
-                out += ResponsesInputItem(role = msg.role, content = msg.content)
+                out += ResponsesInputItem(
+                    role = msg.role,
+                    content = msg.content?.let { kotlinx.serialization.json.JsonPrimitive(it) }
+                )
             }
         }
         return out

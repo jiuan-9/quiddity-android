@@ -1031,6 +1031,12 @@ class ChatViewModel(
             }
             is ChatRepository.Event.UpdateMessage -> {
                 if (!conversationRepository.updateMessage(event.message)) raiseStorageError()
+                // 合并模式（工具轮正文单条化）下，后续轮次正文以 Update 追加到同一条消息，
+                // 缓存最新合并结果——Done 固化工具痕迹时必须以最新 content 为准，
+                // 否则会用旧对象覆盖持久化消息导致正文丢失（只剩工具痕迹）
+                if (event.message.role == Role.ASSISTANT && !event.message.isNotice && !event.message.isThinking) {
+                    lastCompletedAiMessage = event.message
+                }
             }
             is ChatRepository.Event.CompleteMessage -> {
                 // 模型偶发在正式回答开头复述思考内容/系统指令：剥离重复前缀，
@@ -1105,13 +1111,19 @@ class ChatViewModel(
                 // 工具调用历史固化进最后一条 AI 消息：生成结束后痕迹不再从内存读取，
                 // 而是作为消息数据持久化（重新打开会话仍可见，段间渲染与正文分界）
                 if (_toolTraces.value.isNotEmpty()) {
-                    val target = lastCompletedAiMessage
-                        ?.takeIf { it.role == Role.ASSISTANT && !it.isNotice && !it.isThinking &&
-                            it.content.isNotBlank() && it.toolTraces.isEmpty() }
-                        ?: _messages.value.lastOrNull {
-                            it.role == Role.ASSISTANT && !it.isNotice && !it.isThinking &&
-                                it.content.isNotBlank() && it.toolTraces.isEmpty()
-                        }
+                    // 优先从 _messages 按 id 取最新版本（合并模式后续轮次以 Update 追加正文，
+                    // 内存缓存可能仍是旧 content——绝不能用旧对象覆盖已持久化的最新正文）
+                    val lastId = lastCompletedAiMessage?.id
+                    val target = _messages.value.lastOrNull {
+                        it.id == lastId && it.role == Role.ASSISTANT && !it.isNotice &&
+                            !it.isThinking && it.content.isNotBlank() && it.toolTraces.isEmpty()
+                    } ?: lastCompletedAiMessage?.takeIf {
+                        it.role == Role.ASSISTANT && !it.isNotice && !it.isThinking &&
+                            it.content.isNotBlank() && it.toolTraces.isEmpty()
+                    } ?: _messages.value.lastOrNull {
+                        it.role == Role.ASSISTANT && !it.isNotice && !it.isThinking &&
+                            it.content.isNotBlank() && it.toolTraces.isEmpty()
+                    }
                     if (target != null) {
                         conversationRepository.updateMessage(
                             target.copy(

@@ -92,7 +92,11 @@ data class DeepSeekResponsesRequest(
 data class ResponsesInputItem(
     val type: String = "message",
     val role: String? = null,
-    val content: String? = null,
+    /**
+     * message item：字符串文本；reasoning item：reasoning_text 内容块数组。
+     * （DeepSeek 思考模式工具轮必须回传上一轮的 reasoning item，否则 400）
+     */
+    val content: JsonElement? = null,
     val call_id: String? = null,
     val name: String? = null,
     val arguments: String? = null,

@@ -396,7 +396,7 @@ class GroupReplyPlannerTest {
         )
         assertEquals(
             "小A：测试消息 m1",
-            responses.input.firstOrNull { it.role == "user" }?.content,
+            (responses.input.firstOrNull { it.role == "user" }?.content as? kotlinx.serialization.json.JsonPrimitive)?.content,
             "Responses input 应沿用群聊转述格式"
         )
         assertTrue(responses.instructions.isNullOrBlank().not(), "系统提示词应放入 instructions 字段")

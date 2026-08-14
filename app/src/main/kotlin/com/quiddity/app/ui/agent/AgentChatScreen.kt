@@ -1032,11 +1032,12 @@ private fun AgentMessageLine(
                 )
             }
             // ===== 正文按工具轮段边界拆分渲染：工具痕迹插入段间（与流式输出一致：
-            // 正文段 → 工具痕迹 → 正文段）；生成结束痕迹清空后只剩连续正文 =====
+            // 正文段 → 空行 → 工具痕迹 → 空行 → 正文段），痕迹与正文空行分隔；
+            // 单段正文（无轮间正文）时痕迹显示在正文后，同样空行分隔 =====
             val segments = remember(message.content, message.toolSegmentEnds) {
                 splitToolSegments(message.content, message.toolSegmentEnds)
             }
-            if (segments.size > 1 || uiTraces.isNotEmpty()) {
+            if (segments.size > 1) {
                 segments.forEachIndexed { idx, seg ->
                     AgentMarkdownText(
                         content = seg,
@@ -1044,15 +1045,24 @@ private fun AgentMessageLine(
                         markdownEnabled = markdownEnabled,
                         color = if (isUser) colorScheme.onSurface else colorScheme.onSurfaceVariant
                     )
-                    // 本段之后插入对应工具痕迹（第 i 段后 = 第 i 条痕迹：
-                    // 第 1 个工具轮结束后执行第 1 个工具，痕迹插在第 1 段与第 2 段之间）
-                    if (!isUser) {
-                        uiTraces.getOrNull(idx)?.let { trace -> ToolTraceLine(trace) }
+                    // 段间：空行分隔 + 对应工具痕迹（第 i 段后 = 第 i 条痕迹）
+                    if (idx < segments.lastIndex) {
+                        Spacer(modifier = Modifier.size(10.dp))
+                        if (!isUser) {
+                            uiTraces.getOrNull(idx)?.let { trace ->
+                                ToolTraceLine(trace)
+                                Spacer(modifier = Modifier.size(10.dp))
+                            }
+                        }
                     }
                 }
                 // 段之后的剩余痕迹（工具轮正文段缺失时连续显示）
                 if (!isUser && uiTraces.size > segments.size) {
-                    uiTraces.drop(segments.size).forEach { trace -> ToolTraceLine(trace) }
+                    Spacer(modifier = Modifier.size(10.dp))
+                    uiTraces.drop(segments.size).forEach { trace ->
+                        ToolTraceLine(trace)
+                        Spacer(modifier = Modifier.size(4.dp))
+                    }
                 }
             } else {
                 AgentMarkdownText(
@@ -1061,6 +1071,14 @@ private fun AgentMessageLine(
                     markdownEnabled = markdownEnabled,
                     color = if (isUser) colorScheme.onSurface else colorScheme.onSurfaceVariant
                 )
+                // 单段正文 + 工具痕迹：正文后空行分隔显示痕迹
+                if (!isUser && uiTraces.isNotEmpty()) {
+                    Spacer(modifier = Modifier.size(10.dp))
+                    uiTraces.forEach { trace ->
+                        ToolTraceLine(trace)
+                        Spacer(modifier = Modifier.size(4.dp))
+                    }
+                }
             }
             Spacer(modifier = Modifier.size(3.dp))
             Text(
@@ -1393,50 +1411,49 @@ private data class UiTrace(
     val summary: String?
 )
 
-/** 单条工具痕迹：使用中显示高亮滑动「工具使用中…」，完成后显示工具名与结果摘要。 */
+/** 单条工具痕迹：亮灰色工具名（点击文字展开详情），与正文空行分隔；加载中为工具名滑动高亮。 */
 @Composable
 private fun ToolTraceLine(trace: UiTrace) {
     val colorScheme = MaterialTheme.colorScheme
     if (trace.status == "running") {
-        // 加载/调用中：高亮滑动样式（与「思考中…」同一套 shimmer 效果），显示在正文内
+        // 加载/调用中：工具名滑动高亮（shimmer），随流式输出出现在正文内
         com.quiddity.app.ui.components.ShimmerHighlightText(
-            text = "工具使用中…",
+            text = AgentToolRegistry.displayName(trace.name),
             icon = Icons.Filled.Build
         )
         return
     }
-    val statusText = when (trace.status) {
-        "done" -> "✓ ${AgentToolRegistry.displayName(trace.name)}"
-        else -> "✕ ${AgentToolRegistry.displayName(trace.name)}（失败）"
-    }
-    val statusColor = when (trace.status) {
-        "done" -> colorScheme.primary
-        else -> colorScheme.error
-    }
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
+    var expanded by remember(trace.name, trace.summary) { mutableStateOf(false) }
+    Column(modifier = Modifier.fillMaxWidth()) {
+        // 点击工具名文字展开/收起详情
         Text(
-            text = statusText,
-            color = statusColor,
-            style = MaterialTheme.typography.bodySmall,
+            text = AgentToolRegistry.displayName(trace.name),
+            style = MaterialTheme.typography.labelMedium,
+            color = colorScheme.onSurfaceVariant,
             fontWeight = FontWeight.Medium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
+            modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) { expanded = !expanded }
+                .padding(vertical = 2.dp, horizontal = 2.dp)
         )
-        trace.summary?.takeIf { it.isNotBlank() }?.let { summary ->
-            Spacer(modifier = Modifier.size(8.dp))
+        if (expanded) {
             Text(
-                text = summary,
+                text = if (trace.status == "done") "✓ 成功" else "✕ 失败",
                 style = MaterialTheme.typography.labelSmall,
-                color = colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
+                color = if (trace.status == "done") colorScheme.primary else colorScheme.error,
+                modifier = Modifier.padding(start = 8.dp, top = 4.dp)
             )
+            trace.summary?.takeIf { it.isNotBlank() }?.let { summary ->
+                Text(
+                    text = summary,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                    modifier = Modifier.padding(start = 8.dp, top = 2.dp)
+                )
+            }
         }
     }
 }

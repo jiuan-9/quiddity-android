@@ -216,10 +216,14 @@ class PromptBuilderTest {
         val input = PromptBuilder.toResponsesInput(apiMessages)
         assertEquals(3, input.size)
         assertEquals("user", input[0].role)
-        assertEquals("你好", input[0].content)
+        assertEquals(
+            "你好",
+            (input[0].content as kotlinx.serialization.json.JsonPrimitive).content
+        )
         assertEquals("user", input[1].role)
-        assertTrue(input[1].content.orEmpty().contains("《棋盘》对局记录"), "对局记录应保留给角色阅读")
-        assertTrue(input[1].content.orEmpty().startsWith("【系统记录】"), "非首条 system 记录应转为带标记的 user 输入")
+        val secondContent = (input[1].content as kotlinx.serialization.json.JsonPrimitive).content
+        assertTrue(secondContent.contains("《棋盘》对局记录"), "对局记录应保留给角色阅读")
+        assertTrue(secondContent.startsWith("【系统记录】"), "非首条 system 记录应转为带标记的 user 输入")
         assertEquals("assistant", input[2].role)
     }
 

@@ -774,7 +774,7 @@ class ChatRepository(
             )
         }
         is ChatRoundRequest.Responses -> {
-            val items = buildResponsesToolResultItems(request.request.input, resolved)
+            val items = buildResponsesToolResultItems(request.request.input, resolved, reasoningText)
             ChatRoundRequest.Responses(
                 request.request.copy(
                     input = items,
@@ -822,7 +822,7 @@ class ChatRepository(
                     input = request.request.input + ResponsesInputItem(
                         type = "message",
                         role = "user",
-                        content = context
+                        content = kotlinx.serialization.json.JsonPrimitive(context)
                     ),
                     tools = null,
                     tool_choice = null
@@ -873,14 +873,32 @@ class ChatRepository(
     }
 
     /**
-     * 构造 Responses API 工具回填 input：原始消息 + function_call item + function_call_output item。
-     * 官方要求 call_id 非空唯一，且每个 function_call 必须有对应 function_call_output。
+     * 构造 Responses API 工具回填 input：原始消息 + reasoning item（思考模式必回传）
+     * + function_call item + function_call_output item。
+     * 官方要求 call_id 非空唯一，且每个 function_call 必须有对应 function_call_output；
+     * DeepSeek 思考模式下工具轮必须在 function_call 前回传上一轮的 reasoning item，
+     * 否则 400 "The reasoning_text in the thinking mode must be passed back to the API"。
      */
     private suspend fun buildResponsesToolResultItems(
         originalInput: List<ResponsesInputItem>,
-        resolved: List<Pair<ChatStreamParser.AggregatedToolCall, String>>
+        resolved: List<Pair<ChatStreamParser.AggregatedToolCall, String>>,
+        reasoningText: String
     ): List<ResponsesInputItem> {
         val result = trimResponsesToolRounds(originalInput, keepRounds = 2).toMutableList()
+        // 思考模式工具轮：回传上一轮 reasoning_text（缺失即 400）
+        if (reasoningText.isNotBlank()) {
+            result += ResponsesInputItem(
+                type = "reasoning",
+                content = kotlinx.serialization.json.JsonArray(
+                    listOf(
+                        kotlinx.serialization.json.buildJsonObject {
+                            put("type", kotlinx.serialization.json.JsonPrimitive("reasoning_text"))
+                            put("text", kotlinx.serialization.json.JsonPrimitive(reasoningText))
+                        }
+                    )
+                )
+            )
+        }
         resolved.forEach { (call, _) ->
             result += ResponsesInputItem(
                 type = "function_call",

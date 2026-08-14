@@ -95,7 +95,12 @@ class ChatModelsTest {
         }
         val request = DeepSeekResponsesRequest(
             model = "deepseek-v4-flash",
-            input = listOf(ResponsesInputItem(role = "user", content = "你好")),
+            input = listOf(
+                ResponsesInputItem(
+                    role = "user",
+                    content = kotlinx.serialization.json.JsonPrimitive("你好")
+                )
+            ),
             instructions = "系统指令",
             tools = listOf(ResponsesTool(type = "web_search"))
         )
@@ -105,7 +110,7 @@ class ChatModelsTest {
         assertFalse(text.contains("\"tool_choice\":null"), "未设置的 tool_choice 不应编码")
 
         val decoded = json.decodeFromString(DeepSeekResponsesRequest.serializer(), text)
-        assertEquals("你好", decoded.input.first().content)
+        assertEquals("你好", (decoded.input.first().content as kotlinx.serialization.json.JsonPrimitive).content)
         assertEquals("user", decoded.input.first().role)
         assertEquals("web_search", decoded.tools?.first()?.type)
     }
