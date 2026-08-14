@@ -189,6 +189,9 @@ class ChatViewModel(
     private val _errorEvent = MutableStateFlow<String?>(null)
     val errorEvent: StateFlow<String?> = _errorEvent.asStateFlow()
 
+    /** 本次流式最后一条完成消息（工具痕迹固化用，避免 flow 异步延迟取不到）。 */
+    private var lastCompletedAiMessage: Message? = null
+
     /**
      * 结构化错误事件。
      * UI 层可基于错误类别（网络 / 鉴权 / 配置 / 业务 / 未知）做差异化处理：
@@ -1033,6 +1036,9 @@ class ChatViewModel(
                 // 模型偶发在正式回答开头复述思考内容/系统指令：剥离重复前缀，
                 // 避免「思考一条 + 回答一条」两条消息内容雷同（防御性去重）
                 val target = stripThinkingEcho(event.message)
+                // 缓存本次流式最后一条完成消息：Done 事件固化工具痕迹时，
+                // _messages 的 flow 更新可能有异步延迟，直接取不到刚完成的消息
+                lastCompletedAiMessage = target
                 // 1.5.0 延迟输出：加载动画时长 = 累计回复字数 × 每字毫秒数。
                 // 流式文字自然显示（MessageBubble 不再逐字停顿），消息保持
                 // streaming 状态直到该时长结束（气泡光标 / 群聊头像三点不提前停止）。
@@ -1099,10 +1105,13 @@ class ChatViewModel(
                 // 工具调用历史固化进最后一条 AI 消息：生成结束后痕迹不再从内存读取，
                 // 而是作为消息数据持久化（重新打开会话仍可见，段间渲染与正文分界）
                 if (_toolTraces.value.isNotEmpty()) {
-                    val target = _messages.value.lastOrNull {
-                        it.role == Role.ASSISTANT && !it.isNotice && !it.isThinking &&
-                            it.content.isNotBlank() && it.toolTraces.isEmpty()
-                    }
+                    val target = lastCompletedAiMessage
+                        ?.takeIf { it.role == Role.ASSISTANT && !it.isNotice && !it.isThinking &&
+                            it.content.isNotBlank() && it.toolTraces.isEmpty() }
+                        ?: _messages.value.lastOrNull {
+                            it.role == Role.ASSISTANT && !it.isNotice && !it.isThinking &&
+                                it.content.isNotBlank() && it.toolTraces.isEmpty()
+                        }
                     if (target != null) {
                         conversationRepository.updateMessage(
                             target.copy(
@@ -1113,6 +1122,7 @@ class ChatViewModel(
                         )
                     }
                 }
+                lastCompletedAiMessage = null
                 _toolTraces.value = emptyList()
                 _pendingToolConfirm.value = null
             }

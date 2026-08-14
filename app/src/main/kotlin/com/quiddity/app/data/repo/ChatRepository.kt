@@ -491,16 +491,23 @@ class ChatRepository(
                 if (!recovered) return false
                 break
             }
-            // 轮结束：记录正文段边界（合并模式下工具轮之间的正文分界，供 UI 插入工具痕迹）
-            coordinator.markSegmentEnd()
             if (round.reasoningText.isNotBlank()) reasoningText = round.reasoningText
             val calls = round.toolCalls
             if (calls.isEmpty()) break
+            // 工具轮结束（本轮有工具调用）：记录正文段边界（合并模式下工具轮之间的
+            // 正文分界，供 UI 插入工具痕迹），并把带边界的最新消息派发出去持久化
+            // （协调器内部修改不会自动同步到已落库消息）
+            coordinator.markSegmentEnd()
+            coordinator.snapshot().lastOrNull()?.let { msg ->
+                if (msg.toolSegmentEnds.isNotEmpty()) {
+                    onEvent(Event.UpdateMessage(msg))
+                }
+            }
             calls.forEach { onEvent(Event.ToolUse(it.name)) }
             val resolved = resolveToolContents(calls, conv, memory, onEvent)
             lastResolved = resolved
             resolved.forEach { (call, content) ->
-                onEvent(Event.ToolResult(call.name, isToolResultSuccess(content), content.take(180)))
+                onEvent(Event.ToolResult(call.name, isToolResultSuccess(content), content.take(500)))
             }
             rounds++
             val keepTools = rounds < MAX_TOOL_ROUNDS
