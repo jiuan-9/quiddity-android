@@ -193,6 +193,15 @@ class ChatViewModel(
     private var lastCompletedAiMessage: Message? = null
 
     /**
+     * 当前生成中合并消息的工具轮段边界（实时内存态）：
+     * markSegmentEnd 派发的 UpdateMessage 同步更新，UI 段切分优先使用，
+     * 让工具痕迹在流式输出过程中实时穿插在正文段间（不依赖持久化 flow 的异步延迟）。
+     * Done 后清空，回落到消息持久化的 toolSegmentEnds。
+     */
+    private val _activeSegmentEnds = MutableStateFlow<List<Int>>(emptyList())
+    val activeSegmentEnds: StateFlow<List<Int>> = _activeSegmentEnds.asStateFlow()
+
+    /**
      * 结构化错误事件。
      * UI 层可基于错误类别（网络 / 鉴权 / 配置 / 业务 / 未知）做差异化处理：
      * - 网络错误：可提示"网络不佳，是否重试？"
@@ -1036,6 +1045,8 @@ class ChatViewModel(
                 // 否则会用旧对象覆盖持久化消息导致正文丢失（只剩工具痕迹）
                 if (event.message.role == Role.ASSISTANT && !event.message.isNotice && !event.message.isThinking) {
                     lastCompletedAiMessage = event.message
+                    // 实时段边界：流式过程中工具痕迹立即穿插在正文段间（不依赖 flow 延迟）
+                    _activeSegmentEnds.value = event.message.toolSegmentEnds
                 }
             }
             is ChatRepository.Event.CompleteMessage -> {
@@ -1135,6 +1146,7 @@ class ChatViewModel(
                     }
                 }
                 lastCompletedAiMessage = null
+                _activeSegmentEnds.value = emptyList()
                 _toolTraces.value = emptyList()
                 _pendingToolConfirm.value = null
             }

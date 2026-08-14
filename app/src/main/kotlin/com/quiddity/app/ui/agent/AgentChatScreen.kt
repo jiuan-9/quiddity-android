@@ -188,6 +188,7 @@ fun AgentChatScreen(
     val pendingImageUri by viewModel.pendingImageUri.collectAsStateWithLifecycle()
     val ocrState by viewModel.ocrState.collectAsStateWithLifecycle()
     val pendingReedit by viewModel.pendingReedit.collectAsStateWithLifecycle()
+    val activeSegmentEnds by viewModel.activeSegmentEnds.collectAsStateWithLifecycle()
     val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val listState = rememberLazyListState()
@@ -673,6 +674,14 @@ fun AgentChatScreen(
                             val lastUserMsgId = messages.lastOrNull {
                                 !it.isNotice && it.role == Role.USER
                             }?.id
+                            // 段边界：生成中最新消息用实时内存边界（工具痕迹流式中穿插在正文段间），
+                            // 历史消息/生成结束用消息持久化边界
+                            val effectiveSegmentEnds =
+                                if (message.id == latestAi?.id && activeSegmentEnds.isNotEmpty()) {
+                                    activeSegmentEnds
+                                } else {
+                                    message.toolSegmentEnds
+                                }
                             AgentMessageLine(
                                 message = message,
                                 markdownEnabled = settings.markdownEnabled,
@@ -681,7 +690,8 @@ fun AgentChatScreen(
                                 aiName = conversation?.persona?.name.orEmpty(),
                                 animateEntry = message.timestamp >= openedAtMs,
                                 isLatestAi = message.id == latestAi?.id,
-                                // 工具痕迹只内联到最新 AI 消息（生成中跟随正文末尾）
+                                segmentEnds = effectiveSegmentEnds,
+                                // 工具痕迹只内联到最新 AI 消息（生成中跟随正文流）
                                 toolTraces = if (message.id == latestAi?.id) toolTraces else emptyList(),
                                 inMultiSelect = multiSelectMode,
                                 isSelected = selectedMessageIds.contains(message.id),
@@ -906,6 +916,8 @@ private fun AgentMessageLine(
     onRewrite: () -> Unit = {},
     onWithdraw: (() -> Unit)? = null,
     toolTraces: List<ToolTrace> = emptyList(),
+    /** 工具轮段边界（生成中用实时内存边界，历史消息用持久化边界）。 */
+    segmentEnds: List<Int> = emptyList(),
     animateEntry: Boolean = true
 ) {
     val colorScheme = MaterialTheme.colorScheme
@@ -1034,8 +1046,8 @@ private fun AgentMessageLine(
             // ===== 正文按工具轮段边界拆分渲染：工具痕迹插入段间（与流式输出一致：
             // 正文段 → 空行 → 工具痕迹 → 空行 → 正文段），痕迹与正文空行分隔；
             // 单段正文（无轮间正文）时痕迹显示在正文后，同样空行分隔 =====
-            val segments = remember(message.content, message.toolSegmentEnds) {
-                splitToolSegments(message.content, message.toolSegmentEnds)
+            val segments = remember(message.content, segmentEnds) {
+                splitToolSegments(message.content, segmentEnds)
             }
             if (segments.size > 1) {
                 segments.forEachIndexed { idx, seg ->
@@ -1065,20 +1077,20 @@ private fun AgentMessageLine(
                     }
                 }
             } else {
+                // 单段正文（模型直接调工具、无轮间开场白）：工具痕迹显示在正文之前
+                // （工具先执行，正文为最终汇报——穿插顺序：工具 → 汇报正文）
+                if (!isUser && uiTraces.isNotEmpty()) {
+                    uiTraces.forEach { trace ->
+                        ToolTraceLine(trace)
+                        Spacer(modifier = Modifier.size(10.dp))
+                    }
+                }
                 AgentMarkdownText(
                     content = message.content,
                     isStreaming = message.isStreaming,
                     markdownEnabled = markdownEnabled,
                     color = if (isUser) colorScheme.onSurface else colorScheme.onSurfaceVariant
                 )
-                // 单段正文 + 工具痕迹：正文后空行分隔显示痕迹
-                if (!isUser && uiTraces.isNotEmpty()) {
-                    Spacer(modifier = Modifier.size(10.dp))
-                    uiTraces.forEach { trace ->
-                        ToolTraceLine(trace)
-                        Spacer(modifier = Modifier.size(4.dp))
-                    }
-                }
             }
             Spacer(modifier = Modifier.size(3.dp))
             Text(
