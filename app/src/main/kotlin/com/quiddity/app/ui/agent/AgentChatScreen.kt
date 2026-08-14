@@ -23,8 +23,10 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.border
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -48,15 +50,24 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -72,6 +83,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
@@ -108,9 +120,12 @@ import com.quiddity.app.data.model.Role
 import com.quiddity.app.di.ServiceLocator
 import com.quiddity.app.ui.components.AiAvatar
 import com.quiddity.app.ui.chat.ChatViewModel
+import com.quiddity.app.ui.chat.ToolTrace
 import com.quiddity.app.ui.chat.OcrState
 import com.quiddity.app.ui.chat.components.ChatInputBar
 import com.quiddity.app.ui.chat.components.HamburgerMenu
+import com.quiddity.app.ui.chat.components.RewriteBottomSheet
+import com.quiddity.app.ui.chat.components.ReeditNoticeBubble
 import com.quiddity.app.ui.chat.components.StreamingCursor
 import com.quiddity.app.ui.chat.components.TypingIndicator
 import com.quiddity.app.ui.chat.gesture.ChatDragController
@@ -168,16 +183,55 @@ fun AgentChatScreen(
     val messages by viewModel.messages.collectAsStateWithLifecycle()
     val isGenerating by viewModel.isGenerating.collectAsStateWithLifecycle()
     val chatError by viewModel.chatError.collectAsStateWithLifecycle()
-    val toolUseName by viewModel.toolUse.collectAsStateWithLifecycle()
+    val toolTraces by viewModel.toolTraces.collectAsStateWithLifecycle()
     val pendingConfirm by viewModel.pendingToolConfirm.collectAsStateWithLifecycle()
     val pendingImageUri by viewModel.pendingImageUri.collectAsStateWithLifecycle()
     val ocrState by viewModel.ocrState.collectAsStateWithLifecycle()
+    val pendingReedit by viewModel.pendingReedit.collectAsStateWithLifecycle()
     val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val listState = rememberLazyListState()
     var showHamburger by rememberSaveable { mutableStateOf(false) }
     var showCharacterPicker by rememberSaveable { mutableStateOf(false) }
     var characterPickerClosing by rememberSaveable { mutableStateOf(false) }
+    // AI 消息改写（改写框弹出中）与撤回后「重新编辑」（编辑框弹出中）
+    var rewritingMessageId by rememberSaveable { mutableStateOf<String?>(null) }
+    var reeditSheetOpen by rememberSaveable { mutableStateOf(false) }
+    // ===== 多选消息 =====
+    var multiSelectMode by rememberSaveable { mutableStateOf(false) }
+    val selectedIdsSaver = remember {
+        Saver<Set<String>, Any>(
+            save = { it.toList() },
+            restore = { (it as? List<*>)?.filterIsInstance<String>()?.toSet() ?: emptySet() }
+        )
+    }
+    var selectedMessageIds by rememberSaveable(stateSaver = selectedIdsSaver) {
+        mutableStateOf(emptySet<String>())
+    }
+    fun enterMultiSelect(messageId: String) {
+        multiSelectMode = true
+        selectedMessageIds = setOf(messageId)
+    }
+    fun toggleSelection(messageId: String) {
+        selectedMessageIds = if (messageId in selectedMessageIds) {
+            selectedMessageIds - messageId
+        } else {
+            selectedMessageIds + messageId
+        }
+    }
+    fun exitMultiSelect() {
+        multiSelectMode = false
+        selectedMessageIds = emptySet()
+    }
+    fun selectAllMessages() {
+        val all = messages.filterNot { it.isNotice }.map { it.id }.toSet()
+        selectedMessageIds = if (selectedMessageIds == all) emptySet() else all
+    }
+    fun deleteSelectedMessages() {
+        if (selectedMessageIds.isEmpty()) return
+        viewModel.deleteMessages(selectedMessageIds)
+        exitMultiSelect()
+    }
     // 关闭选择角色面板的统一切口：先关面板并标记「退出动画中」，
     // 动画期间系统返回键只消费不退出会话，避免连续两次返回直接跳回会话列表。
     fun closeCharacterPicker() {
@@ -225,7 +279,11 @@ fun AgentChatScreen(
     val screenWidthPx = with(LocalDensity.current) {
         configuration.screenWidthDp.dp.toPx()
     }
-    val swipeEnabled = !isGenerating
+    // 多选 / 生成中 / 改写或重新编辑框打开时禁用整屏滑动，避免误触菜单或拖屏；
+    // 无障碍模拟手势注入期间同样禁用，避免 AI 操作屏幕时"划退"退出会话
+    val swipeEnabled = !isGenerating && !multiSelectMode &&
+        rewritingMessageId == null && !reeditSheetOpen &&
+        !com.quiddity.app.active.ScreenReaderService.injecting
     val swipeEnabledState = rememberUpdatedState(swipeEnabled)
     val dragController = remember(screenWidthPx) {
         ChatDragController(
@@ -247,9 +305,27 @@ fun AgentChatScreen(
 
     LaunchedEffect(chatError) {
         chatError?.let {
-            Toast.makeText(context, it.userMessage, Toast.LENGTH_SHORT).show()
+            // LENGTH_LONG：接口报错原文（如 HTTP 400 的服务端响应体）需要时间阅读
+            Toast.makeText(context, it.userMessage, Toast.LENGTH_LONG).show()
             viewModel.consumeChatError()
         }
+    }
+
+    // ===== 无障碍服务断开自检：开启过「模拟点击」但服务被系统自动关闭时，
+    // 提示一键跳转系统无障碍设置页重开（系统超时/省电机制会自动停用服务） =====
+    var accessibilityWarning by remember { mutableStateOf(false) }
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                accessibilityWarning =
+                    conversation?.type == com.quiddity.app.data.model.ConversationType.AGENT &&
+                        ServiceLocator.agentStore?.snapshot()?.toolSwitches?.simulate_click == true &&
+                        !com.quiddity.app.active.ScreenReaderService.isServiceEnabled(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     // 新消息/内容增长时贴底（reverseLayout：index 0 = 最新）
@@ -257,14 +333,17 @@ fun AgentChatScreen(
         if (messages.any { !it.isNotice }) listState.animateScrollToItem(0)
     }
 
-    // ===== 系统返回键：角色面板 -> 关闭面板；正常状态 -> 退出会话 =====
+    // ===== 系统返回键：角色面板 -> 关闭面板；改写/重新编辑框 -> 关框；正常状态 -> 退出会话 =====
     // 合并为单一 BackHandler 状态机，避免多 handler 注册顺序带来的返回误判。
     BackHandler(
-        enabled = showCharacterPicker || characterPickerClosing ||
+        enabled = multiSelectMode || showCharacterPicker || characterPickerClosing ||
             (!isGenerating && !showHamburger)
     ) {
         when {
+            multiSelectMode -> exitMultiSelect()
             showCharacterPicker || characterPickerClosing -> closeCharacterPicker()
+            rewritingMessageId != null -> rewritingMessageId = null
+            reeditSheetOpen -> reeditSheetOpen = false
             else -> dragController.animateBackAndExit()
         }
     }
@@ -300,13 +379,72 @@ fun AgentChatScreen(
                 .windowInsetsPadding(WindowInsets.statusBars)
                 .imePadding()
         ) {
-            // ===== 顶栏：返回 + 标题 + 汉堡（会话设置） =====
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+            // ===== 顶栏：多选时显示多选操作栏，否则返回 + 标题 + 汉堡（会话设置） =====
+            if (multiSelectMode) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(RoundedCornerShape(50))
+                            .clickable { exitMultiSelect() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Close,
+                            contentDescription = "退出多选",
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                    Text(
+                        text = "已选 ${selectedMessageIds.size} 条",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(RoundedCornerShape(50))
+                            .clickable { selectAllMessages() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.SelectAll,
+                            contentDescription = "全选",
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(RoundedCornerShape(50))
+                            .clickable { deleteSelectedMessages() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Delete,
+                            contentDescription = "删除",
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                }
+            } else {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                 Box(
                     modifier = Modifier
                         .size(48.dp)
@@ -356,6 +494,57 @@ fun AgentChatScreen(
                     )
                 }
             }
+            }
+
+            // ===== 无障碍服务被系统关闭提示条：点击一键跳转设置重开 =====
+            if (accessibilityWarning) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = {
+                                runCatching {
+                                    context.startActivity(
+                                        android.content.Intent(
+                                            android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS
+                                        ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    )
+                                }
+                            }
+                        ),
+                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Info,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.size(8.dp))
+                        Text(
+                            text = "无障碍服务已被系统关闭，AI 无法操作屏幕",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text(
+                            text = "去开启",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            }
 
             // ===== 消息列表（纯文本直排） =====
             Box(
@@ -398,6 +587,7 @@ fun AgentChatScreen(
                     }
                 }
                 else -> {
+                    val displayMessages = remember(messages) { messages.reversed() }
                     LazyColumn(
                         state = listState,
                         reverseLayout = true,
@@ -408,6 +598,16 @@ fun AgentChatScreen(
                         ),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
+                        // 撤回后的「重新编辑」提示：reverseLayout 的第一项 = 最底部，
+                        // 显示在最后一条消息之下（撤回仅限最后一条用户消息，与流式互斥）
+                        pendingReedit?.let {
+                            item(key = "agent_reedit_notice", contentType = { "reedit" }) {
+                                ReeditNoticeBubble(
+                                    onReedit = { reeditSheetOpen = true },
+                                    onDismiss = { viewModel.clearPendingReedit() }
+                                )
+                            }
+                        }
                         // 生成中且尚无流式内容时，底部显示打字指示（紧贴输入栏）
                         val lastMsg = messages.lastOrNull { !it.isNotice }
                         val showTyping = isGenerating &&
@@ -445,45 +645,34 @@ fun AgentChatScreen(
                                 }
                             }
                         }
-                        // 工具使用报告条：AI 调用工具时显示（图标 + 工具名 + 在干的事，滑动高亮）
-                        item(key = "agent_tool_use", contentType = { "tool_use" }) {
-                            Column(modifier = Modifier.fillMaxWidth()) {
-                                AnimatedVisibility(
-                                    visible = toolUseName != null,
-                                    enter = fadeIn(
-                                        tween(Motion.DurationShort, easing = Motion.EasingEmphasizedDecelerate)
-                                    ) + expandVertically(
-                                        tween(Motion.DurationShort, easing = Motion.EasingEmphasizedDecelerate)
-                                    ),
-                                    exit = fadeOut(
-                                        tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate)
-                                    ) + shrinkVertically(
-                                        tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate)
-                                    )
-                                ) {
-                                    toolUseName?.let { name ->
-                                        Column(modifier = Modifier.fillMaxWidth()) {
-                                            // 工具报告与正文之间的细淡分割线
-                                            Box(
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .height(1.dp)
-                                                    .background(
-                                                        MaterialTheme.colorScheme.onSurfaceVariant
-                                                            .copy(alpha = 0.14f)
-                                                    )
+                        // 工具痕迹：内联到最新 AI 消息正文末尾（生成过程中显示，结束随痕迹清空消失）；
+                        // 尚无正文消息可挂载时（纯工具阶段），退化为列表底部占位显示
+                        val latestAi = messages.lastOrNull {
+                            !it.isNotice && it.role == Role.ASSISTANT && !it.isThinking
+                        }
+                        if (toolTraces.isNotEmpty() && latestAi == null) {
+                            item(key = "agent_tool_trace_fallback", contentType = { "tool_trace" }) {
+                                Column(modifier = Modifier.fillMaxWidth()) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(1.dp)
+                                            .background(
+                                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.14f)
                                             )
-                                            Spacer(modifier = Modifier.size(8.dp))
-                                            ToolUseShimmerLine(toolName = name)
-                                        }
+                                    )
+                                    Spacer(modifier = Modifier.size(8.dp))
+                                    toolTraces.forEach { trace ->
+                                        ToolTraceLine(UiTrace(trace.name, trace.status, trace.summary))
                                     }
                                 }
                             }
                         }
-                        items(messages.reversed(), key = { it.id }) { message ->
-                            val latestAi = messages.lastOrNull {
-                                !it.isNotice && it.role == Role.ASSISTANT && !it.isThinking
-                            }
+                        items(displayMessages, key = { it.id }) { message ->
+                            // 撤回仅限最后一条用户消息（与私聊「召回最后一句」语义一致）
+                            val lastUserMsgId = messages.lastOrNull {
+                                !it.isNotice && it.role == Role.USER
+                            }?.id
                             AgentMessageLine(
                                 message = message,
                                 markdownEnabled = settings.markdownEnabled,
@@ -492,8 +681,19 @@ fun AgentChatScreen(
                                 aiName = conversation?.persona?.name.orEmpty(),
                                 animateEntry = message.timestamp >= openedAtMs,
                                 isLatestAi = message.id == latestAi?.id,
+                                // 工具痕迹只内联到最新 AI 消息（生成中跟随正文末尾）
+                                toolTraces = if (message.id == latestAi?.id) toolTraces else emptyList(),
+                                inMultiSelect = multiSelectMode,
+                                isSelected = selectedMessageIds.contains(message.id),
+                                onEnterMultiSelect = { enterMultiSelect(message.id) },
+                                onToggleSelect = { toggleSelection(message.id) },
                                 onCopy = { text -> copyToClipboard(context, text) },
-                                onRegenerate = { viewModel.regenerate() }
+                                onRegenerate = { viewModel.regenerate() },
+                                onContinue = { viewModel.continueGeneration() },
+                                onRewrite = { rewritingMessageId = message.id },
+                                onWithdraw = if (message.id == lastUserMsgId) {
+                                    { viewModel.withdrawMessage(message.id) }
+                                } else null
                             )
                         }
                     }
@@ -501,7 +701,8 @@ fun AgentChatScreen(
             }
         }
 
-        // ===== 输入栏（复用 Solo 输入条） =====
+        // ===== 输入栏（复用 Solo 输入条；多选时隐藏） =====
+        if (!multiSelectMode) {
         ChatInputBar(
             enterToSend = settings.enterToSend,
             isGenerating = isGenerating,
@@ -522,6 +723,7 @@ fun AgentChatScreen(
             onRemoveImage = { viewModel.clearPendingImage() },
             ocrBusy = ocrState is OcrState.Recognizing
         )
+        }
     }
     }
 
@@ -600,24 +802,40 @@ fun AgentChatScreen(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        text = "Agent 请求执行「${AgentToolRegistry.displayName(pending.toolName)}」",
+                        text = "Agent 请求执行以下 ${pending.items.size} 项操作，是否同意？",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurface
                     )
-                    val detail = buildString {
-                        pending.args["pkg"]?.let { append("应用包名：$it\n") }
-                        pending.args["op"]?.let { append("权限操作：$it\n") }
-                        pending.args["mode"]?.let { append("权限模式：$it\n") }
-                        if (isEmpty()) append(pending.args.toString())
-                    }.trimEnd()
+                    pending.items.forEach { item ->
+                        Text(
+                            text = "· ${AgentToolRegistry.displayName(item.toolName)}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        val detail = buildString {
+                            item.args["pkg"]?.let { append("应用包名：$it\n") }
+                            item.args["path"]?.let { append("路径：$it\n") }
+                            item.args["src"]?.let { append("源路径：$it\n") }
+                            item.args["dst"]?.let { append("目标路径：$it\n") }
+                            item.args["op"]?.let { append("权限操作：$it\n") }
+                            item.args["mode"]?.let { append("权限模式：$it\n") }
+                            item.args["x"]?.let { append("横坐标：$it\n") }
+                            item.args["y"]?.let { append("纵坐标：$it\n") }
+                            item.args["direction"]?.let { append("方向：$it\n") }
+                            item.args["distance"]?.let { append("距离：$it\n") }
+                            item.args["action"]?.let { append("系统动作：$it\n") }
+                            item.args["text"]?.let { append("文字：$it\n") }
+                            if (isEmpty()) append(item.args.toString())
+                        }.trimEnd()
+                        Text(
+                            text = detail,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                     Text(
-                        text = detail,
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = "该操作每次都会要求你确认，且只对白名单内的应用生效。",
+                        text = "按「过问」模式，这些操作需要你确认；「完全」模式下将按白名单自动执行。",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                     )
@@ -631,9 +849,45 @@ fun AgentChatScreen(
             }
         )
     }
+
+    // ===== AI 消息改写底部弹出框（与私聊改写同款：编辑后原位替换） =====
+    rewritingMessageId?.let { msgId ->
+        val targetMsg = messages.firstOrNull { it.id == msgId }
+        if (targetMsg != null) {
+            RewriteBottomSheet(
+                initialText = targetMsg.content,
+                onSave = { newContent ->
+                    viewModel.rewriteMessage(msgId, newContent)
+                    rewritingMessageId = null
+                },
+                onDismiss = { rewritingMessageId = null }
+            )
+        } else {
+            rewritingMessageId = null
+        }
+    }
+
+    // ===== 撤回后「重新编辑」底部弹出框（预填被撤回消息原文，保存后作为新消息发出） =====
+    if (reeditSheetOpen) {
+        val pending = pendingReedit
+        if (pending != null) {
+            RewriteBottomSheet(
+                initialText = pending.content,
+                placeholder = "编辑消息…",
+                onSave = { newContent ->
+                    viewModel.resendReedit(newContent)
+                    reeditSheetOpen = false
+                },
+                onDismiss = { reeditSheetOpen = false }
+            )
+        } else {
+            reeditSheetOpen = false
+        }
+    }
 }
 
 /** 单条 Agent 消息：无气泡容器，用户右对齐 / AI 左对齐，时间戳小号灰色。 */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AgentMessageLine(
     message: Message,
@@ -642,8 +896,16 @@ private fun AgentMessageLine(
     aiAvatarUri: String?,
     aiName: String,
     isLatestAi: Boolean = false,
+    inMultiSelect: Boolean = false,
+    isSelected: Boolean = false,
+    onEnterMultiSelect: () -> Unit = {},
+    onToggleSelect: () -> Unit = {},
     onCopy: (String) -> Unit = {},
     onRegenerate: () -> Unit = {},
+    onContinue: () -> Unit = {},
+    onRewrite: () -> Unit = {},
+    onWithdraw: (() -> Unit)? = null,
+    toolTraces: List<ToolTrace> = emptyList(),
     animateEntry: Boolean = true
 ) {
     val colorScheme = MaterialTheme.colorScheme
@@ -681,10 +943,23 @@ private fun AgentMessageLine(
     }
 
     val isUser = message.role == Role.USER
+    // ===== 工具痕迹合成：生成中取内存状态（含"工具使用中…"高亮滑动），
+    // 生成结束/历史消息取持久化到消息的工具调用记录（重新打开会话仍可见） =====
+    val uiTraces = remember(message.toolTraces, toolTraces) {
+        if (toolTraces.isNotEmpty()) {
+            toolTraces.map { UiTrace(it.name, it.status, it.summary) }
+        } else {
+            message.toolTraces.map { UiTrace(it.name, if (it.ok) "done" else "error", it.summary) }
+        }
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)
+            .combinedClickable(
+                onClick = { if (inMultiSelect) onToggleSelect() },
+                onLongClick = { if (!inMultiSelect) onEnterMultiSelect() }
+            )
             .graphicsLayer {
                 alpha = entryAlpha.value
                 translationY = entryOffsetY.value
@@ -695,6 +970,32 @@ private fun AgentMessageLine(
         // 头像与第一行文字顶部齐平（无气泡直排风格）
         verticalAlignment = Alignment.Top
     ) {
+        // ===== 多选：行首选择圈 =====
+        if (inMultiSelect) {
+            Box(
+                modifier = Modifier
+                    .size(22.dp)
+                    .clip(CircleShape)
+                    .background(
+                        if (isSelected) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant
+                        }
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                if (isSelected) {
+                    Icon(
+                        imageVector = Icons.Filled.Check,
+                        contentDescription = "已选中",
+                        tint = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.size(8.dp))
+        }
         if (!isUser) {
             AiAvatar(
                 avatarUri = aiAvatarUri,
@@ -730,19 +1031,57 @@ private fun AgentMessageLine(
                     contentEmpty = message.content.isBlank()
                 )
             }
-            AgentMarkdownText(
-                content = message.content,
-                isStreaming = message.isStreaming,
-                markdownEnabled = markdownEnabled,
-                color = if (isUser) colorScheme.onSurface else colorScheme.onSurfaceVariant
-            )
+            // ===== 正文按工具轮段边界拆分渲染：工具痕迹插入段间（与流式输出一致：
+            // 正文段 → 工具痕迹 → 正文段）；生成结束痕迹清空后只剩连续正文 =====
+            val segments = remember(message.content, message.toolSegmentEnds) {
+                splitToolSegments(message.content, message.toolSegmentEnds)
+            }
+            if (segments.size > 1 || uiTraces.isNotEmpty()) {
+                segments.forEachIndexed { idx, seg ->
+                    AgentMarkdownText(
+                        content = seg,
+                        isStreaming = message.isStreaming && idx == segments.lastIndex,
+                        markdownEnabled = markdownEnabled,
+                        color = if (isUser) colorScheme.onSurface else colorScheme.onSurfaceVariant
+                    )
+                    // 本段之后插入对应工具痕迹（第 i 段后 = 第 i 条痕迹：
+                    // 第 1 个工具轮结束后执行第 1 个工具，痕迹插在第 1 段与第 2 段之间）
+                    if (!isUser) {
+                        uiTraces.getOrNull(idx)?.let { trace -> ToolTraceLine(trace) }
+                    }
+                }
+                // 段之后的剩余痕迹（工具轮正文段缺失时连续显示）
+                if (!isUser && uiTraces.size > segments.size) {
+                    uiTraces.drop(segments.size).forEach { trace -> ToolTraceLine(trace) }
+                }
+            } else {
+                AgentMarkdownText(
+                    content = message.content,
+                    isStreaming = message.isStreaming,
+                    markdownEnabled = markdownEnabled,
+                    color = if (isUser) colorScheme.onSurface else colorScheme.onSurfaceVariant
+                )
+            }
             Spacer(modifier = Modifier.size(3.dp))
             Text(
                 text = DateUtils.formatTime(message.timestamp),
                 style = MaterialTheme.typography.labelSmall,
                 color = colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
             )
-            // AI 消息操作：复制 / 重说（仅简单按钮；重说只出现在最新一条 AI 消息）
+            // 用户消息操作：撤回（仅图标；只出现在最后一条用户消息；流式中 / 多选时不显示）
+            if (isUser && !message.isStreaming && !inMultiSelect && onWithdraw != null) {
+                Row(
+                    modifier = Modifier.padding(top = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    AgentActionButton(
+                        icon = Icons.AutoMirrored.Filled.Undo,
+                        contentDescription = "撤回",
+                        onClick = { onWithdraw?.invoke() }
+                    )
+                }
+            }
+            // AI 消息操作：复制 / 改写 / 重说 / 继续说（仅图标；重说与继续说只出现在最新一条 AI 消息）
             if (!isUser && !message.isThinking && !message.isStreaming) {
                 Row(
                     modifier = Modifier.padding(top = 2.dp),
@@ -753,11 +1092,21 @@ private fun AgentMessageLine(
                         contentDescription = "复制",
                         onClick = { onCopy(message.content) }
                     )
+                    AgentActionButton(
+                        icon = Icons.Filled.Edit,
+                        contentDescription = "改写",
+                        onClick = onRewrite
+                    )
                     if (isLatestAi) {
                         AgentActionButton(
                             icon = Icons.Filled.Refresh,
                             contentDescription = "重说",
                             onClick = onRegenerate
+                        )
+                        AgentActionButton(
+                            icon = Icons.Filled.PlayArrow,
+                            contentDescription = "继续说",
+                            onClick = onContinue
                         )
                     }
                 }
@@ -952,8 +1301,7 @@ private fun AgentActionButton(
 
 /** 文本块按行拆分：连续列表行合成“列表段”进方框，其余行合成“正文段”普通显示。 */
 @Composable
-private fun AgentMixedText(content: String, baseColor: Color) {
-    val colorScheme = MaterialTheme.colorScheme
+private fun AgentMixedText(content: String, baseColor: Color) {    val colorScheme = MaterialTheme.colorScheme
     val segments = remember(content) { splitListSegments(content) }
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         segments.forEach { (isList, text) ->
@@ -1019,46 +1367,75 @@ private fun splitListSegments(content: String): List<Pair<Boolean, String>> {
     }.filter { it.second.isNotEmpty() }
 }
 
-/** 工具使用报告条：图标 + 工具名 + 正在做的事；滑动高亮只作用于文字本身。 */
+/**
+ * 按工具轮段边界 [ends]（字符偏移）拆分正文；空边界返回整段。
+ * 供合并模式消息把工具痕迹插入正文流对应位置（正文段 → 工具痕迹 → 正文段）。
+ */
+private fun splitToolSegments(content: String, ends: List<Int>): List<String> {
+    if (ends.isEmpty() || content.isEmpty()) return listOf(content)
+    val segments = mutableListOf<String>()
+    var start = 0
+    for (end in ends) {
+        val e = end.coerceIn(start, content.length)
+        if (e > start) {
+            segments.add(content.substring(start, e))
+            start = e
+        }
+    }
+    if (start < content.length) segments.add(content.substring(start))
+    return segments
+}
+
+/** UI 层工具痕迹（内存状态与消息持久化记录的统一形态）。 */
+private data class UiTrace(
+    val name: String,
+    val status: String,
+    val summary: String?
+)
+
+/** 单条工具痕迹：使用中显示高亮滑动「工具使用中…」，完成后显示工具名与结果摘要。 */
 @Composable
-private fun ToolUseShimmerLine(toolName: String) {
+private fun ToolTraceLine(trace: UiTrace) {
     val colorScheme = MaterialTheme.colorScheme
-    val transition = rememberInfiniteTransition(label = "tool_use_shimmer")
-    val progress by transition.animateFloat(
-        initialValue = -1f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1400, easing = LinearEasing)
-        ),
-        label = "tool_use_progress"
-    )
+    if (trace.status == "running") {
+        // 加载/调用中：高亮滑动样式（与「思考中…」同一套 shimmer 效果），显示在正文内
+        com.quiddity.app.ui.components.ShimmerHighlightText(
+            text = "工具使用中…",
+            icon = Icons.Filled.Build
+        )
+        return
+    }
+    val statusText = when (trace.status) {
+        "done" -> "✓ ${AgentToolRegistry.displayName(trace.name)}"
+        else -> "✕ ${AgentToolRegistry.displayName(trace.name)}（失败）"
+    }
+    val statusColor = when (trace.status) {
+        "done" -> colorScheme.primary
+        else -> colorScheme.error
+    }
     Row(
         modifier = Modifier
-            .fillMaxWidth(),
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(
-            imageVector = Icons.Filled.Build,
-            contentDescription = null,
-            tint = colorScheme.primary,
-            modifier = Modifier.size(15.dp)
+        Text(
+            text = statusText,
+            color = statusColor,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
-        Spacer(modifier = Modifier.size(8.dp))
-        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-            val widthPx = with(LocalDensity.current) { maxWidth.toPx() }
-            val brush = Brush.linearGradient(
-                colors = listOf(
-                    colorScheme.onSurfaceVariant,
-                    colorScheme.primary,
-                    colorScheme.onSurfaceVariant
-                ),
-                start = Offset(widthPx * (progress - 0.5f), 0f),
-                end = Offset(widthPx * (progress + 0.5f), 0f)
-            )
+        trace.summary?.takeIf { it.isNotBlank() }?.let { summary ->
+            Spacer(modifier = Modifier.size(8.dp))
             Text(
-                text = "${AgentToolRegistry.displayName(toolName)} --- ${AgentToolRegistry.actionFor(toolName)}",
-                style = MaterialTheme.typography.bodySmall.copy(brush = brush),
-                fontWeight = FontWeight.Medium
+                text = summary,
+                style = MaterialTheme.typography.labelSmall,
+                color = colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
             )
         }
     }

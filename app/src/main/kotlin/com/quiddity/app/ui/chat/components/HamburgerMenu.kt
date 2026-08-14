@@ -19,6 +19,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -37,6 +38,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.Button
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Switch
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -69,9 +75,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableFloatState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
+import com.quiddity.app.domain.TimeLibraryEngine
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -80,6 +90,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.SpanStyle
@@ -558,8 +569,7 @@ fun HamburgerMenu(
                                         viewModel.setActiveMessageEnabled(enabled)
                                     },
                                     onViewTimeLibrary = {
-                                        timeLibraryViewStep =
-                                            if (conversation?.timeLibraryPasswordUnlocked == true) 2 else 1
+                                        currentPanel = HamburgerPanel.TimeLibrary
                                     },
                                     onOpenSearchChat = { currentPanel = HamburgerPanel.SearchChat },
                                     webSearchSupported = webSearchSupported,
@@ -772,6 +782,17 @@ fun HamburgerMenu(
                                     onDismiss()
                                 }
                             )
+                        }
+                        HamburgerPanel.TimeLibrary -> {
+                            conversation?.let { conv ->
+                                TimeLibraryEditorPanel(
+                                    conversation = conv,
+                                    onSave = { times, disabled ->
+                                        viewModel.updateTimeLibrary(times, disabled)
+                                    },
+                                    onBack = { currentPanel = null }
+                                )
+                            }
                         }
                         HamburgerPanel.GroupName -> {
                             conversation?.let { conv ->
@@ -1505,7 +1526,7 @@ private fun TimeLibraryDetailDialog(
 
 internal enum class HamburgerPanel {
     QuickSetup, Persona, UserPersona, Scene, ApiSelector, ApiEditor,
-    Wallpaper, Compression, SearchChat,
+    Wallpaper, Compression, SearchChat, TimeLibrary,
     GroupName, GroupContextLimit, GroupMembers, GroupBackground
 }
 
@@ -3358,3 +3379,223 @@ private fun ExportImportCard(
         }
     }
 }
+
+/** 时间库可编辑面板：10 个固定时间框，上下午各 5 个，每个框可上下滚选时间并独立启用。 */
+@Composable
+private fun TimeLibraryEditorPanel(
+    conversation: Conversation,
+    onSave: (List<String>, List<Int>) -> Unit,
+    onBack: () -> Unit
+) {
+    val disabledSet = conversation.disabledTimeSlots.toSet()
+    val timesState = remember(conversation.id, conversation.timeLibrary) {
+        mutableStateOf(
+            List(TimeLibraryEngine.SLOT_COUNT) { index ->
+                conversation.timeLibrary.getOrNull(index)?.time ?: defaultSlotTime(index)
+            }
+        )
+    }
+    val enabledState = remember(conversation.id, conversation.disabledTimeSlots) {
+        mutableStateOf(
+            List(TimeLibraryEngine.SLOT_COUNT) { index -> index !in disabledSet }
+        )
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "时间库",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(onClick = onBack) { Text("返回") }
+        }
+        Spacer(modifier = Modifier.size(8.dp))
+        Text(
+            text = "上午 / 下午各 5 个时间框，最右侧开关控制是否启用。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.size(8.dp))
+        LazyColumn(modifier = Modifier.weight(1f)) {
+            items(TimeLibraryEngine.SLOT_COUNT) { index ->
+                if (index == 5) {
+                    Spacer(modifier = Modifier.size(12.dp))
+                    Text(
+                        text = "下午",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(bottom = 4.dp)
+                    )
+                    HorizontalDivider(
+                        modifier = Modifier.padding(bottom = 4.dp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
+                    )
+                }
+                val current = timesState.value[index]
+                val hour = current.substringBefore(":").toInt()
+                val minute = current.substringAfter(":").toInt()
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (index < 5) "上午 ${index + 1}" else "下午 ${index - 4}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.width(56.dp)
+                    )
+                    WheelColumn(
+                        values = (0..23).map { it.toString().padStart(2, '0') },
+                        selectedIndex = hour,
+                        onSelect = { selected ->
+                            timesState.value = timesState.value.toMutableList().also {
+                                it[index] = "%02d:%02d".format(selected, minute)
+                            }
+                        }
+                    )
+                    Text(
+                        text = ":",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    WheelColumn(
+                        values = (0..59).map { it.toString().padStart(2, '0') },
+                        selectedIndex = minute,
+                        onSelect = { selected ->
+                            timesState.value = timesState.value.toMutableList().also {
+                                it[index] = "%02d:%02d".format(hour, selected)
+                            }
+                        }
+                    )
+                    Spacer(modifier = Modifier.weight(1f))
+                    Switch(
+                        checked = enabledState.value[index],
+                        onCheckedChange = { enabled ->
+                            enabledState.value = enabledState.value.toMutableList().also {
+                                it[index] = enabled
+                            }
+                        }
+                    )
+                }
+                HorizontalDivider(
+                    modifier = Modifier.padding(vertical = 2.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.15f)
+                )
+            }
+        }
+        Spacer(modifier = Modifier.size(12.dp))
+        Button(
+            onClick = {
+                val times = mutableListOf<String>()
+                val disabled = mutableListOf<Int>()
+                for (i in 0 until TimeLibraryEngine.SLOT_COUNT) {
+                    if (enabledState.value[i]) {
+                        times.add(timesState.value[i])
+                    } else {
+                        disabled.add(i)
+                    }
+                }
+                onSave(times, disabled)
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("保存") }
+    }
+}
+
+@Composable
+private fun WheelColumn(
+    values: List<String>,
+    selectedIndex: Int,
+    onSelect: (Int) -> Unit
+) {
+    val density = LocalDensity.current
+    val stepPx = with(density) { WHEEL_ITEM_HEIGHT.toPx() }
+    var dragAccum by remember { mutableFloatStateOf(0f) }
+    val currentSelected by rememberUpdatedState(selectedIndex)
+    Box(
+        modifier = Modifier
+            .width(56.dp)
+            .height(WHEEL_HEIGHT)
+            .pointerInput(values.size) {
+                detectVerticalDragGestures { change, dragAmount ->
+                    change.consume()
+                    dragAccum += dragAmount
+                    while (dragAccum >= stepPx) {
+                        dragAccum -= stepPx
+                        onSelect((currentSelected - 1).coerceAtLeast(0))
+                    }
+                    while (dragAccum <= -stepPx) {
+                        dragAccum += stepPx
+                        onSelect((currentSelected + 1).coerceAtMost(values.size - 1))
+                    }
+                }
+            }
+    ) {
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.Center
+        ) {
+            WheelRow(values, selectedIndex - 1, selectedIndex, onSelect)
+            WheelRow(values, selectedIndex, selectedIndex, onSelect)
+            WheelRow(values, selectedIndex + 1, selectedIndex, onSelect)
+        }
+        HorizontalDivider(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = 28.dp),
+            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
+        )
+        HorizontalDivider(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = 56.dp),
+            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
+        )
+    }
+}
+
+@Composable
+private fun WheelRow(
+    values: List<String>,
+    index: Int,
+    selectedIndex: Int,
+    onSelect: (Int) -> Unit
+) {
+    val safeIndex = index.coerceIn(0, values.size - 1)
+    val selected = index == selectedIndex
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(WHEEL_ITEM_HEIGHT)
+            .clickable { onSelect(safeIndex) },
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = values[safeIndex],
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+            color = if (selected) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+            },
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+        )
+    }
+}
+
+private fun defaultSlotTime(index: Int): String =
+    if (index < 5) "09:00" else "15:00"
+
+private val WHEEL_HEIGHT = 84.dp
+private val WHEEL_ITEM_HEIGHT = 28.dp

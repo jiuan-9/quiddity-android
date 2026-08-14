@@ -60,6 +60,21 @@ object AgentSecurity {
 
     private val APP_OPS_MODES = setOf("allow", "deny", "ignore", "default")
 
+    /** run_shell 命令白名单：仅允许只读、无副作用的系统命令。 */
+    val SAFE_SHELL_COMMANDS: Set<String> = setOf(
+        "ls", "cat", "pwd", "df", "du", "getprop", "dumpsys",
+        "id", "uptime", "date", "stat", "find", "wc", "head", "tail", "echo"
+    )
+
+    /** 需要包名白名单门控的写入工具（目标是第三方应用包名）。 */
+    private val WRITE_TARGET_TOOLS = setOf(
+        "disable_app",
+        "enable_app",
+        "set_appops",
+        "force_stop",
+        "uninstall_app"
+    )
+
     /** 屏幕文本不可信包装：提示模型这是数据而非指令。 */
     fun wrapUntrustedScreen(text: String): String = "$UNTRUSTED_SCREEN_PREFIX\n$text"
 
@@ -87,9 +102,24 @@ object AgentSecurity {
             "screenshot" -> switches.read_screenshot
             "system_logs" -> switches.read_logs
             "app_logs" -> switches.read_logs
-            "open_file" -> switches.read_files
-            "reveal_file" -> switches.read_files
+            "read_file", "list_files", "file_info", "reveal_file" -> switches.read_files
+            "create_file", "write_file", "append_file", "rename_file", "mkdir",
             "move_file", "copy_file", "delete_file" -> switches.write_files
+            "ocr_image" -> switches.read_ocr
+            "notify_self" -> switches.interact_notify
+            "read_clipboard" -> switches.read_clipboard
+            "write_clipboard" -> switches.write_clipboard
+            "toast_monitor" -> switches.sense_toasts
+            "notification_guard" -> switches.sense_notifications
+            "run_shell" -> switches.run_shell
+            "app_usage_detail" -> switches.sense_usage
+            "click", "long_press", "click_text", "scroll", "global_action",
+            "input_text", "click_id", "click_desc", "drag", "scroll_to_text", "lock_screen" ->
+                switches.simulate_click
+            "open_app" -> switches.open_app
+            "clear_clipboard" -> switches.write_clipboard
+            "dismiss_notification", "reply_notification" -> switches.sense_notifications
+            "schedule_notify" -> switches.interact_notify
             "disable_app" -> switches.write_disable
             "enable_app" -> switches.write_disable
             "set_appops" -> switches.write_appops
@@ -143,10 +173,106 @@ object AgentSecurity {
                         return "参数「最大字数」必须为正整数"
                     }
                 }
+                "maxItems" -> {
+                    val num = (present as? JsonPrimitive)?.content?.toIntOrNull()
+                    if (num == null || num <= 0 || num > 50) {
+                        return "参数「最多条数」必须为一到五十的整数"
+                    }
+                }
                 "days" -> {
                     val num = (present as? JsonPrimitive)?.content?.toIntOrNull()
                     if (num == null || num <= 0 || num > 90) {
                         return "参数「天数」必须为一到九十的整数"
+                    }
+                }
+                "content" -> {
+                    val value = (present as? JsonPrimitive)?.content.orEmpty()
+                    if (value.length > MAX_CONTENT_LENGTH) {
+                        return "参数「内容」过长（上限 $MAX_CONTENT_LENGTH 字符）"
+                    }
+                    if (value.any { it.code == 0 }) return "参数「内容」包含非法字符"
+                }
+                "title" -> {
+                    val value = (present as? JsonPrimitive)?.content.orEmpty()
+                    if (value.length > MAX_NOTIFY_LENGTH) {
+                        return "参数「$name」过长（上限 $MAX_NOTIFY_LENGTH 字符）"
+                    }
+                }
+                "text" -> {
+                    val value = (present as? JsonPrimitive)?.content.orEmpty()
+                    if (value.isBlank()) return "参数「text」不能为空"
+                    if (value.length > MAX_NOTIFY_LENGTH) {
+                        return "参数「text」过长（上限 $MAX_NOTIFY_LENGTH 字符）"
+                    }
+                }
+                "x", "y", "x1", "y1", "x2", "y2" -> {
+                    val num = (present as? JsonPrimitive)?.content?.toIntOrNull()
+                    if (num == null || num < 0 || num > MAX_COORDINATE) {
+                        return "参数「$name」必须为零到 $MAX_COORDINATE 的整数（像素）"
+                    }
+                }
+                "maxScrolls" -> {
+                    val num = (present as? JsonPrimitive)?.content?.toIntOrNull()
+                    if (num == null || num <= 0 || num > 10) {
+                        return "参数「最多滚动次数」必须为一到十的整数"
+                    }
+                }
+                "delaySeconds" -> {
+                    val num = (present as? JsonPrimitive)?.content?.toIntOrNull()
+                    if (num == null || num <= 0 || num > 86_400) {
+                        return "参数「延迟秒数」必须为一到 86400 的整数"
+                    }
+                }
+                "id", "desc" -> {
+                    val value = (present as? JsonPrimitive)?.content.orEmpty()
+                    if (value.isBlank()) return "参数「$name」不能为空"
+                    if (value.length > 200) return "参数「$name」过长"
+                }
+                "reply" -> {
+                    val value = (present as? JsonPrimitive)?.content.orEmpty()
+                    if (value.isBlank()) return "参数「reply」不能为空"
+                    if (value.length > MAX_NOTIFY_LENGTH) {
+                        return "参数「reply」过长（上限 $MAX_NOTIFY_LENGTH 字符）"
+                    }
+                }
+                "distance" -> {
+                    val num = (present as? JsonPrimitive)?.content?.toIntOrNull()
+                    if (num == null || num <= 0 || num > MAX_SCROLL_DISTANCE) {
+                        return "参数「距离」必须为一到 $MAX_SCROLL_DISTANCE 的整数（像素）"
+                    }
+                }
+                "direction" -> {
+                    val value = (present as? JsonPrimitive)?.content.orEmpty()
+                    if (value !in SCROLL_DIRECTIONS) {
+                        return "参数「方向」非法：仅支持 up / down / left / right"
+                    }
+                }
+                "action" -> {
+                    val value = (present as? JsonPrimitive)?.content.orEmpty()
+                    if (value !in GLOBAL_ACTIONS) {
+                        return "参数「系统动作」非法：仅支持 back / home / recents / notifications / quick_settings"
+                    }
+                }
+                "command" -> {
+                    val value = (present as? JsonPrimitive)?.content.orEmpty()
+                    if (value !in SAFE_SHELL_COMMANDS) {
+                        return "参数「命令」不在安全白名单内，仅支持：${SAFE_SHELL_COMMANDS.joinToString(" / ")}"
+                    }
+                }
+                "args" -> {
+                    val array = present as? kotlinx.serialization.json.JsonArray
+                        ?: return "参数「参数列表」必须为字符串数组"
+                    if (array.size > MAX_SHELL_ARGS) {
+                        return "参数「参数列表」过长（上限 $MAX_SHELL_ARGS 个）"
+                    }
+                    for (element in array) {
+                        val value = (element as? JsonPrimitive)?.content ?: return "参数「参数列表」必须为字符串数组"
+                        if (value.isBlank()) return "参数「参数列表」不能包含空字符串"
+                        if (value.length > 512) return "参数「参数列表」中单项过长"
+                        if (value.any { it.code == 0 }) return "参数「参数列表」包含非法字符"
+                        if (value.any { it in SHELL_META_CHARS }) {
+                            return "参数「参数列表」不能包含 shell 元字符（;&|`$<> 等）"
+                        }
                     }
                 }
                 "src", "dst", "path" -> {
@@ -167,9 +293,7 @@ object AgentSecurity {
      * @return null 表示允许；否则返回中文拒绝描述。
      */
     fun whitelistGate(tool: AgentTool, args: JsonObject, whitelist: Set<String>): String? {
-        if (tool.level != AgentPermissionLevel.ADVANCED) return null
-        val hasPkgParam = (tool.params["properties"] as? JsonObject)?.containsKey("pkg") == true
-        if (!hasPkgParam) return null
+        if (tool.name !in WRITE_TARGET_TOOLS) return null
         val pkg = (args["pkg"] as? JsonPrimitive)?.content.orEmpty()
         if (pkg !in whitelist) {
             return "拒绝执行：$pkg 不在白名单内，请先在 Agent 设置中添加"
@@ -191,7 +315,7 @@ object AgentSecurity {
         var argsText = encodeArgs(args)
         var effectiveArgs = args
 
-        if (tool.confirm == AgentConfirmPolicy.ALWAYS_CONFIRM && !confirmed(args)) {
+        if (tool.confirm == AgentConfirmPolicy.ALWAYS_CONFIRM && !ctx.autoConfirm && !confirmed(args)) {
             val approved = ctx.confirmRequest?.invoke(tool, args)
             if (approved != true) {
                 appendAudit(ctx, tool, argsText, ok = false, confirmed = false)
@@ -263,4 +387,13 @@ object AgentSecurity {
             )
         )
     }
+
+    private const val MAX_CONTENT_LENGTH = 100_000
+    private const val MAX_NOTIFY_LENGTH = 2_000
+    private const val MAX_SHELL_ARGS = 8
+    private const val MAX_COORDINATE = 20_000
+    private const val MAX_SCROLL_DISTANCE = 10_000
+    private val SCROLL_DIRECTIONS = setOf("up", "down", "left", "right")
+    private val GLOBAL_ACTIONS = setOf("back", "home", "recents", "notifications", "quick_settings", "lock")
+    private val SHELL_META_CHARS = setOf(';', '&', '|', '`', '$', '<', '>', '\n', '\r')
 }

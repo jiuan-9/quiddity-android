@@ -269,6 +269,11 @@ data class Conversation(
      */
     val timeLibraryGeneratedDate: String = "",
     /**
+     * 被永久禁用的时间框下标（0-9，共 10 个框，上午 0-4、下午 5-9）。
+     * 禁用后该框不参与、也不计入可用数量；可用最大数量 = 10 - 禁用框数量。
+     */
+    val disabledTimeSlots: List<Int> = emptyList(),
+    /**
      * 时间库查看密码（由 AI 在生成时间库时制定，纯数字）。
      * 空字符串表示未设置密码（旧数据可直接查看）。
      * 一旦生成即固定不变，不要求唯一。
@@ -409,7 +414,32 @@ data class Message(
      * - 导出/换机后文件可能不存在，渲染时自动降级为占位样式；
      * - null = 普通文本消息。
      */
-    val imageUri: String? = null
+    val imageUri: String? = null,
+    /**
+     * 工具轮正文段边界（合并模式消息专用）：合并模式把多轮工具循环的正文拼成一条消息，
+     * 本字段记录每个工具轮结束时的正文长度（字符偏移），供 UI 把工具痕迹插入正文流
+     * 的对应位置（正文段 → 工具痕迹 → 正文段，与流式输出一致）。
+     * - 空列表 = 普通消息（不拆分渲染）；
+     * - 只写入合并消息，旧数据无此字段自动兼容。
+     */
+    val toolSegmentEnds: List<Int> = emptyList(),
+    /**
+     * 工具调用历史（持久化到消息）：生成结束后把本轮的 [com.quiddity.app.ui.chat.ToolTrace]
+     * 固化进消息，之后重新打开会话仍能看到工具调用记录（段间渲染，与正文分界）。
+     * - 空列表 = 无工具调用；
+     * - 旧数据无此字段自动兼容。
+     */
+    val toolTraces: List<MessageToolTrace> = emptyList()
+)
+
+/**
+ * 消息内持久化的工具调用记录（与 [Message.toolTraces] 配套）。
+ */
+@Serializable
+data class MessageToolTrace(
+    val name: String,
+    val ok: Boolean,
+    val summary: String?
 )
 
 /**

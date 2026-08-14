@@ -267,7 +267,7 @@ fun PersonaPanel(
         ) {
             ImageCropper(
                 imageUri = uri,
-                outputName = "ai_avatar_$ownerId",
+                outputName = "ai_avatar_${ownerId}_${System.currentTimeMillis()}",
                 onCropComplete = { croppedUri ->
                     aiAvatarUri = croppedUri.toString()
                     croppingUri = null

@@ -91,6 +91,7 @@ fun AvatarPicker(
     var copyError by remember { mutableStateOf<String?>(null) }
     // 裁剪界面绑定的 URI（已复制到内部存储的 file:// URI）
     var croppingUri by remember { mutableStateOf<Uri?>(null) }
+    var cropOutputName by remember { mutableStateOf("user_avatar") }
 
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
@@ -105,6 +106,7 @@ fun AvatarPicker(
                     }
                 }
                 result.onSuccess { internalUri ->
+                    cropOutputName = "user_avatar_${System.currentTimeMillis()}"
                     croppingUri = internalUri
                 }.onFailure { err ->
                     CrashLogger.logException(
@@ -132,7 +134,7 @@ fun AvatarPicker(
         ) {
             ImageCropper(
                 imageUri = uri,
-                outputName = "user_avatar",
+                outputName = cropOutputName,
                 onCropComplete = { croppedUri ->
                     onPicked(croppedUri.toString())
                     croppingUri = null

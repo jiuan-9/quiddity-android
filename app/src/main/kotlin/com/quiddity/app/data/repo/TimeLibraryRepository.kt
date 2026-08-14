@@ -14,6 +14,7 @@ import com.quiddity.app.active.AlarmScheduler
 import com.quiddity.app.data.model.Conversation
 import com.quiddity.app.data.model.Message
 import com.quiddity.app.data.model.Role
+import com.quiddity.app.data.model.TimePoint
 import com.quiddity.app.domain.TimeLibraryEngine
 import com.quiddity.app.util.IdGenerator
 import com.quiddity.app.util.QuiddityConstants
@@ -115,7 +116,12 @@ class TimeLibraryRepository(
         if (!generatingInFlight.add(convId)) return GenerationOutcome.Generating
         return try {
             val raw = runCatching { chatRepository.generateTimeLibrary(conv) }.getOrNull()
-            val generatedTimes = raw?.let { TimeLibraryEngine.parseGeneratedTimes(it) }.orEmpty()
+            val generatedTimes = raw?.let {
+                TimeLibraryEngine.parseGeneratedTimes(
+                    it,
+                    disabledSlots = conv.disabledTimeSlots.toSet()
+                )
+            }.orEmpty()
             val merged = TimeLibraryEngine.mergeGenerated(conv.timeLibrary, generatedTimes)
             if (merged.isEmpty()) {
                 if (raw == null && conv.timeLibrary.isEmpty()) {
@@ -126,42 +132,13 @@ class TimeLibraryRepository(
                     GenerationOutcome.TriggeredSilent
                 }
             } else {
-                // 生成成功：一并更新查看密码与是否告知（AI 制定）。
-                // 密码无效或缺失时使用按会话+日期稳定的兜底密码，保证"查看时间库"始终可用；
-                // 生成失败沿用旧库时保持原密码不变。
-                val hasNewLibrary = raw != null && generatedTimes.isNotEmpty()
-                val passwordExisted = conv.timeLibraryPassword.isNotBlank()
-                // 密码一旦生成就固定不变（不要求唯一）；只有从未设置过时才会在本次生成时制定
-                val password = if (passwordExisted) {
-                    conv.timeLibraryPassword
-                } else if (hasNewLibrary) {
-                    TimeLibraryEngine.sanitizePassword(
-                        TimeLibraryEngine.parseGeneratedPassword(raw)
-                    ).ifBlank { TimeLibraryEngine.fallbackPassword(conv.id + today) }
-                } else {
-                    conv.timeLibraryPassword
-                }
-                val revealed = if (passwordExisted) {
-                    conv.timeLibraryPasswordRevealed
-                } else if (hasNewLibrary) {
-                    TimeLibraryEngine.parsePasswordRevealed(raw)
-                } else {
-                    conv.timeLibraryPasswordRevealed
-                }
                 conversationRepository.updateConversation(
                     conv.copy(
                         timeLibrary = merged,
-                        timeLibraryGeneratedDate = today,
-                        timeLibraryPassword = password,
-                        timeLibraryPasswordRevealed = revealed
+                        timeLibraryGeneratedDate = today
                     )
                 )
                 scheduleFromLibrary(conv.copy(timeLibrary = merged))
-                // 首次生成且 AI 决定告知时：由 App 用真实存储的密码生成一条 AI 气泡消息，
-                // 保证告知的密码与「查看时间库」校验的密码完全一致；密码固定后不再重复告知
-                if (hasNewLibrary && !passwordExisted && revealed && password.isNotBlank()) {
-                    appendPasswordNotice(conv, password)
-                }
                 GenerationOutcome.Triggered
             }
         } finally {
@@ -193,6 +170,30 @@ class TimeLibraryRepository(
             conversationRepository.updateConversation(conv.copy(activeMessageEnabled = false))
             return GenerationOutcome.NotEnabled
         }
+    }
+
+    /** 用户手动保存时间库：写入时间点与禁用框，并立即重新注册闹钟。 */
+    suspend fun saveTimeLibrary(
+        conv: Conversation,
+        times: List<String>,
+        disabledSlots: List<Int>
+    ) {
+        val sanitizedTimes = times.mapNotNull { raw ->
+            val minutes = TimeLibraryEngine.parseMinutes(raw) ?: return@mapNotNull null
+            val hour = (minutes / 60).toString().padStart(2, '0')
+            val minute = (minutes % 60).toString().padStart(2, '0')
+            "$hour:$minute"
+        }
+        val sanitizedDisabled = disabledSlots
+            .filter { it in 0 until TimeLibraryEngine.SLOT_COUNT }
+            .distinct()
+            .sorted()
+        val updated = conv.copy(
+            timeLibrary = sanitizedTimes.map { TimePoint(it) },
+            disabledTimeSlots = sanitizedDisabled
+        )
+        conversationRepository.updateConversation(updated)
+        scheduleFromLibrary(updated)
     }
 
     // ===== 定时触发执行流程 =====
@@ -370,21 +371,6 @@ class TimeLibraryRepository(
         )
         conversationRepository.appendMessage(message)
         postSentNotification(conv, content)
-    }
-
-    /**
-     * 密码告知气泡：App 用已存储的真实密码生成一条 AI 消息，
-     * 避免模型在对话中随口编造一个与校验不一致的密码。
-     */
-    private suspend fun appendPasswordNotice(conv: Conversation, password: String) {
-        val message = Message(
-            id = IdGenerator.newId(IdGenerator.Prefix.AI_MESSAGE),
-            conversationId = conv.id,
-            role = Role.ASSISTANT,
-            content = "我设置的时间库查看密码是 $password，你可以用它查看今天的时间安排（会话菜单 → 主动消息 → 查看时间库）。",
-            timestamp = System.currentTimeMillis()
-        )
-        conversationRepository.appendMessage(message)
     }
 
     /**

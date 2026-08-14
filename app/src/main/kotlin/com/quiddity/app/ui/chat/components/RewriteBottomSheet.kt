@@ -97,6 +97,7 @@ import kotlinx.coroutines.launch
  * - 输入时允许按回车换行（ImeAction.Default）
  *
  * @param initialText 原消息内容（作为改写的初始值）
+ * @param placeholder 输入框占位文案（默认「改写 AI 的回复…」；编辑用户消息时可传入「编辑消息…」）
  * @param onSave 保存回调，传入改写后的新内容
  * @param onDismiss 取消回调（用户退回）
  */
@@ -104,7 +105,8 @@ import kotlinx.coroutines.launch
 fun RewriteBottomSheet(
     initialText: String,
     onSave: (String) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    placeholder: String = "改写 AI 的回复…"
 ) {
     val configuration = LocalConfiguration.current
     val screenHeight = configuration.screenHeightDp.dp
@@ -206,7 +208,7 @@ fun RewriteBottomSheet(
                             .focusRequester(focusRequester),
                         placeholder = {
                             Text(
-                                text = "改写 AI 的回复…",
+                                text = placeholder,
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                             )

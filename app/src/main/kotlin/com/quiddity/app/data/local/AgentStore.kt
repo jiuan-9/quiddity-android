@@ -60,6 +60,14 @@ data class AgentToolSwitches(
     val read_traffic: Boolean = true,
     val read_screenshot: Boolean = true,
     val read_logs: Boolean = true,
+    val read_ocr: Boolean = true,
+    val sense_toasts: Boolean = true,
+    val interact_notify: Boolean = true,
+    val read_clipboard: Boolean = false,
+    val write_clipboard: Boolean = false,
+    val run_shell: Boolean = false,
+    val simulate_click: Boolean = false,
+    val open_app: Boolean = false,
     val read_files: Boolean = false,
     val write_files: Boolean = false,
     val write_disable: Boolean = false,
@@ -67,6 +75,17 @@ data class AgentToolSwitches(
     val write_force_stop: Boolean = false,
     val write_uninstall: Boolean = false
 )
+
+/**
+ * 权限管控程度：
+ * - ASK（过问）：危险 / 写入类工具每次执行前弹窗让用户确认（批量收集一次展示）；
+ * - FULL（完全）：信任开关与白名单，不再逐次弹窗，自动执行。
+ */
+@Serializable
+enum class AgentPermissionControl {
+    ASK,
+    FULL
+}
 
 /**
  * Agent 工具执行审计条目。
@@ -95,7 +114,10 @@ data class AgentSettings(
     val version: Int = 1,
     val whitelist: List<String> = emptyList(),
     val toolSwitches: AgentToolSwitches = AgentToolSwitches(),
-    val audit: List<AgentAuditEntry> = emptyList()
+    val permissionControl: AgentPermissionControl = AgentPermissionControl.ASK,
+    val audit: List<AgentAuditEntry> = emptyList(),
+    /** 屏幕操作（模拟点击/滑动等）时是否自动进入画中画小窗（默认开，Android 12+ 生效）。 */
+    val pipOnScreenOps: Boolean = true
 )
 
 /**
@@ -141,6 +163,14 @@ class AgentStore(private val context: Context) {
                 "read_traffic" -> switches.copy(read_traffic = enabled)
                 "read_screenshot" -> switches.copy(read_screenshot = enabled)
                 "read_logs" -> switches.copy(read_logs = enabled)
+                "read_ocr" -> switches.copy(read_ocr = enabled)
+                "sense_toasts" -> switches.copy(sense_toasts = enabled)
+                "interact_notify" -> switches.copy(interact_notify = enabled)
+                "read_clipboard" -> switches.copy(read_clipboard = enabled)
+                "write_clipboard" -> switches.copy(write_clipboard = enabled)
+                "run_shell" -> switches.copy(run_shell = enabled)
+                "simulate_click" -> switches.copy(simulate_click = enabled)
+                "open_app" -> switches.copy(open_app = enabled)
                 "read_files" -> switches.copy(read_files = enabled)
                 "write_files" -> switches.copy(write_files = enabled)
                 "write_disable" -> switches.copy(write_disable = enabled)
@@ -157,6 +187,12 @@ class AgentStore(private val context: Context) {
         }
 
         fun clearedAudit(): List<AgentAuditEntry> = emptyList()
+
+        /** 应用权限管控程度；未知值回退 ASK。 */
+        fun applyPermissionControl(
+            settings: AgentSettings,
+            control: AgentPermissionControl
+        ): AgentSettings = settings.copy(permissionControl = control)
 
         /** 追加白名单（去重，保持顺序）。 */
         fun whitelistWith(current: List<String>, pkg: String): List<String> =
@@ -232,6 +268,25 @@ class AgentStore(private val context: Context) {
         writeMutex.withLock {
             val current = _settings.value
             val next = current.copy(audit = clearedAudit())
+            writePrefs(next)
+            _settings.value = next
+        }
+    }
+
+    suspend fun setPermissionControl(control: AgentPermissionControl) = withContext(Dispatchers.IO) {
+        writeMutex.withLock {
+            val current = _settings.value
+            val next = applyPermissionControl(current, control)
+            writePrefs(next)
+            _settings.value = next
+        }
+    }
+
+    /** 设置屏幕操作时是否自动进入画中画小窗。 */
+    suspend fun setPipOnScreenOps(enabled: Boolean) = withContext(Dispatchers.IO) {
+        writeMutex.withLock {
+            val current = _settings.value
+            val next = current.copy(pipOnScreenOps = enabled)
             writePrefs(next)
             _settings.value = next
         }

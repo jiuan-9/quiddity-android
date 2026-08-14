@@ -315,4 +315,41 @@ class TimeLibraryEngineTest {
         val library = listOf(TimePoint("12:00"))
         assertNull(TimeLibraryEngine.nextSchedulable(library, 12 * 60), "严格晚于当前时间才注册")
     }
+
+    @Test
+    fun `enforceTimeLibraryRules - splits am and pm at five each`() {
+        val times = listOf(
+            "01:00", "02:00", "03:00", "04:00", "05:00", "06:00",
+            "13:00", "14:00", "15:00", "16:00", "17:00", "18:00"
+        )
+        val result = TimeLibraryEngine.enforceTimeLibraryRules(times, emptySet())
+        assertEquals(10, result.size)
+        assertEquals(5, result.count { !TimeLibraryEngine.isAfternoon(it) })
+        assertEquals(5, result.count { TimeLibraryEngine.isAfternoon(it) })
+        assertTrue("01:00" in result)
+        assertTrue("13:00" in result)
+        assertTrue("06:00" !in result)
+        assertTrue("18:00" !in result)
+    }
+
+    @Test
+    fun `enforceTimeLibraryRules - disabled am slot reduces am capacity`() {
+        val result = TimeLibraryEngine.enforceTimeLibraryRules(
+            listOf("01:00", "02:00", "03:00", "04:00", "05:00", "06:00", "13:00"),
+            setOf(0)
+        )
+        assertEquals(4, result.count { !TimeLibraryEngine.isAfternoon(it) })
+        assertEquals(1, result.count { TimeLibraryEngine.isAfternoon(it) })
+    }
+
+    @Test
+    fun `enforceTimeLibraryRules - disabled slots shrink total capacity`() {
+        val result = TimeLibraryEngine.enforceTimeLibraryRules(
+            listOf("01:00", "02:00", "03:00", "04:00", "05:00", "13:00", "14:00", "15:00", "16:00", "17:00"),
+            setOf(0, 1, 5, 6)
+        )
+        assertEquals(3, result.count { !TimeLibraryEngine.isAfternoon(it) })
+        assertEquals(3, result.count { TimeLibraryEngine.isAfternoon(it) })
+        assertEquals(6, result.size)
+    }
 }

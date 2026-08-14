@@ -53,6 +53,16 @@ interface StreamCoordinator {
     fun acceptReasoning(delta: String): List<Signal>
     /** 追加一段应用内思考（如工具系列使用后的评估），附着到下一条新建消息。 */
     fun appendThinking(extra: String)
+    /**
+     * 设置合并模式：为 true 时后续正文追加到上一条已发消息（工具轮之间正文单条化）。
+     * 默认实现为空操作，各实现按需覆盖。
+     */
+    fun setMergeWithPrevious(merge: Boolean) = Unit
+    /**
+     * 标记当前合并正文的段边界（工具轮结束处），供 UI 把工具痕迹插入正文流对应位置。
+     * 默认实现为空操作，各实现按需覆盖。
+     */
+    fun markSegmentEnd() = Unit
     fun finalize(): List<Signal>
     fun snapshot(): List<Message>
 }
@@ -164,8 +174,39 @@ class MessageStreamCoordinator(
     /** 追加一段思考（如工具系列使用后的第一人称评估），附着到下一条新建消息。 */
     override fun appendThinking(extra: String) {
         if (extra.isBlank()) return
+        // 合并模式下没有"下一条新建消息"：思考直接挂到已合并的消息上
+        if (mergeWithPrevious && completed.isNotEmpty()) {
+            val lastIdx = completed.lastIndex
+            val merged = completed[lastIdx].copy(
+                thinking = if (completed[lastIdx].thinking.isBlank()) extra
+                else completed[lastIdx].thinking + "\n" + extra
+            )
+            completed[lastIdx] = merged
+            return
+        }
         pendingThinking = if (pendingThinking.isBlank()) extra else "$pendingThinking\n$extra"
         thinkingForIndex = currentIndex
+    }
+
+    /**
+     * 合并模式：为 true 时新正文（流式与完成段）追加到上一条已发消息。
+     * Agent 多轮工具循环中每轮模型输出的正文合并为一条消息，避免拆成多条。
+     */
+    private var mergeWithPrevious = false
+
+    /** 设置合并模式（工具轮之后的轮次正文合并到上一条消息）。 */
+    override fun setMergeWithPrevious(merge: Boolean) {
+        mergeWithPrevious = merge
+    }
+
+    /** 记录当前已合并正文的段边界（每个工具轮结束处），供 UI 把工具痕迹插入正文流对应位置。 */
+    override fun markSegmentEnd() {
+        if (completed.isEmpty()) return
+        val lastIdx = completed.lastIndex
+        val last = completed[lastIdx]
+        val boundary = last.content.length
+        if (last.toolSegmentEnds.lastOrNull() == boundary) return
+        completed[lastIdx] = last.copy(toolSegmentEnds = last.toolSegmentEnds + boundary)
     }
 
     override fun accept(delta: String): List<StreamCoordinator.Signal> {
@@ -270,7 +311,21 @@ class MessageStreamCoordinator(
 
         // 单条更新（当前 buffer 内容）：buffer 为空白时不发出（避免空消息/纯空白气泡）
         if (buffer.isNotBlank()) {
-            val current = buildMessage(streaming = true)
+            val current = if (mergeWithPrevious && completed.isNotEmpty()) {
+                // 合并模式：已发段落（completed 内容）+ 当前 buffer 拼装为流式内容。
+                // 关键：只发 Update 信号、不写回 completed——写回会导致后续 delta
+                // 把已含 buffer 的内容再叠加一遍（内容重复累积）。
+                // 已发段落由 emitCompleted / finalize 真正追加进 completed。
+                val lastIdx = completed.lastIndex
+                val mergedContent = completed[lastIdx].content + buffer.toString()
+                completed[lastIdx].copy(
+                    content = mergedContent,
+                    tokenCount = TokenEstimator.estimate(mergedContent),
+                    isStreaming = true
+                )
+            } else {
+                buildMessage(streaming = true)
+            }
             if (knownIds.add(current.id)) {
                 signals += StreamCoordinator.Signal.New(current)
             } else {
@@ -386,14 +441,26 @@ class MessageStreamCoordinator(
         buffer.append(cleaned)
         if (buffer.isBlank()) return signals
         val finalMsg = buildMessage(streaming = false)
-        if (finalMsg.id in knownIds) {
+        if (mergeWithPrevious && completed.isNotEmpty()) {
+            // 合并模式：收尾正文追加到上一条已发消息
+            val lastIdx = completed.lastIndex
+            val mergedContent = completed[lastIdx].content + finalMsg.content
+            completed[lastIdx] = completed[lastIdx].copy(
+                content = mergedContent,
+                tokenCount = TokenEstimator.estimate(mergedContent),
+                isStreaming = false
+            )
+            signals += StreamCoordinator.Signal.Update(completed[lastIdx])
+        } else if (finalMsg.id in knownIds) {
             signals += StreamCoordinator.Signal.Complete(finalMsg)
         } else {
             signals += StreamCoordinator.Signal.New(finalMsg)
             signals += StreamCoordinator.Signal.Complete(finalMsg)
         }
-        completed += finalMsg
-        currentIndex++
+        if (!mergeWithPrevious) {
+            completed += finalMsg
+            currentIndex++
+        }
         buffer.clear()
         return signals
     }
@@ -431,14 +498,25 @@ class MessageStreamCoordinator(
      */
     private fun flushPendingBrackets(signals: MutableList<StreamCoordinator.Signal>) {
         pendingBrackets.forEach { (idx, text) ->
-            val completedMsg = buildMessageFromContentAt(idx, text, streaming = false)
-            if (knownIds.add(completedMsg.id)) {
-                signals += StreamCoordinator.Signal.New(completedMsg)
+            if (mergeWithPrevious && completed.isNotEmpty()) {
+                // 合并模式：括号段同样并入已合并消息
+                val lastIdx = completed.lastIndex
+                val mergedContent = completed[lastIdx].content + text
+                completed[lastIdx] = completed[lastIdx].copy(
+                    content = mergedContent,
+                    tokenCount = TokenEstimator.estimate(mergedContent)
+                )
+                signals += StreamCoordinator.Signal.Update(completed[lastIdx])
             } else {
-                signals += StreamCoordinator.Signal.Update(completedMsg)
+                val completedMsg = buildMessageFromContentAt(idx, text, streaming = false)
+                if (knownIds.add(completedMsg.id)) {
+                    signals += StreamCoordinator.Signal.New(completedMsg)
+                } else {
+                    signals += StreamCoordinator.Signal.Update(completedMsg)
+                }
+                signals += StreamCoordinator.Signal.Complete(completedMsg)
+                completed += completedMsg
             }
-            signals += StreamCoordinator.Signal.Complete(completedMsg)
-            completed += completedMsg
             currentStartTs = System.currentTimeMillis()
         }
         pendingBrackets.clear()
@@ -448,6 +526,19 @@ class MessageStreamCoordinator(
      * 用当前索引发出完成消息并推进索引。
      */
     private fun emitCompleted(signals: MutableList<StreamCoordinator.Signal>, text: String) {
+        if (mergeWithPrevious && completed.isNotEmpty()) {
+            // 合并模式：追加到上一条已发消息（工具轮之间正文单条化，原地 Update）
+            val lastIdx = completed.lastIndex
+            val mergedContent = completed[lastIdx].content + text
+            val merged = completed[lastIdx].copy(
+                content = mergedContent,
+                tokenCount = TokenEstimator.estimate(mergedContent),
+                isStreaming = false
+            )
+            completed[lastIdx] = merged
+            signals += StreamCoordinator.Signal.Update(merged)
+            return
+        }
         val completedMsg = buildMessageFromContentAt(currentIndex, text, streaming = false)
         currentIndex++
         if (knownIds.add(completedMsg.id)) {

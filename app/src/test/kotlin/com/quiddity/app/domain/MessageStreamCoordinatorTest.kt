@@ -906,4 +906,76 @@ class MessageStreamCoordinatorTest {
         assertEquals("没有思考标记的普通回复。", snap.first().content)
         assertTrue(snap.first().thinking.isBlank())
     }
+
+    // ============================================================
+    // 合并模式（工具轮正文单条化）
+    // ============================================================
+
+    @Test
+    fun `merge mode combines rounds into one message without duplication`() {
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        // 第一轮（非合并）：正文 A 正常成一条消息
+        coord.accept("好的，我先找找抖音。")
+        assertEquals(listOf("好的，我先找找抖音。"), coord.snapshot().map { it.content })
+        // 工具轮之后：开启合并模式，第二轮流式分片到达
+        coord.setMergeWithPrevious(true)
+        coord.accept("（眨眨眼")
+        coord.accept("，看着屏幕亮起来）")
+        coord.accept("跳好啦～已经帮你打开抖音了。")
+        val snap = coord.snapshot()
+        assertEquals(1, snap.size, "合并模式应只有一条消息：${snap.map { it.content }}")
+        assertEquals(
+            listOf("好的，我先找找抖音。（眨眨眼，看着屏幕亮起来）跳好啦～已经帮你打开抖音了。"),
+            snap.map { it.content },
+            "多轮正文应合成一条且内容不重复（回归：流式分片曾重复叠加 buffer）"
+        )
+    }
+
+    @Test
+    fun `merge mode finalize appends trailing content once`() {
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("第一段。")
+        coord.setMergeWithPrevious(true)
+        coord.accept("第二段。")
+        coord.accept("第三段")
+        coord.finalize()
+        val snap = coord.snapshot()
+        assertEquals(1, snap.size)
+        assertEquals("第一段。第二段。第三段", snap[0].content)
+    }
+
+    @Test
+    fun `merge mode streaming updates never write back to completed`() {
+        // 回归防护：合并模式下的流式 Update 只拼装显示、不写回 completed，
+        // 否则后续 delta 会把已含 buffer 的内容再叠加一遍（内容重复累积）
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("开头。")
+        coord.setMergeWithPrevious(true)
+        // 无标点长分片：每片都触发流式更新
+        coord.accept("第一片")
+        coord.accept("第二片")
+        coord.accept("第三片")
+        coord.finalize()
+        val snap = coord.snapshot()
+        assertEquals(1, snap.size)
+        assertEquals("开头。第一片第二片第三片", snap[0].content)
+    }
+
+    @Test
+    fun `merge mode markSegmentEnd records tool round boundaries`() {
+        // 段边界：每个工具轮结束处记录正文长度偏移，供 UI 把工具痕迹插入正文流对应位置
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("第一轮正文。")
+        coord.markSegmentEnd()
+        coord.setMergeWithPrevious(true)
+        coord.accept("第二轮正文。")
+        coord.markSegmentEnd()
+        coord.accept("第三轮正文。")
+        coord.markSegmentEnd()
+        coord.finalize()
+        val snap = coord.snapshot()
+        assertEquals(1, snap.size)
+        assertEquals("第一轮正文。第二轮正文。第三轮正文。", snap[0].content)
+        assertEquals(listOf(6, 12, 18), snap[0].toolSegmentEnds)
+    }
 }

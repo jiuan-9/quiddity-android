@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.quiddity.app.data.model.Conversation
 import com.quiddity.app.data.model.ConversationType
 import com.quiddity.app.data.model.Message
+import com.quiddity.app.data.model.MessageToolTrace
 import com.quiddity.app.data.model.Persona
 import com.quiddity.app.data.model.PersonaCard
 import com.quiddity.app.data.model.Role
@@ -160,12 +161,16 @@ class ChatViewModel(
     val isGenerating: StateFlow<Boolean> = _isGenerating.asStateFlow()
 
     /** 当前轮次 AI 使用的工具名（聊天页工具报告条展示，生成结束后清空）。 */
-    private val _toolUse = MutableStateFlow<String?>(null)
-    val toolUse: StateFlow<String?> = _toolUse.asStateFlow()
+    private val _toolTraces = MutableStateFlow<List<ToolTrace>>(emptyList())
+    val toolTraces: StateFlow<List<ToolTrace>> = _toolTraces.asStateFlow()
 
     /** 待用户确认的危险工具调用（弹窗由 Agent 聊天页展示）。 */
     private val _pendingToolConfirm = MutableStateFlow<PendingToolConfirm?>(null)
     val pendingToolConfirm: StateFlow<PendingToolConfirm?> = _pendingToolConfirm.asStateFlow()
+
+    /** 撤回后的「重新编辑」缓存：撤回时保留原文/图片/OCR 文本，用户可编辑后作为新消息重发。 */
+    private val _pendingReedit = MutableStateFlow<PendingReedit?>(null)
+    val pendingReedit: StateFlow<PendingReedit?> = _pendingReedit.asStateFlow()
 
     /** 用户对危险工具确认弹窗做出决定：通过 [resume] 回调放行/取消挂起的流。 */
     fun confirmTool(approved: Boolean) {
@@ -419,6 +424,8 @@ class ChatViewModel(
         ocrText: String? = null,
         imageUri: String? = null
     ) {
+        // 发送新消息即放弃上一轮的「重新编辑」入口
+        _pendingReedit.value = null
         // 纯图片消息允许内容为空（气泡用图片卡片展示，模型上下文由 ocrText 补充）
         if (text.isBlank() && imageUri.isNullOrBlank()) return
         val conv = conversation.value ?: return
@@ -623,7 +630,7 @@ class ChatViewModel(
             val selfJob = kotlin.coroutines.coroutineContext[kotlinx.coroutines.Job]
             cleanupStaleStreamingMessages()
             _isGenerating.value = true
-            _toolUse.value = null
+            _toolTraces.value = emptyList()
             _pendingToolConfirm.value = null
             try {
                 replyRunStart = System.currentTimeMillis()
@@ -658,7 +665,7 @@ class ChatViewModel(
             } finally {
                 if (streamJob === selfJob) {
                     _isGenerating.value = false
-                    _toolUse.value = null
+                    _toolTraces.value = emptyList()
                     _pendingToolConfirm.value = null
                 }
                 settleInterruptedStreams()
@@ -963,7 +970,7 @@ class ChatViewModel(
             } finally {
                 if (streamJob === selfJob) {
                     _isGenerating.value = false
-                    _toolUse.value = null
+                    _toolTraces.value = emptyList()
                     _pendingToolConfirm.value = null
                 }
                 settleInterruptedStreams()
@@ -1055,17 +1062,58 @@ class ChatViewModel(
                 accumulateTokenUsage(target.tokenCount)
             }
             is ChatRepository.Event.ToolUse -> {
-                _toolUse.value = event.toolName
+                _toolTraces.value = _toolTraces.value + ToolTrace(event.toolName, "running", null)
+                // 屏幕操作类工具：请求进入画中画小窗（目标应用保持全屏，Quiddity 小窗展示状态）
+                if (event.toolName in SCREEN_OP_TOOLS) {
+                    com.quiddity.app.active.OperationPipController.requestEnterPip(
+                        "正在${com.quiddity.app.domain.agent.AgentToolRegistry.actionFor(event.toolName)}"
+                    )
+                }
             }
-            is ChatRepository.Event.ToolConfirmRequest -> {
+            is ChatRepository.Event.ToolResult -> {
+                val updated = _toolTraces.value.toMutableList()
+                val idx = updated.indexOfLast { it.name == event.toolName && it.status == "running" }
+                if (idx >= 0) {
+                    updated[idx] = ToolTrace(
+                        event.toolName,
+                        if (event.ok) "done" else "error",
+                        event.summary
+                    )
+                } else {
+                    updated += ToolTrace(event.toolName, if (event.ok) "done" else "error", event.summary)
+                }
+                _toolTraces.value = updated
+                if (event.toolName in SCREEN_OP_TOOLS) {
+                    com.quiddity.app.active.OperationPipController.updateStatus(
+                        if (event.ok) "操作完成" else "操作失败"
+                    )
+                }
+            }
+            is ChatRepository.Event.ToolConfirmBatch -> {
                 _pendingToolConfirm.value = PendingToolConfirm(
-                    toolName = event.toolName,
-                    args = event.args,
+                    items = event.items,
                     resume = event.resume
                 )
             }
             is ChatRepository.Event.Done -> {
-                _toolUse.value = null
+                // 工具调用历史固化进最后一条 AI 消息：生成结束后痕迹不再从内存读取，
+                // 而是作为消息数据持久化（重新打开会话仍可见，段间渲染与正文分界）
+                if (_toolTraces.value.isNotEmpty()) {
+                    val target = _messages.value.lastOrNull {
+                        it.role == Role.ASSISTANT && !it.isNotice && !it.isThinking &&
+                            it.content.isNotBlank() && it.toolTraces.isEmpty()
+                    }
+                    if (target != null) {
+                        conversationRepository.updateMessage(
+                            target.copy(
+                                toolTraces = _toolTraces.value.map {
+                                    MessageToolTrace(it.name, it.status == "done", it.summary)
+                                }
+                            )
+                        )
+                    }
+                }
+                _toolTraces.value = emptyList()
                 _pendingToolConfirm.value = null
             }
             is ChatRepository.Event.Truncated -> {
@@ -1096,7 +1144,7 @@ class ChatViewModel(
                 _errorEvent.value = event.text
             }
             is ChatRepository.Event.Error -> {
-                _toolUse.value = null
+                _toolTraces.value = emptyList()
                 _pendingToolConfirm.value = null
                 _errorEvent.value = event.throwable.message ?: "未知错误"
                 _chatError.value = chatRepository.classify(event.throwable)
@@ -1172,7 +1220,7 @@ class ChatViewModel(
         streamJob?.cancel()
         streamJob = null
         cancelPendingSend() // 同时取消 pending 的发送延迟
-        _toolUse.value = null
+        _toolTraces.value = emptyList()
         _pendingToolConfirm.value = null
         _isGenerating.value = false
         settleInterruptedStreams()
@@ -1250,7 +1298,10 @@ class ChatViewModel(
             )
             conversationRepository.updateConversation(
                 conv.copy(
-                    persona = character.persona.copy(compiledPersona = null),
+                    persona = character.persona.copy(
+                        compiledPersona = null,
+                        aiAvatarUri = character.aiAvatarUri ?: character.persona.aiAvatarUri
+                    ),
                     userPersona = character.userPersona,
                     memory = character.memory,
                     characterId = character.id,
@@ -1582,10 +1633,34 @@ class ChatViewModel(
         if (current.isEmpty()) return
         val targetIndex = current.indexOfFirst { it.id == messageId }
         if (targetIndex < 0) return
+        val target = current[targetIndex]
         val newHistory = current.subList(0, targetIndex).toList()
         viewModelScope.launch {
             conversationRepository.replaceMessages(conversationId, newHistory)
         }
+        // 撤回后提供「重新编辑」入口：缓存原文/图片/OCR 文本，编辑后作为新消息重发
+        if (target.role == Role.USER && (target.content.isNotBlank() || target.imageUri != null)) {
+            _pendingReedit.value = PendingReedit(target.content, target.ocrText, target.imageUri)
+        }
+    }
+
+    /**
+     * 「重新编辑」保存：以撤回前的原文为基础，把编辑后的内容作为新消息发出。
+     *
+     * - 保留被撤回消息的图片与 OCR 文本（纯文本编辑不受影响）；
+     * - 复用 [sendMessage] 完整发送链路：私聊/Agent 触发 AI 流式回复，群聊只追加用户消息；
+     * - 成功后清空「重新编辑」入口。
+     */
+    fun resendReedit(newContent: String) {
+        val pending = _pendingReedit.value ?: return
+        if (newContent.isBlank() && pending.imageUri.isNullOrBlank()) return
+        _pendingReedit.value = null
+        sendMessage(newContent, ocrText = pending.ocrText, imageUri = pending.imageUri)
+    }
+
+    /** 关闭「重新编辑」入口（用户不打算重新编辑被撤回的消息）。 */
+    fun clearPendingReedit() {
+        _pendingReedit.value = null
     }
 
     /**
@@ -2296,6 +2371,14 @@ class ChatViewModel(
         }
     }
 
+    /** 用户手动保存时间库（时间点 + 禁用框），随后重新注册闹钟。 */
+    fun updateTimeLibrary(times: List<String>, disabledSlots: List<Int>) {
+        viewModelScope.launch {
+            val conv = conversation.value ?: return@launch
+            ServiceLocator.timeLibraryRepository.saveTimeLibrary(conv, times, disabledSlots)
+        }
+    }
+
     /**
      * 界面整理提示（对应算法文档 3.1"正在整理前一天的记忆！"）。
      * 由 ChatScreen 在会话首次打开时消费后清空。
@@ -2356,13 +2439,42 @@ class ChatViewModelFactory(
 }
 
 /**
- * 待确认的危险工具调用：聊天页弹窗展示 [toolName] 与 [args]，
+ * 待确认的危险工具调用：聊天页弹窗展示 [items]，
  * 用户点击后通过 [resume] 把决定交还给挂起的工具执行流。
  */
 data class PendingToolConfirm(
-    val toolName: String,
-    val args: JsonObject,
+    val items: List<ChatRepository.ToolConfirmItem>,
     val resume: (Boolean) -> Unit
+)
+
+/**
+ * 屏幕操作类工具：模拟点击/滑动/全局动作等改变前台屏幕状态，
+ * 执行时自动进入画中画小窗（目标应用保持全屏，Quiddity 小窗展示操作状态）。
+ * open_app 仅做系统跳转（跳转后目标应用即前台），不在此列，由后续操作工具触发小窗。
+ */
+private val SCREEN_OP_TOOLS = setOf(
+    "click", "long_press", "click_text", "scroll", "global_action",
+    "input_text", "click_id", "click_desc", "drag", "scroll_to_text",
+    "lock_screen"
+)
+
+/**
+ * 流式输出过程中的工具痕迹：记录工具名、运行状态与结果摘要。
+ */
+data class ToolTrace(
+    val name: String,
+    val status: String,
+    val summary: String?
+)
+
+/**
+ * 撤回消息后的「重新编辑」缓存：保留被撤回消息的原文、图片与 OCR 文本，
+ * 用户点击「重新编辑」后以编辑结果作为新消息重新发出。
+ */
+data class PendingReedit(
+    val content: String,
+    val ocrText: String?,
+    val imageUri: String?
 )
 
 // 当前规则：压缩状态与 isGenerating 解耦；Compressing 驱动 UI 弹窗与发送置灰，Success/Failed 为瞬态供 Toast 后 consume 回 Idle。

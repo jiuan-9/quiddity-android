@@ -122,6 +122,7 @@ import com.quiddity.app.ui.chat.components.MessageBubble
 import com.quiddity.app.ui.chat.components.NoticeBubble
 import com.quiddity.app.ui.chat.components.MiniAppInviteCard
 import com.quiddity.app.ui.chat.components.RewriteBottomSheet
+import com.quiddity.app.ui.chat.components.ReeditNoticeBubble
 import com.quiddity.app.ui.chat.components.TypingIndicator
 import com.quiddity.app.ui.chat.gesture.ChatDragController
 import com.quiddity.app.ui.chat.gesture.detectNativeHorizontalSwipe
@@ -190,6 +191,7 @@ fun ChatScreen(
     val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
     val pendingImageUri by viewModel.pendingImageUri.collectAsStateWithLifecycle()
     val ocrState by viewModel.ocrState.collectAsStateWithLifecycle()
+    val pendingReedit by viewModel.pendingReedit.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     // ===== 图片发送：选择图片 → 复制到内部存储（规避临时授权丢失） → 挂载待发送 =====
@@ -271,6 +273,8 @@ fun ChatScreen(
     // 全局只保留一个展开项，点击其他气泡自动切换。
     var expandedActionId by rememberSaveable { mutableStateOf<String?>(null) }
     var rewritingMessageId by rememberSaveable { mutableStateOf<String?>(null) }
+    // 「重新编辑」编辑框是否打开（撤回后点击灰色提示气泡进入）
+    var reeditSheetOpen by rememberSaveable { mutableStateOf(false) }
 
     // ===== 多选模式状态 =====
     // multiSelectMode=true 时：顶栏切换为多选操作栏、输入栏隐藏、手势禁用、气泡显示选择圈
@@ -674,8 +678,10 @@ fun ChatScreen(
     // swipeEnabled 不含 !showHamburger：菜单打开时手势保持 enabled，由 ChatDragController
     // 根据 menuOpen 状态区分"右滑关菜单"与"右滑返回"。否则菜单打开后无法滑动关闭，只能系统返回键（卡死根因）。
     // 多选模式下禁用横滑，避免误触退出会话。
-    val swipeEnabled = !isGenerating && rewritingMessageId == null &&
-        !isCompressing && !multiSelectMode && !searchActive
+    val swipeEnabled = !isGenerating && rewritingMessageId == null && !reeditSheetOpen &&
+        !isCompressing && !multiSelectMode && !searchActive &&
+        // 无障碍模拟手势注入期间禁用应用内左右滑手势，避免 AI 操作屏幕时"划退"退出会话
+        !com.quiddity.app.active.ScreenReaderService.injecting
     // rememberUpdatedState：pointerInput 用 Unit key 不重启，通过它读取最新 swipeEnabled，
     // 避免 left-swipe 过程中 showHamburger 翻转导致 pointerInput 重启、手势被打断（左滑卡死根因）。
     val swipeEnabledState = rememberUpdatedState(swipeEnabled)
@@ -690,7 +696,7 @@ fun ChatScreen(
     }
 
     // ===== 系统返回键 =====
-    // 优先级：菜单 BackHandler > 多选模式 > 改写中状态 > 返回手势动画
+    // 优先级：菜单 BackHandler > 多选模式 > 改写/重新编辑中状态 > 返回手势动画
     BackHandler(enabled = !isGenerating && !showHamburger) {
         when {
             searchActive -> {
@@ -699,6 +705,7 @@ fun ChatScreen(
             }
             multiSelectMode -> exitMultiSelect()
             rewritingMessageId != null -> rewritingMessageId = null
+            reeditSheetOpen -> reeditSheetOpen = false
             else -> dragController.animateBackAndExit()
         }
     }
@@ -732,20 +739,13 @@ fun ChatScreen(
     ) {
         if (wallpaperUri != null) {
             AsyncImage(
-                model = wallpaperUri,
+                model = coil.request.ImageRequest.Builder(LocalContext.current)
+                    .data(wallpaperUri)
+                    .size(1080)
+                    .build(),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
-                // API 31+ 对壁纸做轻模糊：透过半透明气泡/面板看到磨砂壁纸（毛玻璃质感）；
-                // 低版本无 RenderEffect，自动降级为纯半透明，不影响功能。
-                modifier = Modifier
-                    .fillMaxSize()
-                    .then(
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                            Modifier.blur(3.dp)
-                        } else {
-                            Modifier
-                        }
-                    )
+                modifier = Modifier.fillMaxSize()
             )
             Box(
                 modifier = Modifier
@@ -955,6 +955,11 @@ fun ChatScreen(
                     }
                     else -> {
                         val lastMsg = messages.lastOrNull()
+                        // 性能：asReversed + filterNot 每次重组都会新建整份列表，流式输出时 O(n) 分配拖累动画，
+                        // 这里按 messages 实例缓存，仅内容变化时重算。
+                        val displayMessages = remember(messages) {
+                            messages.asReversed().filterNot { it.isNotice }
+                        }
                         // 当前会话是否启用思考（内部思考任意模型可用，思考期间动画气泡显示"思考中"）
                         val thinkingActive = conversation?.thinkingEnabled == true
                         // 群聊用头像栏三点表示正在回复，不显示私聊的思考气泡
@@ -968,6 +973,16 @@ fun ChatScreen(
                             contentPadding = PaddingValues(vertical = 12.dp),
                             verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
+                            // 撤回后的「重新编辑」提示：reverseLayout 的第一项 = 最底部，
+                            // 显示在最后一条消息之下（与撤回互斥：生成中不可撤回，不会与思考气泡重叠）
+                            pendingReedit?.let {
+                                item(key = "reedit_notice", contentType = { "reedit" }) {
+                                    ReeditNoticeBubble(
+                                        onReedit = { reeditSheetOpen = true },
+                                        onDismiss = { viewModel.clearPendingReedit() }
+                                    )
+                                }
+                            }
                             // 思考气泡：reverseLayout 的第一项 = 最底部，紧贴输入栏（标准"正在输入"位置）
                             if (!isGroupChat) {
                                 item(key = "thinking_bubble", contentType = { "thinking" }) {
@@ -996,7 +1011,7 @@ fun ChatScreen(
                             }
 
                             items(
-                                items = messages.asReversed().filterNot { it.isNotice },
+                                items = displayMessages,
                                 key = { it.id },
                                 contentType = { it.role.name }
                             ) { message ->
@@ -1270,6 +1285,24 @@ fun ChatScreen(
             )
         } else {
             rewritingMessageId = null
+        }
+    }
+
+    // ===== 撤回后「重新编辑」底部弹出框（预填被撤回消息原文，保存后作为新消息发出） =====
+    if (reeditSheetOpen) {
+        val pending = pendingReedit
+        if (pending != null) {
+            RewriteBottomSheet(
+                initialText = pending.content,
+                placeholder = "编辑消息…",
+                onSave = { newContent ->
+                    viewModel.resendReedit(newContent)
+                    reeditSheetOpen = false
+                },
+                onDismiss = { reeditSheetOpen = false }
+            )
+        } else {
+            reeditSheetOpen = false
         }
     }
 }

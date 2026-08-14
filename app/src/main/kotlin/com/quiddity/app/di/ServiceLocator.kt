@@ -161,7 +161,13 @@ object ServiceLocator {
             settingsRepo = settingsRepository,
             apiCatalogManager = apiCatalogManager,
             agentToolRegistry = AgentToolRegistry.defaultRegistry(
-                AgentExecutors(appContext, shizukuClient)
+                AgentExecutors(
+                    appContext,
+                    shizukuClient,
+                    visionOcrService,
+                    settingsRepository,
+                    apiCatalogManager
+                )
             ),
             agentStore = agentStore
         )

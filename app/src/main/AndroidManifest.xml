@@ -71,6 +71,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:supportsPictureInPicture="true"
             android:theme="@style/Theme.Quiddity.Splash"
             android:windowSoftInputMode="adjustResize"
             android:configChanges="orientation|screenSize|keyboardHidden|uiMode|fontScale|density|smallestScreenSize|screenLayout|locale|layoutDirection">
@@ -93,6 +94,9 @@
         <!-- 主动消息：闹钟触发广播 → 前台服务 → 开机重注册 -->
         <receiver
             android:name=".active.ActiveMessageReceiver"
+            android:exported="false" />
+        <receiver
+            android:name=".active.AgentReminderReceiver"
             android:exported="false" />
         <service
             android:name=".active.ActiveMessageService"

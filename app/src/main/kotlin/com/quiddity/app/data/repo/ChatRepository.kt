@@ -7,6 +7,7 @@ import com.quiddity.app.data.model.MemoryCompressionResult
 import com.quiddity.app.data.model.Role
 import com.quiddity.app.data.model.AppSettings
 import com.quiddity.app.data.local.AgentStore
+import com.quiddity.app.data.local.AgentPermissionControl
 import com.quiddity.app.data.remote.ChatApi
 import com.quiddity.app.data.remote.ChatCompletionRequest
 import com.quiddity.app.data.remote.ChatException
@@ -27,6 +28,7 @@ import com.quiddity.app.domain.PromptBuilder
 import com.quiddity.app.domain.StreamCoordinator
 import com.quiddity.app.domain.agent.AgentContext
 import com.quiddity.app.domain.agent.AgentTool
+import com.quiddity.app.domain.agent.AgentToolCallRequest
 import com.quiddity.app.domain.agent.AgentToolRegistry
 import kotlinx.coroutines.CompletableDeferred
 import com.quiddity.app.util.IdGenerator
@@ -197,15 +199,22 @@ class ChatRepository(
         data class Notice(val text: String) : Event()
         /** Agent 工具使用报告：模型调用了哪个工具（聊天页显示使用中动画）。 */
         data class ToolUse(val toolName: String) : Event()
-        /** Agent 危险工具确认请求：弹出确认框，用户决定后回调 [resume]。 */
-        data class ToolConfirmRequest(
-            val toolName: String,
-            val args: JsonObject,
+        /** 单个工具执行完成：附成功标记与结果摘要，供聊天页展示痕迹。 */
+        data class ToolResult(val toolName: String, val ok: Boolean, val summary: String) : Event()
+        /** Agent 危险工具批量确认请求：一轮工具调用中需授权的工具一次列出。 */
+        data class ToolConfirmBatch(
+            val items: List<ToolConfirmItem>,
             val resume: (Boolean) -> Unit
         ) : Event()
         /** 错误。 */
         data class Error(val throwable: Throwable, val partialContent: String) : Event()
     }
+
+    /** 单个待确认工具（名称 + 参数），用于批量确认弹窗展示。 */
+    data class ToolConfirmItem(
+        val toolName: String,
+        val args: JsonObject
+    )
 
     /**
      * 发送用户消息并启动流式回复。
@@ -463,11 +472,99 @@ class ChatRepository(
         val apiUrl = request.apiUrl
         var lastError: Throwable? = null
         val recordFailure: suspend (Throwable) -> Unit = { t -> lastError = t }
-        val firstRound = runSingleStream(
-            api, apiUrl, apiKey, request, coordinator, onEvent, contentTransform, thinkingActive,
-            onFailure = recordFailure
-        )
-        if (firstRound == null) {
+        val memory = PromptBuilder.buildMemoryDrawerContent(conv)
+        var currentRequest = request
+        var reasoningText = ""
+        var rounds = 0
+        var lastResolved: List<Pair<ChatStreamParser.AggregatedToolCall, String>> = emptyList()
+
+        while (rounds < MAX_TOOL_ROUNDS) {
+            val round = runSingleStream(
+                api, apiUrl, apiKey, currentRequest, coordinator, onEvent, contentTransform, thinkingActive,
+                onFailure = recordFailure
+            )
+            if (round == null) {
+                val recovered = handleToolRoundFailure(
+                    api, apiUrl, apiKey, currentRequest, coordinator, conv, onEvent, contentTransform,
+                    thinkingActive, rounds, lastResolved, lastError, recordFailure
+                )
+                if (!recovered) return false
+                break
+            }
+            // 轮结束：记录正文段边界（合并模式下工具轮之间的正文分界，供 UI 插入工具痕迹）
+            coordinator.markSegmentEnd()
+            if (round.reasoningText.isNotBlank()) reasoningText = round.reasoningText
+            val calls = round.toolCalls
+            if (calls.isEmpty()) break
+            calls.forEach { onEvent(Event.ToolUse(it.name)) }
+            val resolved = resolveToolContents(calls, conv, memory, onEvent)
+            lastResolved = resolved
+            resolved.forEach { (call, content) ->
+                onEvent(Event.ToolResult(call.name, isToolResultSuccess(content), content.take(180)))
+            }
+            rounds++
+            val keepTools = rounds < MAX_TOOL_ROUNDS
+            currentRequest = try {
+                buildNextRoundRequest(currentRequest, resolved, reasoningText, onEvent, keepTools)
+            } catch (c: kotlinx.coroutines.CancellationException) {
+                throw c
+            } catch (t: Throwable) {
+                emitError(onEvent, t, coordinator.snapshot().joinToString("\n") { it.content })
+                appendFailureMessage(
+                    conv, coordinator, onEvent,
+                    "工具结果准备失败，无法继续回复（${t.message?.take(120) ?: t.javaClass.simpleName}）。请重试。"
+                )
+                return false
+            }
+            // 工具轮之后的轮次：正文合并到上一条消息，多轮工具循环的正文单条化
+            coordinator.setMergeWithPrevious(true)
+        }
+
+        if (rounds >= MAX_TOOL_ROUNDS) {
+            val finalRound = runSingleStream(
+                api, apiUrl, apiKey, currentRequest, coordinator, onEvent, contentTransform, thinkingActive,
+                onFailure = recordFailure
+            )
+            if (finalRound == null || coordinator.snapshot().none {
+                    it.role == Role.ASSISTANT && !it.isNotice && !it.isThinking && it.content.isNotBlank()
+                }
+            ) {
+                appendFailureMessage(
+                    conv, coordinator, onEvent,
+                    lastError?.let {
+                        "工具已执行，但模型继续回复失败：${it.message?.take(200) ?: it.javaClass.simpleName}。请重试或检查模型配置。"
+                    } ?: "工具已执行，但模型未输出回复内容。请重试。"
+                )
+                return false
+            }
+        }
+
+        attachThinkingUnavailableReportIfNeeded(request, coordinator, thinkingActive, onEvent)
+        onEvent(Event.Done)
+        return true
+    }
+
+    /**
+     * 工具轮失败处理：首轮失败直接报错；后续轮失败降级为关闭工具的普通回复重试一次。
+     *
+     * @return true = 已通过降级成功收尾；false = 无法继续（错误消息已派发）
+     */
+    private suspend fun handleToolRoundFailure(
+        api: ChatApi,
+        apiUrl: String,
+        apiKey: String,
+        request: ChatRoundRequest,
+        coordinator: StreamCoordinator,
+        conv: Conversation,
+        onEvent: suspend (Event) -> Unit,
+        contentTransform: (String) -> String,
+        thinkingActive: Boolean,
+        rounds: Int,
+        resolved: List<Pair<ChatStreamParser.AggregatedToolCall, String>>,
+        lastError: Throwable?,
+        recordFailure: suspend (Throwable) -> Unit
+    ): Boolean {
+        if (rounds == 0) {
             appendFailureMessage(
                 conv, coordinator, onEvent,
                 lastError?.let {
@@ -476,64 +573,42 @@ class ChatRepository(
             )
             return false
         }
-        val firstRoundCalls = firstRound.toolCalls
-        if (firstRoundCalls.isNotEmpty()) {
-            firstRoundCalls.forEach { call ->
-                onEvent(Event.ToolUse(call.name))
-            }
-            val memory = PromptBuilder.buildMemoryDrawerContent(conv)
-            val resolved = firstRoundCalls.map { call ->
-                call to resolveToolContent(call, conv, memory, onEvent)
-            }
-            val secondRequest = try {
-                buildSecondRoundRequest(request, resolved, firstRound.reasoningText, onEvent)
-            } catch (c: kotlinx.coroutines.CancellationException) {
-                throw c
-            } catch (t: Throwable) {
-                // 第二轮不再聚合工具调用（模型若再次请求工具则忽略），直接流式输出最终答复
-                // 工具回填失败不影响主流程：派发错误并结束本轮，避免异常上抛导致崩溃
-                emitError(onEvent, t, coordinator.snapshot().joinToString("\n") { it.content })
-                appendFailureMessage(
-                    conv, coordinator, onEvent,
-                    "工具结果准备失败，无法继续回复（${t.message?.take(120) ?: t.javaClass.simpleName}）。请重试。"
+        // 工具轮请求被接口拒绝（如 400）：把服务端响应原文落盘审计并作为错误痕迹展示，
+        // 供定位根因；不吞错误——降级重试照常进行，AI 仍会向用户如实报告。
+        lastError?.let { err ->
+            val detail = err.message?.take(500) ?: err.javaClass.simpleName
+            onEvent(Event.ToolResult("工具结果回填", false, detail))
+            agentStore?.appendAudit(
+                com.quiddity.app.data.local.AgentAuditEntry(
+                    ts = System.currentTimeMillis().toString(),
+                    tool = "api_error",
+                    args = detail,
+                    ok = false,
+                    confirmed = false
                 )
-                return false
-            }
-            // 第二轮失败时错误事件已派发，与第一轮失败语义一致：不派发 Done
-            val secondRoundOk = runSingleStream(
-                api, apiUrl, apiKey, secondRequest, coordinator, onEvent, contentTransform, thinkingActive,
-                onFailure = recordFailure
             )
-            if (secondRoundOk == null || coordinator.snapshot().none {
-                    it.role == Role.ASSISTANT && !it.isNotice && !it.isThinking && it.content.isNotBlank()
-                }
-            ) {
-                // 工具已执行但模型回复请求被拒（如 DeepSeek 思考模式要求回传 reasoning_text）：
-                // 降级为普通对话重试，把工具结果与错误原因作为上下文交给模型，
-                // 让 AI 在回复里如实报告这次报错，而不是单开一条错误消息。
-                val fallback = buildFallbackRequest(
-                    request, resolved,
-                    lastError?.message ?: "模型未输出回复内容"
-                )
-                val fallbackOk = runSingleStream(
-                    api, apiUrl, apiKey, fallback, coordinator, onEvent, contentTransform, thinkingActive
-                )
-                if (fallbackOk == null || coordinator.snapshot().none {
-                        it.role == Role.ASSISTANT && !it.isNotice && !it.isThinking && it.content.isNotBlank()
-                    }
-                ) {
-                    appendFailureMessage(
-                        conv, coordinator, onEvent,
-                        lastError?.let {
-                            "工具已执行，但模型继续回复失败：${it.message?.take(200) ?: it.javaClass.simpleName}。请重试或检查模型配置。"
-                        } ?: "工具已执行，但模型未输出回复内容。请重试。"
-                    )
-                    return false
-                }
-            }
         }
-        attachThinkingUnavailableReportIfNeeded(request, coordinator, thinkingActive, onEvent)
-        onEvent(Event.Done)
+        val fallback = buildNoToolsFallback(
+            request,
+            resolved,
+            lastError?.message?.take(300) ?: "模型接口拒绝继续回复"
+        )
+        val fallbackOk = runSingleStream(
+            api, apiUrl, apiKey, fallback, coordinator, onEvent, contentTransform, thinkingActive,
+            onFailure = recordFailure
+        )
+        if (fallbackOk == null || coordinator.snapshot().none {
+                it.role == Role.ASSISTANT && !it.isNotice && !it.isThinking && it.content.isNotBlank()
+            }
+        ) {
+            appendFailureMessage(
+                conv, coordinator, onEvent,
+                lastError?.let {
+                    "工具已执行，但模型继续回复失败：${it.message?.take(200) ?: it.javaClass.simpleName}。请重试或检查模型配置。"
+                } ?: "工具已执行，但模型未输出回复内容。请重试。"
+            )
+            return false
+        }
         return true
     }
 
@@ -666,23 +741,27 @@ class ChatRepository(
     }
 
     /**
-     * 构造工具回填后的第二轮请求：
+     * 构造工具回填后的下一轮请求：
      * - Chat Completions：assistant 工具调用消息 + tool 角色结果消息
      * - Responses API：function_call / function_call_output input item（call_id 一一对应）
+     *
+     * [keepTools] 为 true 时保留 tools / tool_choice，允许模型继续调用工具；
+     * 为 false 时关闭工具，强制模型输出最终答复。
      */
-    private suspend fun buildSecondRoundRequest(
+    private suspend fun buildNextRoundRequest(
         request: ChatRoundRequest,
         resolved: List<Pair<ChatStreamParser.AggregatedToolCall, String>>,
         reasoningText: String,
-        onEvent: suspend (Event) -> Unit
+        onEvent: suspend (Event) -> Unit,
+        keepTools: Boolean
     ): ChatRoundRequest = when (request) {
         is ChatRoundRequest.Completions -> {
             val toolMessages = buildToolResultMessages(request.request.messages, resolved, reasoningText)
             ChatRoundRequest.Completions(
                 request.request.copy(
                     messages = toolMessages,
-                    tools = null,
-                    tool_choice = null
+                    tools = if (keepTools) request.request.tools else null,
+                    tool_choice = if (keepTools) request.request.tool_choice else null
                 ),
                 apiUrl = request.apiUrl
             )
@@ -692,8 +771,8 @@ class ChatRepository(
             ChatRoundRequest.Responses(
                 request.request.copy(
                     input = items,
-                    tools = null,
-                    tool_choice = null
+                    tools = if (keepTools) request.request.tools else null,
+                    tool_choice = if (keepTools) request.request.tool_choice else null
                 ),
                 apiUrl = request.apiUrl
             )
@@ -701,58 +780,26 @@ class ChatRepository(
     }
 
     /**
-     * 构造工具回填消息序列：原始消息 + assistant 工具调用 + tool 角色检索结果。
-     * 只响应 read_memory；其他工具名回填"工具不存在"，避免伪造。
+     * 工具轮失败后的降级：关闭工具，把错误原因作为普通上下文交给模型，
+     * 让 AI 在回复里如实报告这次报错，而不是单开一条错误消息。
      */
-    private suspend fun buildToolResultMessages(
-        originalMessages: List<ChatMessage>,
-        resolved: List<Pair<ChatStreamParser.AggregatedToolCall, String>>,
-        reasoningText: String
-    ): List<ChatMessage> {
-        val result = originalMessages.toMutableList()
-        result += ChatMessage(
-            role = "assistant",
-            content = null,
-            // DeepSeek 思考模式强制要求工具轮回传上一轮 reasoning_text，否则 400
-            reasoning_content = reasoningText.takeIf { it.isNotBlank() },
-            tool_calls = resolved.map { (call, _) ->
-                AssistantToolCall(
-                    id = call.id ?: "call_${call.index}",
-                    type = "function",
-                    function = com.quiddity.app.data.remote.AssistantToolCallFunction(
-                        name = call.name,
-                        arguments = sanitizeToolArguments(call.arguments)
-                    )
-                )
-            }
-        )
-        resolved.forEach { (call, content) ->
-            val toolCallId = call.id ?: "call_${call.index}"
-            result += ChatMessage(
-                role = "tool",
-                tool_call_id = toolCallId,
-                content = content
-            )
-        }
-        return result
-    }
-
-    /**
-     * 工具轮降级重试：第二轮被 API 拒绝时（HTTP 400 等），去掉 tool_calls 回填，
-     * 把工具结果与错误原因作为普通对话上下文交给模型，让 AI 在回复中如实报告报错。
-     */
-    private fun buildFallbackRequest(
+    private fun buildNoToolsFallback(
         request: ChatRoundRequest,
         resolved: List<Pair<ChatStreamParser.AggregatedToolCall, String>>,
         errorText: String
     ): ChatRoundRequest {
-        val toolSummary = resolved.joinToString("\n") { (call, content) ->
-            "${call.name}：${content.take(300)}"
-        }
+        val summary = resolved.joinToString("\n") { (call, content) ->
+            "【${call.name}】${content.take(300)}"
+        }.take(MAX_TOOL_RESULT_CHARS)
         val context = buildString {
-            append("你刚才请求了工具调用，工具已执行，结果如下：\n").append(toolSummary)
-            append("\n\n但你的回复请求被模型接口拒绝（").append(errorText.take(300)).append("）。")
-            append("请以你的口吻向用户如实说明：这次工具调用的情况、接口返回的错误，以及接下来可以怎么办。")
+            append("工具已执行，结果如下：\n").append(summary)
+            if (summary.isNotBlank()) {
+                append("\n\n把工具结果回填的请求被模型接口拒绝（").append(errorText).append("），")
+                append("已改为直接带结果继续。请基于以上工具结果，以你的口吻向用户正常回答。")
+            } else {
+                append("（工具结果为空或接口异常：").append(errorText).append("）")
+                append("请如实说明这次工具调用的情况与下一步建议。")
+            }
         }
         return when (request) {
             is ChatRoundRequest.Completions -> ChatRoundRequest.Completions(
@@ -779,6 +826,46 @@ class ChatRepository(
     }
 
     /**
+     * 构造工具回填消息序列：原始消息 + assistant 工具调用 + tool 角色检索结果。
+     * 只响应 read_memory；其他工具名回填"工具不存在"，避免伪造。
+     */
+    private suspend fun buildToolResultMessages(
+        originalMessages: List<ChatMessage>,
+        resolved: List<Pair<ChatStreamParser.AggregatedToolCall, String>>,
+        reasoningText: String
+    ): List<ChatMessage> {
+        val result = trimToolRounds(originalMessages, keepRounds = 2).toMutableList()
+        result += ChatMessage(
+            role = "assistant",
+            content = null,
+            // DeepSeek 思考模式强制要求：工具轮 assistant 消息必须携带 reasoning_content 字段
+            // （校验字段存在性而非内容非空——空串也可通过；缺失字段即 400
+            // "The reasoning_text in the thinking mode must be passed back to the API"）。
+            // 因此无条件回传上一轮累积的 reasoning_text（可能为空串）。
+            reasoning_content = reasoningText,
+            tool_calls = resolved.map { (call, _) ->
+                AssistantToolCall(
+                    id = call.id ?: "call_${call.index}",
+                    type = "function",
+                    function = com.quiddity.app.data.remote.AssistantToolCallFunction(
+                        name = call.name,
+                        arguments = sanitizeToolArguments(call.arguments)
+                    )
+                )
+            }
+        )
+        resolved.forEach { (call, content) ->
+            val toolCallId = call.id ?: "call_${call.index}"
+            result += ChatMessage(
+                role = "tool",
+                tool_call_id = toolCallId,
+                content = content
+            )
+        }
+        return result
+    }
+
+    /**
      * 构造 Responses API 工具回填 input：原始消息 + function_call item + function_call_output item。
      * 官方要求 call_id 非空唯一，且每个 function_call 必须有对应 function_call_output。
      */
@@ -786,7 +873,7 @@ class ChatRepository(
         originalInput: List<ResponsesInputItem>,
         resolved: List<Pair<ChatStreamParser.AggregatedToolCall, String>>
     ): List<ResponsesInputItem> {
-        val result = originalInput.toMutableList()
+        val result = trimResponsesToolRounds(originalInput, keepRounds = 2).toMutableList()
         resolved.forEach { (call, _) ->
             result += ResponsesInputItem(
                 type = "function_call",
@@ -806,64 +893,110 @@ class ChatRepository(
     }
 
     /**
-     * 解析单个工具调用结果：
-     * - AGENT 会话优先走注册表分发（读工具真实执行、写工具安全门控）；
+     * 工具轮消息裁剪：多轮工具循环会把每轮的 assistant 工具调用 + tool 结果累积进请求，
+     * 轮数一多上下文迅速膨胀（可能触发接口拒绝/超时中断）。只保留最近 [keepRounds] 轮
+     * 的工具消息对——更早轮次的工具消息删除（模型对它们的叙述已在正文历史里，工具消息
+     * 本身不再需要；assistant 工具调用与其 tool 结果必须成对删除）。
+     */
+    private fun trimToolRounds(messages: List<ChatMessage>, keepRounds: Int): List<ChatMessage> {
+        val roundStarts = messages.indices.filter { messages[it].tool_calls?.isNotEmpty() == true }
+        if (roundStarts.size <= keepRounds) return messages
+        val keepFrom = roundStarts[roundStarts.size - keepRounds]
+        return messages.subList(0, keepFrom) + messages.subList(keepFrom, messages.size)
+    }
+
+    /** Responses API 版本的工具轮裁剪（function_call 与 function_call_output 成对）。 */
+    private fun trimResponsesToolRounds(input: List<ResponsesInputItem>, keepRounds: Int): List<ResponsesInputItem> {
+        val roundStarts = input.indices.filter { input[it].type == "function_call" }
+        if (roundStarts.size <= keepRounds) return input
+        val keepFrom = roundStarts[roundStarts.size - keepRounds]
+        return input.subList(0, keepFrom) + input.subList(keepFrom, input.size)
+    }
+
+    /**
+     * 解析本轮工具调用结果（批量）：
+     * - AGENT 会话走注册表批量分发（读工具真实执行、写工具安全门控 + 批量授权）；
      * - 私聊/群聊保持原逻辑：read_memory / search_chat 本地检索，其余回填"不存在"。
      */
-    private suspend fun resolveToolContent(
-        call: ChatStreamParser.AggregatedToolCall,
+    private suspend fun resolveToolContents(
+        calls: List<ChatStreamParser.AggregatedToolCall>,
         conv: Conversation,
         memory: String,
         onEvent: suspend (Event) -> Unit
-    ): String = resolveToolContentInternal(call, conv, memory, onEvent)
-
-    private suspend fun resolveToolContentInternal(
-        call: ChatStreamParser.AggregatedToolCall,
-        conv: Conversation,
-        memory: String,
-        onEvent: suspend (Event) -> Unit
-    ): String {
-        val raw: String
-        raw = try {
-            if (conv.type == ConversationType.AGENT) {
-                val dispatched = dispatchAgentToolIfNeeded(
-                    type = conv.type,
-                    name = call.name,
-                    args = call.arguments,
-                    registry = agentToolRegistry,
-                    ctx = agentContext(conv, onEvent)
-                )
-                if (dispatched != null) dispatched
-                else "工具 ${call.name} 不存在"
-            } else {
-                when (call.name) {
-                    "read_memory" -> {
-                        MemorySearch.search(memory, parseToolQuery(call.arguments)).content
-                    }
-                    "search_chat" -> {
-                        val query = parseToolQuery(call.arguments)
-                        val messages = conversationRepo.observeMessages(conv.id).value
-                            .filterNot { it.isNotice }
-                        ChatRecordSearch.search(messages, query).content
-                    }
-                    else -> "工具 ${call.name} 不存在"
+    ): List<Pair<ChatStreamParser.AggregatedToolCall, String>> {
+        val rawResults = if (conv.type == ConversationType.AGENT) {
+            resolveAgentToolContents(calls, conv, onEvent)
+        } else {
+            calls.map { call -> resolveNonAgentToolContent(call, conv, memory) }
+        }
+        var budget = MAX_TOOL_ROUND_RESULT_CHARS
+        return calls.zip(rawResults).map { (call, raw) ->
+            val base = finalizeToolResult(call, raw)
+            val trimmed = when {
+                budget <= 0 -> "（本轮工具结果总量已达上限，后续结果已省略）"
+                base.length > budget -> {
+                    val cut = base.take(budget)
+                    budget = 0
+                    val lastNewline = cut.lastIndexOf('\n')
+                    val clean = if (lastNewline > 0) cut.substring(0, lastNewline) else cut
+                    "$clean\n（结果过长，已截断，共 ${base.length} 字符）"
+                }
+                else -> {
+                    budget -= base.length
+                    base
                 }
             }
-        } catch (c: kotlinx.coroutines.CancellationException) {
-            throw c
-        } catch (t: Throwable) {
-            // 工具执行失败（权限异常 / 服务不可用 / 参数错误等）不中断整轮回复：
-            // 把报错信息作为工具结果回填，让模型知道该工具用不了并继续输出
-            "工具 ${call.name} 执行失败：${t.message?.take(200) ?: t.javaClass.simpleName}"
+            call to trimmed
         }
-        // 异常结果明确标注：让模型知道工具报错及类型，如实报告而不是假装成功
+    }
+
+    private suspend fun resolveAgentToolContents(
+        calls: List<ChatStreamParser.AggregatedToolCall>,
+        conv: Conversation,
+        onEvent: suspend (Event) -> Unit
+    ): List<String> {
+        val registry = agentToolRegistry
+        val ctx = agentContext(conv, onEvent)
+        if (registry == null || ctx == null) {
+            return calls.map { "工具 ${it.name} 不可用（Agent 工具未初始化）" }
+        }
+        return registry.dispatchAll(
+            calls.map { AgentToolCallRequest(it.name, it.arguments) },
+            ctx
+        )
+    }
+
+    private suspend fun resolveNonAgentToolContent(
+        call: ChatStreamParser.AggregatedToolCall,
+        conv: Conversation,
+        memory: String
+    ): String = try {
+        when (call.name) {
+            "read_memory" -> MemorySearch.search(memory, parseToolQuery(call.arguments)).content
+            "search_chat" -> {
+                val query = parseToolQuery(call.arguments)
+                val messages = conversationRepo.observeMessages(conv.id).value
+                    .filterNot { it.isNotice }
+                ChatRecordSearch.search(messages, query).content
+            }
+            else -> "工具 ${call.name} 不存在"
+        }
+    } catch (c: kotlinx.coroutines.CancellationException) {
+        throw c
+    } catch (t: Throwable) {
+        // 工具执行失败不中断整轮回复：把报错信息作为工具结果回填，让模型继续输出
+        "工具 ${call.name} 执行失败：${t.message?.take(200) ?: t.javaClass.simpleName}"
+    }
+
+    private fun finalizeToolResult(
+        call: ChatStreamParser.AggregatedToolCall,
+        raw: String
+    ): String {
         val marked = if (com.quiddity.app.domain.LocalThinker.isToolError(raw)) {
             "【工具返回异常】$raw"
         } else {
             raw
         }
-        // 超大工具结果（如应用列表/系统日志）会撑爆第二轮请求导致 400：截断并注明。
-        // 截断对齐到行尾，避免把「包名：显示名」配对条目切成两半、模型只看到半条。
         return if (marked.length <= MAX_TOOL_RESULT_CHARS) {
             marked
         } else {
@@ -873,6 +1006,16 @@ class ChatRepository(
             "$clean\n（结果过长，已截断，共 ${marked.length} 字符，如需完整数据请缩小范围重试）"
         }
     }
+
+    /** 粗略判断工具结果是否成功（供聊天页工具痕迹展示状态）。 */
+    private fun isToolResultSuccess(content: String): Boolean =
+        !content.contains("【工具返回异常】") &&
+            !content.contains("失败") &&
+            !content.contains("取消") &&
+            !content.contains("不存在") &&
+            !content.contains("未启用") &&
+            !content.contains("尚未接入") &&
+            !content.contains("未获得")
 
     /**
      * 清洗模型回传的工具参数：空串/非法 JSON 一律补为 "{}"，
@@ -900,21 +1043,26 @@ class ChatRepository(
             switches = settings.toolSwitches,
             whitelist = settings.whitelist.toSet(),
             auditAppend = { store.appendAudit(it) },
-            confirmRequest = { tool, args -> requestToolConfirm(onEvent, tool, args) }
+            autoConfirm = settings.permissionControl == AgentPermissionControl.FULL,
+            confirmRequest = { tool, args -> requestToolConfirmBatch(onEvent, listOf(tool to args)) },
+            confirmRequestBatch = { items -> requestToolConfirmBatch(onEvent, items) }
         )
     }
 
     /**
-     * 弹出确认框并挂起等待用户决定；
+     * 弹出批量确认框并挂起等待用户决定；
      * 流被取消时自动按“取消”收尾，避免弹窗悬挂。
      */
-    private suspend fun requestToolConfirm(
+    private suspend fun requestToolConfirmBatch(
         onEvent: suspend (Event) -> Unit,
-        tool: AgentTool,
-        args: JsonObject
+        items: List<Pair<AgentTool, JsonObject>>
     ): Boolean {
         val deferred = CompletableDeferred<Boolean>()
-        onEvent(Event.ToolConfirmRequest(tool.name, args) { approved -> deferred.complete(approved) })
+        onEvent(
+            Event.ToolConfirmBatch(
+                items.map { ToolConfirmItem(it.first.name, it.second) }
+            ) { approved -> deferred.complete(approved) }
+        )
         return try {
             deferred.await()
         } catch (c: kotlinx.coroutines.CancellationException) {
@@ -925,8 +1073,14 @@ class ChatRepository(
 
     companion object {
 
-        /** 工具结果回填模型的最大字符数（超出截断，防止第二轮请求过大返回 400）。 */
-        private const val MAX_TOOL_RESULT_CHARS = 6000
+        /** 单条工具结果回填模型的最大字符数（超出截断，防止请求过大返回 400）。 */
+        private const val MAX_TOOL_RESULT_CHARS = 3000
+
+        /** 单轮全部工具结果的总预算（累计超限后后续结果直接省略）。 */
+        private const val MAX_TOOL_ROUND_RESULT_CHARS = 12_000
+
+        /** 单轮回复内允许的最大工具轮数（防死循环；达到后强制关闭工具输出最终答复）。 */
+        private const val MAX_TOOL_ROUNDS = 8
 
         /** DeepSeek 未返回思考内容时附在首条回复上的报告文案。 */
         private const val DEEPSEEK_THINKING_UNAVAILABLE_REPORT = "deepseek本身模型有概率不配合，思考内容不返回"
@@ -1172,7 +1326,8 @@ class ChatRepository(
                 is Event.Error -> onEvent(event)
                 is Event.Notice -> onEvent(event)
                 is Event.ToolUse -> onEvent(event)
-                is Event.ToolConfirmRequest -> onEvent(event)
+                is Event.ToolResult -> onEvent(event)
+                is Event.ToolConfirmBatch -> onEvent(event)
                 is Event.Truncated -> onEvent(event)
             }
         }

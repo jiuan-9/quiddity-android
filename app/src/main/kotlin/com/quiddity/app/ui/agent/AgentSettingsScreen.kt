@@ -50,21 +50,28 @@ import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.DataUsage
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.HelpOutline
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.ManageSearch
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.PictureInPicture
 import androidx.compose.material.icons.filled.PrivacyTip
+import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
@@ -104,6 +111,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.quiddity.app.active.NotificationBridge
 import com.quiddity.app.active.ScreenReaderService
 import com.quiddity.app.active.ShizukuStatus
+import com.quiddity.app.data.local.AgentPermissionControl
 import com.quiddity.app.di.ServiceLocator
 import com.quiddity.app.ui.settings.ClickableRow
 import com.quiddity.app.ui.settings.SettingsBottomSheet
@@ -443,25 +451,37 @@ fun AgentSettingsScreen(
                                 ToggleRow(
                                     icon = Icons.Filled.Notifications,
                                     title = "通知",
-                                    subtitle = toolStatusSubtitle("读取最近的通知", "通知使用权", notificationEnabled),
+                                    subtitle = toolStatusSubtitle("读取最近的通知 / 通知变化实时推送", "通知使用权", notificationEnabled),
                                     checked = settings.toolSwitches.sense_notifications,
                                     onCheckedChange = { on ->
                                         scope.launch { store.setToolSwitch("sense_notifications", on) }
                                     },
-                                    helpText = "打开后，Agent 才能使用「读取通知」工具（需要通知使用权）。",
-                                    onHelpClick = { helpText = "打开后，Agent 才能使用「读取通知」工具（需要通知使用权）。" },
+                                    helpText = "打开后，Agent 才能使用「读取通知」「通知守卫」（实时推送通知变化）工具（需要通知使用权）。",
+                                    onHelpClick = { helpText = "打开后，Agent 才能使用「读取通知」「通知守卫」（实时推送通知变化）工具（需要通知使用权）。" },
                                     enabled = notificationEnabled
+                                )
+                                ToggleRow(
+                                    icon = Icons.Filled.Info,
+                                    title = "Toast 监听",
+                                    subtitle = toolStatusSubtitle("捕获两秒即消失的瞬时提示", "无障碍服务", accessibilityEnabled),
+                                    checked = settings.toolSwitches.sense_toasts,
+                                    onCheckedChange = { on ->
+                                        scope.launch { store.setToolSwitch("sense_toasts", on) }
+                                    },
+                                    helpText = "打开后，Agent 才能使用「Toast 监听」工具捕获瞬时弹窗（需要无障碍服务）。",
+                                    onHelpClick = { helpText = "打开后，Agent 才能使用「Toast 监听」工具捕获瞬时弹窗（需要无障碍服务）。" },
+                                    enabled = accessibilityEnabled
                                 )
                                 ToggleRow(
                                     icon = Icons.Filled.Speed,
                                     title = "用量与前台应用",
-                                    subtitle = toolStatusSubtitle("统计应用使用情况", "使用情况访问", usageEnabled),
+                                    subtitle = toolStatusSubtitle("用量统计 / 用量明细 / 前台应用", "使用情况访问", usageEnabled),
                                     checked = settings.toolSwitches.sense_usage,
                                     onCheckedChange = { on ->
                                         scope.launch { store.setToolSwitch("sense_usage", on) }
                                     },
-                                    helpText = "打开后，Agent 才能使用「用量统计」「前台应用」工具。",
-                                    onHelpClick = { helpText = "打开后，Agent 才能使用「用量统计」「前台应用」工具。" },
+                                    helpText = "打开后，Agent 才能使用「用量统计」「用量明细」（启动次数/最后使用时间）「前台应用」工具。",
+                                    onHelpClick = { helpText = "打开后，Agent 才能使用「用量统计」「用量明细」（启动次数/最后使用时间）「前台应用」工具。" },
                                     enabled = usageEnabled
                                 )
                                 // ===== 读取类：无需额外权限 =====
@@ -547,30 +567,128 @@ fun AgentSettingsScreen(
                                     onHelpClick = { helpText = "打开后，Agent 才能按应用读取实时日志（logcat --pid）；需要 Shizuku 授权，且目标应用正在运行。" },
                                     enabled = shizukuReady
                                 )
+                                // ===== 识图类：OCR 识别（依赖视觉 OCR 模型配置） =====
+                                ToggleRow(
+                                    icon = Icons.Filled.Image,
+                                    title = "识图 OCR",
+                                    subtitle = "识别截图 / 图片中的文字",
+                                    checked = settings.toolSwitches.read_ocr,
+                                    onCheckedChange = { on ->
+                                        scope.launch { store.setToolSwitch("read_ocr", on) }
+                                    },
+                                    helpText = "打开后，Agent 才能对截图或图片执行 OCR 识别（需要先在总设置中配置视觉 OCR 模型）。",
+                                    onHelpClick = { helpText = "打开后，Agent 才能对截图或图片执行 OCR 识别（需要先在总设置中配置视觉 OCR 模型）。" }
+                                )
                                 // ===== 文件操作：读取/跳转与写入分离，均需 Shizuku 授权 =====
                                 ToggleRow(
                                     icon = Icons.Filled.Description,
                                     title = "文件读取",
-                                    subtitle = toolStatusSubtitle("读取文件内容 / 跳转文件管理器", "Shizuku 授权", shizukuReady),
+                                    subtitle = toolStatusSubtitle("读取内容 / 列目录 / 元信息 / 跳转定位", "Shizuku 授权", shizukuReady),
                                     checked = settings.toolSwitches.read_files,
                                     onCheckedChange = { on ->
                                         scope.launch { store.setToolSwitch("read_files", on) }
                                     },
-                                    helpText = "打开后，Agent 才能读取文件内容（后台读取）或用文件管理器跳转定位；需要 Shizuku 授权。",
-                                    onHelpClick = { helpText = "打开后，Agent 才能读取文件内容（后台读取）或用文件管理器跳转定位；需要 Shizuku 授权。" },
+                                    helpText = "打开后，Agent 才能读取文件内容、列出目录、查询文件元信息，或用文件管理器跳转定位（可指定包名避开微信抢走打开意图）；需要 Shizuku 授权。",
+                                    onHelpClick = { helpText = "打开后，Agent 才能读取文件内容、列出目录、查询文件元信息，或用文件管理器跳转定位（可指定包名避开微信抢走打开意图）；需要 Shizuku 授权。" },
                                     enabled = shizukuReady
                                 )
                                 ToggleRow(
                                     icon = Icons.Filled.Delete,
                                     title = "文件写入",
-                                    subtitle = toolStatusSubtitle("移动 / 复制 / 删除文件", "Shizuku 授权", shizukuReady),
+                                    subtitle = toolStatusSubtitle("创建 / 写入 / 追加 / 重命名 / 建目录 / 移动 / 复制 / 删除", "Shizuku 授权", shizukuReady),
                                     checked = settings.toolSwitches.write_files,
                                     onCheckedChange = { on ->
                                         scope.launch { store.setToolSwitch("write_files", on) }
                                     },
-                                    helpText = "打开后，Agent 才能移动、复制、删除文件；每次操作都会弹窗确认，删除不可恢复。",
-                                    onHelpClick = { helpText = "打开后，Agent 才能移动、复制、删除文件；每次操作都会弹窗确认，删除不可恢复。" },
+                                    helpText = "打开后，Agent 才能创建文件、写入/追加内容、重命名、建目录、移动、复制、删除；每次操作都会弹窗确认，删除不可恢复。",
+                                    onHelpClick = { helpText = "打开后，Agent 才能创建文件、写入/追加内容、重命名、建目录、移动、复制、删除；每次操作都会弹窗确认，删除不可恢复。" },
                                     enabled = shizukuReady
+                                )
+                                // ===== 主动交互类：提醒与剪贴板（剪贴板涉及隐私，默认关闭） =====
+                                ToggleRow(
+                                    icon = Icons.Filled.Send,
+                                    title = "主动提醒",
+                                    subtitle = "Agent 主动向通知栏推送消息 / 提醒",
+                                    checked = settings.toolSwitches.interact_notify,
+                                    onCheckedChange = { on ->
+                                        scope.launch { store.setToolSwitch("interact_notify", on) }
+                                    },
+                                    helpText = "打开后，Agent 才能主动向通知栏推送提醒（如定时提醒、任务完成通知）。",
+                                    onHelpClick = { helpText = "打开后，Agent 才能主动向通知栏推送提醒（如定时提醒、任务完成通知）。" }
+                                )
+                                ToggleRow(
+                                    icon = Icons.Filled.ContentCopy,
+                                    title = "剪贴板读取",
+                                    subtitle = "读取当前剪贴板文本（涉及隐私，默认关闭）",
+                                    checked = settings.toolSwitches.read_clipboard,
+                                    onCheckedChange = { on ->
+                                        scope.launch { store.setToolSwitch("read_clipboard", on) }
+                                    },
+                                    helpText = "打开后，Agent 才能读取剪贴板内容；每次读取都会弹窗确认。",
+                                    onHelpClick = { helpText = "打开后，Agent 才能读取剪贴板内容；每次读取都会弹窗确认。" }
+                                )
+                                ToggleRow(
+                                    icon = Icons.Filled.ContentPaste,
+                                    title = "剪贴板写入",
+                                    subtitle = "把文本写入剪贴板（默认关闭）",
+                                    checked = settings.toolSwitches.write_clipboard,
+                                    onCheckedChange = { on ->
+                                        scope.launch { store.setToolSwitch("write_clipboard", on) }
+                                    },
+                                    helpText = "打开后，Agent 才能把文本写入剪贴板（如复制代码、验证码）；每次写入都会弹窗确认。",
+                                    onHelpClick = { helpText = "打开后，Agent 才能把文本写入剪贴板（如复制代码、验证码）；每次写入都会弹窗确认。" }
+                                )
+                                // ===== 系统增强类：白名单安全命令（仅只读命令，需 Shizuku 授权） =====
+                                ToggleRow(
+                                    icon = Icons.Filled.Terminal,
+                                    title = "Shell 安全命令",
+                                    subtitle = toolStatusSubtitle("执行白名单内的只读命令（ls / cat / getprop 等）", "Shizuku 授权", shizukuReady),
+                                    checked = settings.toolSwitches.run_shell,
+                                    onCheckedChange = { on ->
+                                        scope.launch { store.setToolSwitch("run_shell", on) }
+                                    },
+                                    helpText = "打开后，Agent 才能执行白名单内的安全只读 Shell 命令；命令名固定白名单，参数不可含 shell 元字符，每次执行都会弹窗确认。",
+                                    onHelpClick = { helpText = "打开后，Agent 才能执行白名单内的安全只读 Shell 命令；命令名固定白名单，参数不可含 shell 元字符，每次执行都会弹窗确认。" },
+                                    enabled = shizukuReady
+                                )
+                                // ===== 触控类：模拟点击 / 长按 / 滑动 / 系统动作（需无障碍服务） =====
+                                ToggleRow(
+                                    icon = Icons.Filled.Visibility,
+                                    title = "模拟点击",
+                                    subtitle = toolStatusSubtitle("点击 / 长按 / 点击文字 / 滑动 / 系统动作", "无障碍服务", accessibilityEnabled),
+                                    checked = settings.toolSwitches.simulate_click,
+                                    onCheckedChange = { on ->
+                                        scope.launch { store.setToolSwitch("simulate_click", on) }
+                                    },
+                                    helpText = "打开后，Agent 才能模拟点击、长按、滑动与返回/首页等系统动作；需要无障碍服务，每次执行都会弹窗确认。",
+                                    onHelpClick = { helpText = "打开后，Agent 才能模拟点击、长按、滑动与返回/首页等系统动作；需要无障碍服务，每次执行都会弹窗确认。" },
+                                    enabled = accessibilityEnabled
+                                )
+                                // ===== 打开应用：直接系统跳转目标应用，快速导航（免确认，无需无障碍） =====
+                                ToggleRow(
+                                    icon = Icons.Filled.OpenInNew,
+                                    title = "打开应用",
+                                    subtitle = "直接跳转到指定应用（快速导航，免确认）",
+                                    checked = settings.toolSwitches.open_app,
+                                    onCheckedChange = { on ->
+                                        scope.launch { store.setToolSwitch("open_app", on) }
+                                    },
+                                    helpText = "打开后，Agent 可直接跳转到指定应用（如打开微信/抖音），用于快速导航；系统级跳转，不需要无障碍服务，执行时不再弹确认。",
+                                    onHelpClick = { helpText = "打开后，Agent 可直接跳转到指定应用（如打开微信/抖音），用于快速导航；系统级跳转，不需要无障碍服务，执行时不再弹确认。" },
+                                    enabled = true
+                                )
+                                // ===== 屏幕操作小窗：模拟操作时进入画中画，目标应用保持全屏 =====
+                                ToggleRow(
+                                    icon = Icons.Filled.PictureInPicture,
+                                    title = "屏幕操作小窗",
+                                    subtitle = "滑动/点击时进入画中画小窗，目标应用保持全屏（Android 12+）",
+                                    checked = settings.pipOnScreenOps,
+                                    onCheckedChange = { on ->
+                                        scope.launch { store.setPipOnScreenOps(on) }
+                                    },
+                                    helpText = "打开后，Agent 执行滑动/点击等屏幕操作时，Quiddity 自动进入画中画小窗展示操作状态；操作完成后保持小窗，点小窗即可恢复全屏。",
+                                    onHelpClick = { helpText = "打开后，Agent 执行滑动/点击等屏幕操作时，Quiddity 自动进入画中画小窗展示操作状态；操作完成后保持小窗，点小窗即可恢复全屏。" },
+                                    enabled = true
                                 )
                                 // ===== 写入类：无论是否授权都有开关；Shizuku 未授权/未配对时置灰 =====
                                 ToggleRow(
@@ -661,6 +779,47 @@ fun AgentSettingsScreen(
                                     onClick = { showAddWhitelist = true },
                                     helpText = "输入应用包名（如 com.tencent.mm）加入白名单，写入工具才能对该应用生效。",
                                     onHelpClick = { helpText = "输入应用包名（如 com.tencent.mm）加入白名单，写入工具才能对该应用生效。" }
+                                )
+                            }
+                        }
+
+                        item(key = "permissionControl", contentType = { "section" }) {
+                            SettingsSectionCard(title = "权限管控") {
+                                ClickableRow(
+                                    icon = Icons.Filled.Lock,
+                                    title = "过问",
+                                    subtitle = "危险 / 写入类工具执行前一次列出，由你确认",
+                                    onClick = { scope.launch { store.setPermissionControl(AgentPermissionControl.ASK) } },
+                                    helpText = "模型会先说明要执行哪些工具，一次列出后等你确认，再继续执行并给出答案。",
+                                    onHelpClick = { helpText = "模型会先说明要执行哪些工具，一次列出后等你确认，再继续执行并给出答案。" },
+                                    trailingContent = {
+                                        if (settings.permissionControl == AgentPermissionControl.ASK) {
+                                            Icon(
+                                                imageVector = Icons.Filled.Check,
+                                                contentDescription = "已选择过问",
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                    }
+                                )
+                                ClickableRow(
+                                    icon = Icons.Filled.CheckCircle,
+                                    title = "完全",
+                                    subtitle = "信任开关与白名单，不再逐次确认，自动执行",
+                                    onClick = { scope.launch { store.setPermissionControl(AgentPermissionControl.FULL) } },
+                                    helpText = "危险 / 写入类工具将自动执行（仍受工具开关与包名白名单约束），不再弹确认框。",
+                                    onHelpClick = { helpText = "危险 / 写入类工具将自动执行（仍受工具开关与包名白名单约束），不再弹确认框。" },
+                                    trailingContent = {
+                                        if (settings.permissionControl == AgentPermissionControl.FULL) {
+                                            Icon(
+                                                imageVector = Icons.Filled.Check,
+                                                contentDescription = "已选择完全",
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                    }
                                 )
                             }
                         }

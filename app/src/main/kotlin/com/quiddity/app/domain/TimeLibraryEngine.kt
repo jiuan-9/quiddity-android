@@ -49,6 +49,11 @@ import java.util.Locale
  */
 object TimeLibraryEngine {
 
+    const val SLOT_COUNT = 10
+    const val SLOTS_PER_HALF = 5
+    const val PM_START_SLOT = 5
+    const val NOON_HOUR = 12
+
     private val TIME_PATTERN = Regex("""^([01]\d|2[0-3]):([0-5]\d)$""")
     private val TIME_EXTRACT_PATTERN = Regex("""([01]\d|2[0-3]):([0-5]\d)""")
 
@@ -78,17 +83,64 @@ object TimeLibraryEngine {
 
     /**
      * 解析时间库生成结果：从 LLM 返回文本中提取 24 小时制 "HH:mm" 时间点。
-     * - 最多不超过 5 个，按出现顺序、去重
+     * - 按出现顺序、去重
+     * - 再按 10 个固定时间框（上下午各 5 个）的禁用情况裁剪
      * - 允许为空列表（LLM 认为当天无需主动发消息）
      */
-    fun parseGeneratedTimes(raw: String): List<String> {
+    fun parseGeneratedTimes(
+        raw: String,
+        disabledSlots: Set<Int> = emptySet()
+    ): List<String> {
         val result = mutableListOf<String>()
         TIME_EXTRACT_PATTERN.findAll(raw).forEach { match ->
             val time = match.value
             if (result.none { it == time }) result.add(time)
         }
-        return result.take(QuiddityConstants.ACTIVE_MESSAGE_MAX_POINTS)
+        return enforceTimeLibraryRules(result, disabledSlots)
     }
+
+    /**
+     * 时间库规则约束：
+     * - 共 [SLOT_COUNT] 个固定时间框，上午 0-4、下午 5-9
+     * - 被禁用的时间框不参与，也不计入上限
+     * - 上午 / 下午各自的上限 = 对应半场剩余可用框数
+     */
+    fun enforceTimeLibraryRules(
+        times: List<String>,
+        disabledSlots: Set<Int> = emptySet()
+    ): List<String> {
+        val amCap = enabledAmCount(disabledSlots)
+        val pmCap = enabledPmCount(disabledSlots)
+        val totalCap = amCap + pmCap
+        val seen = LinkedHashSet<String>()
+        var am = 0
+        var pm = 0
+        for (time in times) {
+            if (seen.size >= totalCap) break
+            val minutes = parseMinutes(time) ?: continue
+            if (minutes / 60 < NOON_HOUR) {
+                if (am >= amCap) continue
+                am++
+            } else {
+                if (pm >= pmCap) continue
+                pm++
+            }
+            seen.add(time)
+        }
+        return seen.toList()
+    }
+
+    /** 上午剩余可用时间框数（下标 0-4）。 */
+    fun enabledAmCount(disabledSlots: Set<Int>): Int =
+        (SLOTS_PER_HALF - disabledSlots.count { it in 0 until PM_START_SLOT }).coerceAtLeast(0)
+
+    /** 下午剩余可用时间框数（下标 5-9）。 */
+    fun enabledPmCount(disabledSlots: Set<Int>): Int =
+        (SLOTS_PER_HALF - disabledSlots.count { it in PM_START_SLOT until SLOT_COUNT }).coerceAtLeast(0)
+
+    /** 该时间点是否属于下午（12:00 及以后）。 */
+    fun isAfternoon(time: String): Boolean =
+        parseMinutes(time)?.let { it / 60 >= NOON_HOUR } ?: false
 
     /**
      * 从生成结果中提取 4~6 位数字查看密码；未输出返回空串。

@@ -495,19 +495,13 @@ fun HomeScreen(
         // 注：hasListWallpaper 已包含 listWallpaperUri != null 判断
         if (hasListWallpaper) {
             AsyncImage(
-                model = listWallpaperUri,
+                model = coil.request.ImageRequest.Builder(LocalContext.current)
+                    .data(listWallpaperUri)
+                    .size(1080)
+                    .build(),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
-                // API 31+ 对列表壁纸做轻模糊，配合半透明卡片形成毛玻璃质感
-                modifier = Modifier
-                    .fillMaxSize()
-                    .then(
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                            Modifier.blur(3.dp)
-                        } else {
-                            Modifier
-                        }
-                    )
+                modifier = Modifier.fillMaxSize()
             )
             // 暗化遮罩：确保上层文字可读
             Box(
