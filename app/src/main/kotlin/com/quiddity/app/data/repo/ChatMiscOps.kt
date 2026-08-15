@@ -15,6 +15,7 @@ import com.quiddity.app.data.remote.ToolDefinition
 import com.quiddity.app.data.repo.ConversationRepository
 import com.quiddity.app.data.repo.SettingsRepository
 import com.quiddity.app.domain.ApiCatalogManager
+import com.quiddity.app.domain.ChatContextTrimmer
 import com.quiddity.app.domain.ChatError
 import com.quiddity.app.domain.GroupReplyPlanner
 import com.quiddity.app.domain.PromptBuilder
@@ -224,17 +225,7 @@ internal class MiscOps(
         messages: List<Message>,
         rounds: Int,
         buffer: Int = 0
-    ): List<Message> {
-        if (rounds <= 0 || messages.isEmpty()) return emptyList()
-        val userIndices = messages.withIndex()
-            .filter { it.value.role == Role.USER }
-            .map { it.index }
-        if (userIndices.isEmpty()) return emptyList()
-        if (rounds >= userIndices.size) return messages
-        val startUserIdx = userIndices[userIndices.size - rounds]
-        val startIdx = (startUserIdx - buffer).coerceAtLeast(0)
-        return messages.subList(startIdx, messages.size)
-    }
+    ): List<Message> = ChatContextTrimmer.takeLastRounds(messages, rounds, buffer)
 
     /**
      * 取"从第 startRound 轮起"的对话（用于压缩输入裁剪）。
@@ -253,16 +244,7 @@ internal class MiscOps(
     fun takeFromRound(
         messages: List<Message>,
         startRound: Int
-    ): List<Message> {
-        if (messages.isEmpty()) return emptyList()
-        if (startRound <= 0) return messages
-        val userIndices = messages.withIndex()
-            .filter { it.value.role == Role.USER }
-            .map { it.index }
-        if (startRound >= userIndices.size) return emptyList()
-        val startIdx = userIndices[startRound]
-        return messages.subList(startIdx, messages.size)
-    }
+    ): List<Message> = ChatContextTrimmer.takeFromRound(messages, startRound)
     suspend fun quickSetup(
         conv: Conversation,
         userDescription: String,

@@ -13,6 +13,7 @@ import com.quiddity.app.data.repo.ConversationRepository
 import com.quiddity.app.data.repo.SettingsRepository
 import com.quiddity.app.di.ServiceLocator
 import com.quiddity.app.domain.ApiCatalogManager
+import com.quiddity.app.domain.CompressionStateMachine
 import com.quiddity.app.domain.ChatError
 import com.quiddity.app.domain.VisionOcrService
 import com.quiddity.app.util.IdGenerator
@@ -525,11 +526,9 @@ internal class StreamController(
         if (!hasActiveWork()) onIdle?.invoke(conversationId)
     }
     suspend fun awaitCompressionIfNeeded(conv: Conversation) {
-        if (!conv.memoryBankEnabled) return
         val messages = _messages.value
         val userRounds = messages.count { it.role == Role.USER }
-        val roundsSinceLastCompress = userRounds - conv.lastCompressedAtRound
-        if (roundsSinceLastCompress < conv.memoryBankRounds) return
+        if (!CompressionStateMachine.shouldCompress(conv, userRounds)) return
 
         _compressionState.value = CompressionState.Compressing
         try {
@@ -557,10 +556,9 @@ internal class StreamController(
         }
     }
     fun consumeCompressionResult() {
-        if (_compressionState.value is CompressionState.Success ||
-            _compressionState.value is CompressionState.Failed
-        ) {
-            _compressionState.value = CompressionState.Idle
+        val next = CompressionStateMachine.consume(_compressionState.value)
+        if (next != _compressionState.value) {
+            _compressionState.value = next
             notifyIdleIfNoWork()
         }
     }

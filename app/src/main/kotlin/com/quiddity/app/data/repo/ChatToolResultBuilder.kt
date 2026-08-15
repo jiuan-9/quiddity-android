@@ -236,20 +236,12 @@ internal class ToolResultBuilder(
      * 的工具消息对——更早轮次的工具消息删除（模型对它们的叙述已在正文历史里，工具消息
      * 本身不再需要；assistant 工具调用与其 tool 结果必须成对删除）。
      */
-    fun trimToolRounds(messages: List<ChatMessage>, keepRounds: Int): List<ChatMessage> {
-        val roundStarts = messages.indices.filter { messages[it].tool_calls?.isNotEmpty() == true }
-        if (roundStarts.size <= keepRounds) return messages
-        val keepFrom = roundStarts[roundStarts.size - keepRounds]
-        return messages.subList(0, keepFrom) + messages.subList(keepFrom, messages.size)
-    }
+    fun trimToolRounds(messages: List<ChatMessage>, keepRounds: Int): List<ChatMessage> =
+        ChatToolRoundTrimmer.trimToolRounds(messages, keepRounds)
 
     /** Responses API 版本的工具轮裁剪（function_call 与 function_call_output 成对）。 */
-    fun trimResponsesToolRounds(input: List<ResponsesInputItem>, keepRounds: Int): List<ResponsesInputItem> {
-        val roundStarts = input.indices.filter { input[it].type == "function_call" }
-        if (roundStarts.size <= keepRounds) return input
-        val keepFrom = roundStarts[roundStarts.size - keepRounds]
-        return input.subList(0, keepFrom) + input.subList(keepFrom, input.size)
-    }
+    fun trimResponsesToolRounds(input: List<ResponsesInputItem>, keepRounds: Int): List<ResponsesInputItem> =
+        ChatToolRoundTrimmer.trimResponsesToolRounds(input, keepRounds)
 
     /**
      * 解析本轮工具调用结果（批量）：
