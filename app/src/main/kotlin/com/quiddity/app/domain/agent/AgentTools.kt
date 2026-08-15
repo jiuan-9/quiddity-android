@@ -55,50 +55,53 @@ enum class AgentConfirmPolicy {
 }
 
 /**
- * Agent 工具分类（用于工具清单分组展示与元数据归类）。
- * - SENSE：感知类（读屏 / 通知 / 用量 / Toast）
- * - READ：读取类（应用信息 / 日志 / 截图）
- * - FILE：文件类（读写 / 列目录 / 移动复制删除）
- * - IMAGE：识图类（OCR）
- * - INTERACT：主动交互类（主动提醒 / 剪贴板）
- * - MONITOR：监听类（Toast / 通知变化订阅）
- * - SYSTEM：系统增强类（Shell 白名单 / 用量明细）
- * - WRITE：写入类（停用 / 权限 / 强停 / 卸载）
+ * Agent 工具分类（工具使用开关 UI 的五大分组，1.6.0 架构重整）。
+ * - READ：只读（监听类、读取类）
+ * - MODIFY：更改（创建、更改、改入等）
+ * - DELETE：删除（仅删除类）
+ * - ACT：行为（截图、滑动等 AI 实际操作项，包括发送信息）
+ * - OCR：识图（仅供 AI 自行使用 OCR）
  */
-enum class AgentToolCategory {
-    SENSE,
-    READ,
-    FILE,
-    IMAGE,
-    INTERACT,
-    MONITOR,
-    SYSTEM,
-    TOUCH,
-    WRITE
+enum class AgentToolCategory(
+    val id: String,
+    val title: String,
+    val subtitle: String
+) {
+    READ("read", "只读", "监听类、读取类"),
+    MODIFY("modify", "更改", "创建、更改、改入等"),
+    DELETE("delete", "删除", "仅删除类"),
+    ACT("act", "行为", "截图、滑动等 AI 实际操作项，包括发送信息"),
+    OCR("ocr", "识图", "仅供 AI 自行使用 OCR");
+
+    companion object {
+        val ALL: List<AgentToolCategory> = entries
+
+        /** 分类 → 该分类下全部工具名（供主开关一键开启/关闭）。 */
+        fun toolsOf(category: AgentToolCategory): Set<String> =
+            AgentToolRegistry.allToolNames().filter { categoryOf(it) == category }.toSet()
+    }
 }
 
 /** 工具分类映射（与 displayName / actionFor 同构，供清单分组与 UI 归类）。 */
 fun categoryOf(name: String): AgentToolCategory = when (name) {
-    "read_screen", "read_notifications", "usage_stats", "foreground_app" ->
-        AgentToolCategory.SENSE
+    "read_screen", "get_time", "read_notifications", "usage_stats", "foreground_app",
     "list_apps", "app_permissions", "app_install_info", "app_battery",
-    "traffic_ranking", "file_access", "screenshot", "system_logs", "app_logs" ->
+    "traffic_ranking", "file_access", "system_logs", "app_logs",
+    "read_file", "list_files", "file_info",
+    "read_clipboard", "toast_monitor", "notification_guard", "app_usage_detail" ->
         AgentToolCategory.READ
-    "read_file", "list_files", "file_info", "reveal_file",
     "create_file", "write_file", "append_file", "rename_file", "mkdir",
-    "move_file", "copy_file", "delete_file" ->
-        AgentToolCategory.FILE
-    "ocr_image" -> AgentToolCategory.IMAGE
-    "notify_self", "read_clipboard", "write_clipboard", "clear_clipboard",
-    "dismiss_notification", "reply_notification", "schedule_notify" ->
-        AgentToolCategory.INTERACT
-    "toast_monitor", "notification_guard" -> AgentToolCategory.MONITOR
-    "run_shell", "app_usage_detail" -> AgentToolCategory.SYSTEM
+    "move_file", "copy_file", "write_clipboard",
+    "set_appops", "disable_app", "enable_app", "force_stop" ->
+        AgentToolCategory.MODIFY
+    "delete_file", "clear_clipboard", "dismiss_notification", "uninstall_app" ->
+        AgentToolCategory.DELETE
+    "screenshot", "reveal_file", "run_shell",
     "click", "long_press", "click_text", "scroll", "global_action",
-    "input_text", "click_id", "click_desc", "drag", "scroll_to_text", "lock_screen" ->
-        AgentToolCategory.TOUCH
-    "disable_app", "enable_app", "set_appops", "force_stop", "uninstall_app" ->
-        AgentToolCategory.WRITE
+    "input_text", "click_id", "click_desc", "drag", "scroll_to_text", "lock_screen",
+    "open_app", "notify_self", "reply_notification", "schedule_notify", "sleep" ->
+        AgentToolCategory.ACT
+    "ocr_image" -> AgentToolCategory.OCR
     else -> AgentToolCategory.READ
 }
 
@@ -136,14 +139,15 @@ data class AgentTool(
  * Agent 执行上下文。
  *
  * [conversation] 当前 Agent 会话；[switches] 工具开关快照；
- * [whitelist] 写入白名单；[auditAppend] 审计追加回调（AgentStore）。
+ * [blacklist] 黑名单（包名 / 文件路径，命中即拒绝查看/更改/删除）；
+ * [auditAppend] 审计追加回调（AgentStore）。
  */
 data class AgentContext(
     val conversation: Conversation?,
     val switches: AgentToolSwitches,
-    val whitelist: Set<String>,
+    val blacklist: Set<String>,
     val auditAppend: suspend (com.quiddity.app.data.local.AgentAuditEntry) -> Unit = {},
-    /** 权限管控「完全」模式：跳过危险工具逐次确认，自动执行（仍受开关与白名单约束）。 */
+    /** 权限管控「完全」模式：跳过危险工具逐次确认，自动执行（仍受开关与黑名单约束）。 */
     val autoConfirm: Boolean = false,
     /**
      * 危险操作确认回调：返回 null 表示未接确认 UI（按未确认处理），
@@ -154,8 +158,85 @@ data class AgentContext(
      * 批量确认回调：一轮模型工具调用中所有需要确认的工具一次列出，
      * 返回 true / false 表示用户整体批准 / 取消。
      */
-    val confirmRequestBatch: (suspend (List<Pair<AgentTool, JsonObject>>) -> Boolean)? = null
+    val confirmRequestBatch: (suspend (List<Pair<AgentTool, JsonObject>>) -> Boolean)? = null,
+    /**
+     * 本轮（一条用户消息 → 全部工具轮）行为追踪器：
+     * 记录本轮创建/更改的文件与应用状态，撤回时用于删除创建物与提示更改项。
+     */
+    val roundEffects: AgentRoundEffects = AgentRoundEffects()
 )
+
+/**
+ * Agent 单轮行为追踪器（撤回语义的数据基础）。
+ *
+ * 一条用户消息内的全部工具执行共享同一实例（跨多个工具轮循环），
+ * 撤回时按 [createdFiles] 删除本轮创建的文件，按 [changedItems] 提示不可逆更改项。
+ */
+class AgentRoundEffects {
+
+    private val lock = Any()
+    private val created = mutableListOf<String>()
+    private val changed = mutableListOf<String>()
+
+    /**
+     * 记录一次工具执行的文件/应用影响（仅执行成功时调用）。
+     *
+     * 分类规则：
+     * - 创建类（create_file / mkdir / copy_file / move_file / rename_file 的目标路径）→ [created]
+     * - 更改类（write_file / append_file 覆盖既有内容、应用状态类工具）→ [changed]
+     */
+    fun record(toolName: String, args: JsonObject, ok: Boolean) {
+        if (!ok) return
+        val path = argString(args, "path")
+        val src = argString(args, "src")
+        val dst = argString(args, "dst")
+        val pkg = argString(args, "pkg")
+        synchronized(lock) {
+            when (toolName) {
+                "create_file", "mkdir" -> {
+                    if (!path.isNullOrBlank()) created += path
+                }
+                "copy_file", "move_file", "rename_file" -> {
+                    if (!dst.isNullOrBlank()) created += dst
+                    if (!src.isNullOrBlank() && toolName != "rename_file") changed += "移动 $src"
+                }
+                "write_file", "append_file" -> {
+                    if (!path.isNullOrBlank()) changed += "写入 $path"
+                }
+                "disable_app" -> {
+                    if (!pkg.isNullOrBlank()) changed += "停用 $pkg（撤回可恢复）"
+                }
+                "enable_app" -> {
+                    if (!pkg.isNullOrBlank()) changed += "启用 $pkg（撤回可恢复）"
+                }
+                "force_stop" -> {
+                    if (!pkg.isNullOrBlank()) changed += "强停 $pkg（瞬态，无需恢复）"
+                }
+                "set_appops" -> {
+                    if (!pkg.isNullOrBlank()) changed += "修改 $pkg 权限（不可自动恢复，请手动检查）"
+                }
+                else -> Unit
+            }
+        }
+    }
+
+    /** 本轮创建的文件 / 目录（撤回时删除）。 */
+    fun createdFiles(): List<String> = synchronized(lock) { created.distinct().toList() }
+
+    /** 本轮更改项（撤回时提示，不可删除）。 */
+    fun changedItems(): List<String> = synchronized(lock) { changed.distinct().toList() }
+
+    /** 合并另一追踪器的结果（多轮工具循环共享时预留）。 */
+    fun mergeFrom(other: AgentRoundEffects) {
+        synchronized(lock) {
+            created += other.createdFiles()
+            changed += other.changedItems()
+        }
+    }
+
+    private fun argString(args: JsonObject, key: String): String? =
+        (args[key] as? JsonPrimitive)?.content
+}
 
 /**
  * 批量工具调用请求项：一轮模型回复中携带的单个工具调用。
@@ -297,6 +378,20 @@ class AgentToolRegistry(
                     execute = { _, args ->
                         executors?.readScreen(argInt(args, "maxChars"))
                             ?: "尚未接入执行器"
+                    }
+                ),
+                AgentTool(
+                    name = "get_time",
+                    description = "读取系统当前时间与日期（含时区与时间戳），用于感知时间、判断时机。",
+                    params = paramsObject(
+                        properties = emptyMap(),
+                        required = emptyList()
+                    ),
+                    level = AgentPermissionLevel.BASIC,
+                    confirm = AgentConfirmPolicy.AUTO,
+                    enabledByDefault = true,
+                    execute = { _, _ ->
+                        executors?.getTime() ?: "尚未接入执行器"
                     }
                 ),
                 AgentTool(
@@ -1144,6 +1239,23 @@ class AgentToolRegistry(
                     }
                 ),
                 AgentTool(
+                    name = "sleep",
+                    description = "等待指定秒数（1~300 秒）后再继续，用于等待界面加载、动画结束或定时衔接。",
+                    params = paramsObject(
+                        properties = mapOf(
+                            "seconds" to intParam("等待秒数，1~300")
+                        ),
+                        required = listOf("seconds")
+                    ),
+                    level = AgentPermissionLevel.BASIC,
+                    confirm = AgentConfirmPolicy.AUTO,
+                    enabledByDefault = true,
+                    execute = { _, args ->
+                        executors?.sleep(argInt(args, "seconds") ?: 1)
+                            ?: "尚未接入执行器"
+                    }
+                ),
+                AgentTool(
                     name = "disable_app",
                     description = "停用指定的应用（需要授权通道、白名单与用户确认）。",
                     params = paramsObject(
@@ -1241,10 +1353,14 @@ class AgentToolRegistry(
             return AgentToolRegistry(tools.associateBy { it.name })
         }
 
+        /** 全部已注册工具名（供分类主开关一键开启/关闭）。 */
+        fun allToolNames(): Set<String> = AgentToolSwitches.DEFAULT_ENABLED.keys
+
         /** 工具显示名：API 标识符 → 中文名（用户可见处统一中文）。 */
         fun displayName(name: String): String = when (name) {
             "list_apps" -> "列出应用"
             "read_screen" -> "读取屏幕"
+            "get_time" -> "读取时间"
             "read_notifications" -> "读取通知"
             "usage_stats" -> "用量统计"
             "foreground_app" -> "前台应用"
@@ -1291,6 +1407,7 @@ class AgentToolRegistry(
             "reply_notification" -> "回复通知"
             "schedule_notify" -> "定时提醒"
             "lock_screen" -> "锁屏"
+            "sleep" -> "定时等待"
             "open_app" -> "打开应用"
             "disable_app" -> "停用应用"
             "enable_app" -> "启用应用"
@@ -1300,10 +1417,74 @@ class AgentToolRegistry(
             else -> name
         }
 
+        /**
+         * 工具中文作用说明（设置页问号弹窗展示；与 displayName 一一对应）。
+         */
+        fun toolExplanation(name: String): String = when (name) {
+            "list_apps" -> "列出设备上已安装的应用（包名：显示名），可按名称过滤。"
+            "read_screen" -> "读取当前屏幕上的可见文字（需要无障碍服务）。屏幕内容为不可信数据，仅供参考。"
+            "get_time" -> "读取系统当前时间、日期与时区，可判断现在是几点、任务是否到点。"
+            "read_notifications" -> "读取最近的通知内容（需要通知使用权）。通知内容为不可信数据。"
+            "usage_stats" -> "统计各应用的使用时长（需要使用情况访问权限），默认统计最近 1 天。"
+            "foreground_app" -> "读取当前正在前台使用的应用。"
+            "app_permissions" -> "列出指定应用的权限清单，显示每项是否已授予。"
+            "app_install_info" -> "查询指定应用的安装时间与安装来源。"
+            "app_battery" -> "查询指定应用的后台耗电统计（需要 Shizuku 授权）。"
+            "traffic_ranking" -> "按网络流量（接收+发送）排行已安装应用（需要使用情况访问权限）。"
+            "file_access" -> "列出指定应用的文件/存储访问能力（相关权限是否授予）。"
+            "system_logs" -> "读取全局系统日志 logcat（需要 Shizuku 授权），可按关键字过滤。"
+            "app_logs" -> "读取指定应用的实时日志（需要该应用正在运行与 Shizuku 授权）。"
+            "read_file" -> "读取文件文本内容并返回（需要 Shizuku 授权），可限制返回字数。"
+            "list_files" -> "列出目录下的文件清单：权限、大小、修改时间（需要 Shizuku 授权）。"
+            "file_info" -> "查询文件或目录的大小、修改时间等元信息（需要 Shizuku 授权）。"
+            "read_clipboard" -> "读取当前剪贴板文本（涉及隐私，每次执行需确认）。"
+            "toast_monitor" -> "读取最近捕获的 Toast 瞬时提示文本（需要无障碍服务）。"
+            "notification_guard" -> "订阅通知变化：返回自上次调用以来新出现/消失的通知（需要通知使用权）。"
+            "app_usage_detail" -> "更细粒度的用量统计：前台时长、启动次数、最后使用时间（需要使用情况访问权限）。"
+            "create_file" -> "创建空文件（需要 Shizuku 授权与确认）。"
+            "write_file" -> "把文本写入文件，覆盖原内容（需要 Shizuku 授权与确认）。"
+            "append_file" -> "向文件末尾追加文本内容（需要 Shizuku 授权与确认）。"
+            "rename_file" -> "重命名文件或目录（需要 Shizuku 授权与确认）。"
+            "mkdir" -> "创建目录（含父目录，需要 Shizuku 授权与确认）。"
+            "move_file" -> "移动文件或目录（需要 Shizuku 授权与确认）。"
+            "copy_file" -> "复制文件或目录（需要 Shizuku 授权与确认）。"
+            "write_clipboard" -> "把文本写入剪贴板（需要确认）。"
+            "set_appops" -> "修改应用的权限模式（如拒绝震动、定位；需要 Shizuku 授权与确认）。"
+            "disable_app" -> "停用指定应用：图标消失、无法运行（需要 Shizuku 授权与确认）。"
+            "enable_app" -> "重新启用被停用的应用（需要 Shizuku 授权与确认）。"
+            "force_stop" -> "强制停止指定应用的后台运行（需要 Shizuku 授权与确认）。"
+            "delete_file" -> "删除文件或目录，不可恢复（需要 Shizuku 授权与确认）。"
+            "clear_clipboard" -> "清空剪贴板内容（需要确认）。"
+            "dismiss_notification" -> "清除通知栏里指定包名的通知（需要通知使用权与确认）。"
+            "uninstall_app" -> "卸载指定应用，数据不可恢复（需要 Shizuku 授权与确认）。"
+            "screenshot" -> "截取当前屏幕并保存为图片（需要无障碍服务与 Android 11+），返回图片路径。"
+            "reveal_file" -> "用文件管理器打开指定路径定位（需要 Shizuku 授权），可指定文件管理器包名避免被微信抢走。"
+            "run_shell" -> "执行白名单内的安全只读 Shell 命令（ls / cat / getprop 等，需要 Shizuku 授权与确认）。"
+            "click" -> "模拟点击屏幕指定坐标（像素，需要无障碍服务与确认）。"
+            "long_press" -> "长按屏幕指定坐标（像素，需要无障碍服务与确认）。"
+            "click_text" -> "点击屏幕上包含指定文字的控件（需要无障碍服务与确认）。"
+            "scroll" -> "在屏幕上滑动：上/下/左/右（需要无障碍服务与确认）。"
+            "global_action" -> "执行系统全局动作：返回/首页/最近任务/通知栏/快捷设置/锁屏（需要无障碍服务与确认）。"
+            "input_text" -> "向当前聚焦的输入框写入文本（需要无障碍服务与确认）。"
+            "click_id" -> "按控件的 resource-id 点击（需要无障碍服务与确认）。"
+            "click_desc" -> "按控件的内容描述 contentDescription 点击（需要无障碍服务与确认）。"
+            "drag" -> "在屏幕上从起点拖拽到终点（像素，需要无障碍服务与确认）。"
+            "scroll_to_text" -> "向下滚动查找并点击目标文字（需要无障碍服务与确认）。"
+            "lock_screen" -> "锁屏（需要无障碍服务与确认）。"
+            "sleep" -> "原地等待指定秒数（1~300 秒），用于等界面加载、动画结束或定时衔接；等待期间不执行其他操作。"
+            "open_app" -> "直接打开指定应用（如微信、抖音），用于快速导航；免确认执行。"
+            "notify_self" -> "主动向通知栏推送一条提醒（标题可选，正文必填），用于定时提醒或结果通知。"
+            "reply_notification" -> "回复指定通知：优先内联回复，目标不支持则点击打开应用（需要通知使用权与确认）。"
+            "schedule_notify" -> "设置定时提醒：指定秒数后主动推送通知栏提醒（进程被回收也可触发，需确认）。"
+            "ocr_image" -> "对截图或图片执行 OCR 识别并返回文字；路径留空时自动截取当前屏幕再识别（仅 AI 自行使用）。"
+            else -> name
+        }
+
         /** 工具使用中报告的动作文案（供聊天页工具报告条展示）。 */
         fun actionFor(name: String): String = when (name) {
             "list_apps" -> "正在列出已安装应用"
             "read_screen" -> "正在读取屏幕内容"
+            "get_time" -> "正在读取系统时间"
             "read_notifications" -> "正在读取通知"
             "usage_stats" -> "正在统计应用用量"
             "foreground_app" -> "正在读取前台应用"
@@ -1350,6 +1531,7 @@ class AgentToolRegistry(
             "reply_notification" -> "正在回复通知"
             "schedule_notify" -> "正在设置定时提醒"
             "lock_screen" -> "正在锁屏"
+            "sleep" -> "正在等待"
             "open_app" -> "正在打开应用"
             "disable_app" -> "正在停用应用"
             "enable_app" -> "正在启用应用"
@@ -1357,6 +1539,69 @@ class AgentToolRegistry(
             "force_stop" -> "正在强制停止应用"
             "uninstall_app" -> "正在卸载应用"
             else -> "正在执行工具"
+        }
+
+        /**
+         * 行动弹窗文案：按工具名与参数生成「正在做什么」的可读描述（应用侧系统通知弹窗使用）。
+         * 读取 / OCR 类工具不生成行动文案（不弹窗）。
+         */
+        fun actionDescription(name: String, args: JsonObject): String = when (name) {
+            "click" -> "模拟点击（${argInt(args, "x")}, ${argInt(args, "y")}）"
+            "long_press" -> "长按（${argInt(args, "x")}, ${argInt(args, "y")}）"
+            "click_text" -> "点击文字「${argString(args, "text").orEmpty().take(40)}」"
+            "scroll" -> "向${scrollDirectionName(argString(args, "direction"))}滑动"
+            "global_action" -> "系统动作：${globalActionName(argString(args, "action"))}"
+            "input_text" -> "输入文本「${argString(args, "text").orEmpty().take(40)}」"
+            "click_id" -> "按 ID 点击「${argString(args, "id").orEmpty()}」"
+            "click_desc" -> "按描述点击「${argString(args, "desc").orEmpty().take(40)}」"
+            "drag" ->
+                "拖拽（${argInt(args, "x1")},${argInt(args, "y1")}）→（${argInt(args, "x2")},${argInt(args, "y2")}）"
+            "scroll_to_text" -> "滚动查找「${argString(args, "text").orEmpty().take(40)}」"
+            "lock_screen" -> "锁屏"
+            "open_app" -> "打开应用 ${argString(args, "pkg").orEmpty()}"
+            "sleep" -> "等待 ${argInt(args, "seconds") ?: 1} 秒"
+            "screenshot" -> "截取当前屏幕"
+            "reveal_file" -> "跳转文件 ${argString(args, "path").orEmpty()}"
+            "notify_self" -> "推送提醒"
+            "reply_notification" -> "回复通知"
+            "dismiss_notification" -> "清除通知"
+            "schedule_notify" -> "设置定时提醒"
+            "run_shell" -> "执行 Shell 命令"
+            "read_clipboard" -> "读取剪贴板"
+            "write_clipboard" -> "写入剪贴板"
+            "clear_clipboard" -> "清空剪贴板"
+            "create_file" -> "创建文件 ${argString(args, "path").orEmpty()}"
+            "write_file" -> "写入文件 ${argString(args, "path").orEmpty()}"
+            "append_file" -> "追加文件 ${argString(args, "path").orEmpty()}"
+            "rename_file" -> "重命名 ${argString(args, "src").orEmpty()}"
+            "mkdir" -> "创建目录 ${argString(args, "path").orEmpty()}"
+            "move_file" -> "移动文件 ${argString(args, "src").orEmpty()}"
+            "copy_file" -> "复制文件 ${argString(args, "src").orEmpty()}"
+            "delete_file" -> "删除文件 ${argString(args, "path").orEmpty()}"
+            "disable_app" -> "停用应用 ${argString(args, "pkg").orEmpty()}"
+            "enable_app" -> "启用应用 ${argString(args, "pkg").orEmpty()}"
+            "set_appops" -> "修改应用权限（${argString(args, "pkg").orEmpty()}）"
+            "force_stop" -> "强制停止应用 ${argString(args, "pkg").orEmpty()}"
+            "uninstall_app" -> "卸载应用 ${argString(args, "pkg").orEmpty()}"
+            else -> displayName(name)
+        }
+
+        private fun scrollDirectionName(direction: String?): String = when (direction) {
+            "up" -> "上"
+            "down" -> "下"
+            "left" -> "左"
+            "right" -> "右"
+            else -> direction.orEmpty()
+        }
+
+        private fun globalActionName(action: String?): String = when (action) {
+            "back" -> "返回"
+            "home" -> "首页"
+            "recents" -> "最近任务"
+            "notifications" -> "通知栏"
+            "quick_settings" -> "快捷设置"
+            "lock" -> "锁屏"
+            else -> action.orEmpty()
         }
 
         private fun paramsObject(

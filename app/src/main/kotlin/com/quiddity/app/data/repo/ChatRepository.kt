@@ -27,9 +27,11 @@ import com.quiddity.app.domain.MessageStreamCoordinator
 import com.quiddity.app.domain.PromptBuilder
 import com.quiddity.app.domain.StreamCoordinator
 import com.quiddity.app.domain.agent.AgentContext
+import com.quiddity.app.domain.agent.AgentRoundEffects
 import com.quiddity.app.domain.agent.AgentTool
 import com.quiddity.app.domain.agent.AgentToolCallRequest
 import com.quiddity.app.domain.agent.AgentToolRegistry
+import com.quiddity.app.domain.agent.AgentWorkflowController
 import kotlinx.coroutines.CompletableDeferred
 import com.quiddity.app.util.IdGenerator
 import com.quiddity.app.util.QuiddityConstants
@@ -206,6 +208,14 @@ class ChatRepository(
             val items: List<ToolConfirmItem>,
             val resume: (Boolean) -> Unit
         ) : Event()
+        /**
+         * Agent 单轮行为追踪结果（Done 前派发）：本轮创建的文件路径 + 更改项摘要，
+         * 由 ViewModel 固化进最后一条 AI 消息（撤回追踪）。
+         */
+        data class AgentRoundEffects(
+            val createdPaths: List<String>,
+            val changedItems: List<String>
+        ) : Event()
         /** 错误。 */
         data class Error(val throwable: Throwable, val partialContent: String) : Event()
     }
@@ -323,7 +333,10 @@ class ChatRepository(
             ),
             conv = conv,
             onEvent = onEvent,
-            thinkingActive = conv.thinkingEnabled
+            thinkingActive = conv.thinkingEnabled,
+            // Agent 模式：整条用户指令共享轮次追踪器 + 任务编排器（方案 B'：去重/重试）
+            roundEffects = if (isAgent) AgentRoundEffects() else null,
+            workflow = if (isAgent) AgentWorkflowController() else null
         )
     }
 
@@ -467,7 +480,17 @@ class ChatRepository(
          * 内容进入协调器前的流式转换（群聊用于剥离「名字：」前缀，
          * 避免前缀在切分阶段被拆成独立消息、剥离后变成空白消息）。
          */
-        contentTransform: (String) -> String = { it }
+        contentTransform: (String) -> String = { it },
+        /**
+         * Agent 单轮行为追踪器（一条用户指令共享；非 Agent 模式为 null）。
+         * 结束时把创建路径与更改项通过 [Event.AgentRoundEffects] 派发出去。
+         */
+        roundEffects: AgentRoundEffects? = null,
+        /**
+         * Agent 任务编排器（方案 B'）：一条用户指令共享；非 Agent 模式为 null。
+         * 负责同轮工具调用的去重与失败自动重试（0~1 次调用零介入）。
+         */
+        workflow: AgentWorkflowController? = null
     ): Boolean {
         val apiUrl = request.apiUrl
         var lastError: Throwable? = null
@@ -479,7 +502,7 @@ class ChatRepository(
         var lastResolved: List<Pair<ChatStreamParser.AggregatedToolCall, String>> = emptyList()
 
         while (rounds < MAX_TOOL_ROUNDS) {
-            val round = runSingleStream(
+            var round = runSingleStream(
                 api, apiUrl, apiKey, currentRequest, coordinator, onEvent, contentTransform, thinkingActive,
                 onFailure = recordFailure
             )
@@ -492,8 +515,37 @@ class ChatRepository(
                 break
             }
             if (round.reasoningText.isNotBlank()) reasoningText = round.reasoningText
-            val calls = round.toolCalls
-            if (calls.isEmpty()) break
+            var calls = round.toolCalls
+            if (calls.isEmpty()) {
+                // ===== 无工具调用收尾：截断自动续写 / 空回复（AI 撤回）自动兜底重试 =====
+                val recovered = recoverNoToolRound(
+                    api, apiUrl, apiKey, currentRequest, coordinator, conv, onEvent, contentTransform,
+                    thinkingActive, rounds, lastResolved, lastError, recordFailure, round
+                )
+                when (recovered) {
+                    is NoToolRoundResult.Completed -> break
+                    is NoToolRoundResult.Failed -> return false
+                    is NoToolRoundResult.WithToolCalls -> {
+                        currentRequest = recovered.request
+                        round = recovered.round
+                        calls = recovered.round.toolCalls
+                    }
+                }
+            }
+            if (round.truncated && calls.isNotEmpty()) {
+                // 工具调用被截断（参数不完整）：不执行，提示模型重新发起完整调用
+                rounds++
+                if (rounds >= MAX_TOOL_ROUNDS) {
+                    appendFailureMessage(
+                        conv, coordinator, onEvent,
+                        "工具调用多次因长度限制被截断，无法继续执行，请重试。"
+                    )
+                    return false
+                }
+                currentRequest = buildContinueRequest(currentRequest, null, TOOL_CALL_TRUNCATED_NUDGE)
+                coordinator.setMergeWithPrevious(true)
+                continue
+            }
             // 工具轮结束（本轮有工具调用）：记录正文段边界（合并模式下工具轮之间的
             // 正文分界，供 UI 插入工具痕迹），并把带边界的最新消息派发出去持久化
             // （协调器内部修改不会自动同步到已落库消息）
@@ -504,7 +556,7 @@ class ChatRepository(
                 }
             }
             calls.forEach { onEvent(Event.ToolUse(it.name)) }
-            val resolved = resolveToolContents(calls, conv, memory, onEvent)
+            val resolved = resolveToolContents(calls, conv, memory, onEvent, roundEffects, workflow)
             lastResolved = resolved
             resolved.forEach { (call, content) ->
                 onEvent(Event.ToolResult(call.name, isToolResultSuccess(content), content.take(500)))
@@ -528,25 +580,85 @@ class ChatRepository(
         }
 
         if (rounds >= MAX_TOOL_ROUNDS) {
-            val finalRound = runSingleStream(
+            var finalRound = runSingleStream(
                 api, apiUrl, apiKey, currentRequest, coordinator, onEvent, contentTransform, thinkingActive,
                 onFailure = recordFailure
             )
-            if (finalRound == null || coordinator.snapshot().none {
-                    it.role == Role.ASSISTANT && !it.isNotice && !it.isThinking && it.content.isNotBlank()
-                }
-            ) {
-                appendFailureMessage(
-                    conv, coordinator, onEvent,
-                    lastError?.let {
-                        "工具已执行，但模型继续回复失败：${it.message?.take(200) ?: it.javaClass.simpleName}。请重试或检查模型配置。"
-                    } ?: "工具已执行，但模型未输出回复内容。请重试。"
+            if (finalRound == null) {
+                val recovered = handleToolRoundFailure(
+                    api, apiUrl, apiKey, currentRequest, coordinator, conv, onEvent, contentTransform,
+                    thinkingActive, rounds, lastResolved, lastError, recordFailure
                 )
-                return false
+                if (!recovered) return false
+            } else {
+                if (finalRound.toolCalls.isNotEmpty()) {
+                    // 轮次上限内的最后一轮仍发起工具调用：照常执行，不再进入下一轮
+                    finalRound.toolCalls.forEach { onEvent(Event.ToolUse(it.name)) }
+                    val resolved = resolveToolContents(
+                        finalRound.toolCalls, conv, memory, onEvent, roundEffects, workflow
+                    )
+                    lastResolved = resolved
+                    resolved.forEach { (call, content) ->
+                        onEvent(Event.ToolResult(call.name, isToolResultSuccess(content), content.take(500)))
+                    }
+                    currentRequest = try {
+                        buildNextRoundRequest(
+                            currentRequest, resolved, finalRound.reasoningText, onEvent, keepTools = false
+                        )
+                    } catch (c: kotlinx.coroutines.CancellationException) {
+                        throw c
+                    } catch (t: Throwable) {
+                        emitError(onEvent, t, coordinator.snapshot().joinToString("\n") { it.content })
+                        appendFailureMessage(
+                            conv, coordinator, onEvent,
+                            "工具结果准备失败，无法继续回复（${t.message?.take(120) ?: t.javaClass.simpleName}）。请重试。"
+                        )
+                        return false
+                    }
+                    finalRound = runSingleStream(
+                        api, apiUrl, apiKey, currentRequest, coordinator, onEvent, contentTransform, thinkingActive,
+                        onFailure = recordFailure
+                    )
+                    if (finalRound == null) {
+                        appendFailureMessage(
+                            conv, coordinator, onEvent,
+                            lastError?.let {
+                                "工具已执行，但模型继续回复失败：${it.message?.take(200) ?: it.javaClass.simpleName}。请重试或检查模型配置。"
+                            } ?: "工具已执行，但模型未输出回复内容。请重试。"
+                        )
+                        return false
+                    }
+                }
+                if (!finalRound.hasContent || finalRound.truncated) {
+                    // 上限轮后的最终回复为空 / 被截断：同样走自动续写与空回复兜底
+                    val recovered = recoverNoToolRound(
+                        api, apiUrl, apiKey, currentRequest, coordinator, conv, onEvent, contentTransform,
+                        thinkingActive, rounds, lastResolved, lastError, recordFailure, finalRound
+                    )
+                    when (recovered) {
+                        is NoToolRoundResult.Completed -> Unit
+                        is NoToolRoundResult.WithToolCalls -> {
+                            appendFailureMessage(
+                                conv, coordinator, onEvent,
+                                "工具轮次已达上限且模型仍发起工具调用，无法收尾，请重试。"
+                            )
+                            return false
+                        }
+                        is NoToolRoundResult.Failed -> return false
+                    }
+                }
             }
         }
 
         attachThinkingUnavailableReportIfNeeded(request, coordinator, thinkingActive, onEvent)
+        if (roundEffects != null) {
+            onEvent(
+                Event.AgentRoundEffects(
+                    createdPaths = roundEffects.createdFiles(),
+                    changedItems = roundEffects.changedItems()
+                )
+            )
+        }
         onEvent(Event.Done)
         return true
     }
@@ -654,7 +766,11 @@ class ChatRepository(
      */
     private data class StreamRoundResult(
         val toolCalls: List<ChatStreamParser.AggregatedToolCall>,
-        val reasoningText: String
+        val reasoningText: String,
+        /** 本轮流是否以"被截断"结束（finish_reason=length / response.incomplete）。 */
+        val truncated: Boolean = false,
+        /** 本轮流是否产生了新的正文内容（用于空回复 / AI 撤回兜底判定）。 */
+        val hasContent: Boolean = false
     )
 
     private suspend fun runSingleStream(
@@ -671,6 +787,7 @@ class ChatRepository(
         var toolCalls: List<ChatStreamParser.AggregatedToolCall> = emptyList()
         val reasoningText = StringBuilder()
         var truncated = false
+        val contentLenBefore = coordinator.snapshot().sumOf { it.content.length }
         try {
             // 打字机延迟已在 UI 层（MessageBubble）按字渲染实现，
             // 此处不再阻塞流式消费——避免大 delta 时 API 缓冲区堆积、
@@ -720,7 +837,13 @@ class ChatRepository(
             onFailure?.invoke(t)
             return null
         }
-        return StreamRoundResult(toolCalls, reasoningText.toString())
+        val contentLenAfter = coordinator.snapshot().sumOf { it.content.length }
+        return StreamRoundResult(
+            toolCalls = toolCalls,
+            reasoningText = reasoningText.toString(),
+            truncated = truncated,
+            hasContent = contentLenAfter > contentLenBefore
+        )
     }
 
     /**
@@ -745,6 +868,84 @@ class ChatRepository(
         )
         onEvent(Event.NewMessage(msg))
         onEvent(Event.CompleteMessage(msg))
+    }
+
+    /** 无工具调用轮次的兜底处理结果。 */
+    private sealed interface NoToolRoundResult {
+        /** 已获得有效正文，可正常收尾。 */
+        data object Completed : NoToolRoundResult
+        /** 重试后模型重新发起工具调用，需要外层循环继续执行。 */
+        data class WithToolCalls(
+            val round: StreamRoundResult,
+            val request: ChatRoundRequest
+        ) : NoToolRoundResult
+        /** 多次兜底仍失败，失败消息已派发。 */
+        data object Failed : NoToolRoundResult
+    }
+
+    /**
+     * 最终回复兜底：
+     * - 截断（finish_reason=length / response.incomplete）：自动续写，直到得到完整正文；
+     * - 空回复（AI 撤回 / 未输出正文）：自动重试，直到得到正文或工具调用。
+     * 每次尝试把「部分正文 + 提示语」或仅「提示语」并入请求重新请求，
+     * 新正文通过 [StreamCoordinator.setMergeWithPrevious] 合并进上一条 AI 消息。
+     */
+    private suspend fun recoverNoToolRound(
+        api: ChatApi,
+        apiUrl: String,
+        apiKey: String,
+        request: ChatRoundRequest,
+        coordinator: StreamCoordinator,
+        conv: Conversation,
+        onEvent: suspend (Event) -> Unit,
+        contentTransform: (String) -> String,
+        thinkingActive: Boolean,
+        rounds: Int,
+        resolved: List<Pair<ChatStreamParser.AggregatedToolCall, String>>,
+        lastError: Throwable?,
+        recordFailure: suspend (Throwable) -> Unit,
+        initial: StreamRoundResult
+    ): NoToolRoundResult {
+        var current = request
+        var round = initial
+        var attempt = 0
+        while (attempt < MAX_FINAL_RECOVERY_ROUNDS) {
+            attempt++
+            val truncated = round.truncated
+            val partial = coordinator.snapshot().lastOrNull {
+                it.role == Role.ASSISTANT && !it.isNotice && !it.isThinking && it.content.isNotBlank()
+            }?.content.orEmpty()
+            current = buildContinueRequest(
+                current,
+                if (truncated) partial else null,
+                if (truncated) TRUNCATE_CONTINUE_NUDGE else EMPTY_REPLY_NUDGE
+            )
+            coordinator.setMergeWithPrevious(true)
+            val retried = runSingleStream(
+                api, apiUrl, apiKey, current, coordinator, onEvent, contentTransform, thinkingActive,
+                onFailure = recordFailure
+            )
+            if (retried == null) {
+                val recovered = handleToolRoundFailure(
+                    api, apiUrl, apiKey, current, coordinator, conv, onEvent, contentTransform,
+                    thinkingActive, rounds, resolved, lastError, recordFailure
+                )
+                return if (recovered) NoToolRoundResult.Completed else NoToolRoundResult.Failed
+            }
+            if (retried.toolCalls.isNotEmpty()) {
+                return NoToolRoundResult.WithToolCalls(retried, current)
+            }
+            round = retried
+            if (retried.hasContent && !retried.truncated) {
+                return NoToolRoundResult.Completed
+            }
+            // 仍被截断 → 继续续写；仍为空 → 继续重试
+        }
+        appendFailureMessage(
+            conv, coordinator, onEvent,
+            "AI 回复不完整或为空（已自动重试 $attempt 次），请重试。"
+        )
+        return NoToolRoundResult.Failed
     }
 
     /**
@@ -947,10 +1148,12 @@ class ChatRepository(
         calls: List<ChatStreamParser.AggregatedToolCall>,
         conv: Conversation,
         memory: String,
-        onEvent: suspend (Event) -> Unit
+        onEvent: suspend (Event) -> Unit,
+        roundEffects: AgentRoundEffects? = null,
+        workflow: AgentWorkflowController? = null
     ): List<Pair<ChatStreamParser.AggregatedToolCall, String>> {
         val rawResults = if (conv.type == ConversationType.AGENT) {
-            resolveAgentToolContents(calls, conv, onEvent)
+            resolveAgentToolContents(calls, conv, onEvent, roundEffects, workflow)
         } else {
             calls.map { call -> resolveNonAgentToolContent(call, conv, memory) }
         }
@@ -978,18 +1181,71 @@ class ChatRepository(
     private suspend fun resolveAgentToolContents(
         calls: List<ChatStreamParser.AggregatedToolCall>,
         conv: Conversation,
-        onEvent: suspend (Event) -> Unit
+        onEvent: suspend (Event) -> Unit,
+        roundEffects: AgentRoundEffects? = null,
+        workflow: AgentWorkflowController? = null
     ): List<String> {
         val registry = agentToolRegistry
-        val ctx = agentContext(conv, onEvent)
+        val ctx = agentContext(conv, onEvent, roundEffects)
         if (registry == null || ctx == null) {
-            return calls.map { "工具 ${it.name} 不可用（Agent 工具未初始化）" }
+            return calls.map { "工具 " + it.name + " 不可用（Agent 工具未初始化）" }
         }
-        return registry.dispatchAll(
-            calls.map { AgentToolCallRequest(it.name, it.arguments) },
+        // ===== 方案 B'：去重 + 失败自动重试（0~1 次调用零介入） =====
+        // 1. 去重预筛：同工具同参数且已成功的调用直接复用结果（不重复执行）
+        data class Plan(
+            val call: ChatStreamParser.AggregatedToolCall,
+            val cached: AgentWorkflowController.CallRecord?
+        )
+        fun parseArgs(call: ChatStreamParser.AggregatedToolCall): JsonObject =
+            runCatching {
+                kotlinx.serialization.json.Json.parseToJsonElement(call.arguments) as? JsonObject
+            }.getOrNull() ?: JsonObject(emptyMap())
+        val plans = calls.map { call ->
+            Plan(call, workflow?.findDuplicate(call.name, parseArgs(call)))
+        }
+        val toExecute = plans.filter { it.cached == null }.map { it.call }
+        // 2. 真实执行（仅去重未命中部分）
+        val results = registry.dispatchAll(
+            toExecute.map { AgentToolCallRequest(it.name, it.arguments) },
             ctx
         )
+        // 3. 失败自动重试：真实执行失败（非用户取消/未确认）且未重试过 → 重试一次，
+        //    重试时确认自动通过（用户已确认过同一操作），其余门控照常
+        val finalResults = toExecute.zip(results).map { (call, raw) ->
+            val retryable = isRetryableToolFailure(raw)
+            if (workflow != null && workflow.shouldRetry(call.name, parseArgs(call), ok = false, retryable = retryable)) {
+                workflow.markRetried(call.name, parseArgs(call))
+                val retryCtx = ctx.copy(
+                    confirmRequest = { _, _ -> true },
+                    confirmRequestBatch = { _ -> true }
+                )
+                val retryRaw = registry.dispatch(call.name, call.arguments, retryCtx)
+                "首次执行失败：" + raw + "\n已自动重试：" + retryRaw
+            } else {
+                raw
+            }
+        }
+        // 4. 记录真实执行历史（供去重与计数），并把去重命中结果按原顺序回填
+        toExecute.zip(finalResults).forEach { (call, raw) ->
+            workflow?.record(call.name, parseArgs(call), ok = isToolResultSuccess(raw), result = raw)
+        }
+        val executedIter = finalResults.iterator()
+        return plans.map { plan ->
+            plan.cached?.let { cached ->
+                "（已去重：该调用与此前的成功调用相同，直接复用结果）\n" + cached.result
+            } ?: executedIter.next()
+        }
     }
+
+    /**
+     * 是否为「可重试」的工具失败：真正的执行失败（超时/报错/无数据等）。
+     * 用户取消（"用户已取消执行"）与未确认（"需要用户确认后才能执行"）导致的
+     * 「失败」不可重试——重试会绕过用户意图。
+     */
+    private fun isRetryableToolFailure(raw: String): Boolean =
+        !raw.contains("用户已取消") &&
+            !raw.contains("需要用户确认") &&
+            !isToolResultSuccess(raw)
 
     private suspend fun resolveNonAgentToolContent(
         call: ChatStreamParser.AggregatedToolCall,
@@ -1059,18 +1315,20 @@ class ChatRepository(
 
     private fun agentContext(
         conv: Conversation,
-        onEvent: suspend (Event) -> Unit
+        onEvent: suspend (Event) -> Unit,
+        roundEffects: AgentRoundEffects? = null
     ): AgentContext? {
         val store = agentStore ?: return null
         val settings = store.snapshot()
         return AgentContext(
             conversation = conv,
             switches = settings.toolSwitches,
-            whitelist = settings.whitelist.toSet(),
+            blacklist = settings.blacklist.toSet(),
             auditAppend = { store.appendAudit(it) },
             autoConfirm = settings.permissionControl == AgentPermissionControl.FULL,
             confirmRequest = { tool, args -> requestToolConfirmBatch(onEvent, listOf(tool to args)) },
-            confirmRequestBatch = { items -> requestToolConfirmBatch(onEvent, items) }
+            confirmRequestBatch = { items -> requestToolConfirmBatch(onEvent, items) },
+            roundEffects = roundEffects ?: AgentRoundEffects()
         )
     }
 
@@ -1105,7 +1363,22 @@ class ChatRepository(
         private const val MAX_TOOL_ROUND_RESULT_CHARS = 12_000
 
         /** 单轮回复内允许的最大工具轮数（防死循环；达到后强制关闭工具输出最终答复）。 */
-        private const val MAX_TOOL_ROUNDS = 8
+        private const val MAX_TOOL_ROUNDS = 16
+
+        /** 最终回复兜底的最大重试/续写轮数（截断续写 + 空回复/撤回重试共用）。 */
+        private const val MAX_FINAL_RECOVERY_ROUNDS = 3
+
+        /** 回复被截断时的续写提示语。 */
+        private const val TRUNCATE_CONTINUE_NUDGE =
+            "（你的回复因达到长度上限被截断。请直接从断点继续输出，不要重复已经输出的内容，直接给出后续正文。）"
+
+        /** 空回复 / AI 撤回时的兜底重试提示语。 */
+        private const val EMPTY_REPLY_NUDGE =
+            "（你刚才没有输出有效回复。请基于已有信息直接给出完整回复；若任务尚未完成，请继续完成并说明结果。）"
+
+        /** 工具调用被截断时的重试提示语。 */
+        private const val TOOL_CALL_TRUNCATED_NUDGE =
+            "（你的工具调用因长度限制被截断，参数不完整。请重新发起一次完整、正确的工具调用。）"
 
         /** DeepSeek 未返回思考内容时附在首条回复上的报告文案。 */
         private const val DEEPSEEK_THINKING_UNAVAILABLE_REPORT = "deepseek本身模型有概率不配合，思考内容不返回"
@@ -1353,6 +1626,7 @@ class ChatRepository(
                 is Event.ToolUse -> onEvent(event)
                 is Event.ToolResult -> onEvent(event)
                 is Event.ToolConfirmBatch -> onEvent(event)
+                is Event.AgentRoundEffects -> onEvent(event)
                 is Event.Truncated -> onEvent(event)
             }
         }
@@ -1371,8 +1645,10 @@ class ChatRepository(
                     ?: ChatRoundRequest.Completions(p.request, p.apiUrl)
                 runWithToolRound(
                     api, p.apiKey, roundRequest, coordinator, group, cleanEvent,
-                    thinkingActive = member.thinkingEnabled
-                ) { prefixStripper.accept(it) }
+                    thinkingActive = member.thinkingEnabled,
+                    roundEffects = null,
+                    contentTransform = { prefixStripper.accept(it) }
+                )
             },
             onFailure = { emitError(onEvent, it, "") }
         )
@@ -1716,5 +1992,60 @@ internal class GroupReplyPrefixStripper(names: List<String>) {
         active = false
         pending.clear()
         return rest
+    }
+}
+
+/**
+ * 构造续写 / 兜底重试请求：截断时把「已输出正文 + 提示语」追加进请求；
+ * 空回复时仅追加提示语（避免向接口提交空 assistant 消息）。
+ */
+internal fun buildContinueRequest(
+    request: ChatRoundRequest,
+    partialContent: String?,
+    nudge: String
+): ChatRoundRequest = when (request) {
+    is ChatRoundRequest.Completions -> {
+        val extra = buildList {
+            if (!partialContent.isNullOrBlank()) {
+                add(ChatMessage(role = "assistant", content = partialContent))
+            }
+            add(ChatMessage(role = "user", content = nudge))
+        }
+        ChatRoundRequest.Completions(
+            request.request.copy(
+                messages = request.request.messages + extra,
+                tools = request.request.tools,
+                tool_choice = request.request.tool_choice
+            ),
+            apiUrl = request.apiUrl
+        )
+    }
+    is ChatRoundRequest.Responses -> {
+        val extra = buildList {
+            if (!partialContent.isNullOrBlank()) {
+                add(
+                    ResponsesInputItem(
+                        type = "message",
+                        role = "assistant",
+                        content = kotlinx.serialization.json.JsonPrimitive(partialContent)
+                    )
+                )
+            }
+            add(
+                ResponsesInputItem(
+                    type = "message",
+                    role = "user",
+                    content = kotlinx.serialization.json.JsonPrimitive(nudge)
+                )
+            )
+        }
+        ChatRoundRequest.Responses(
+            request.request.copy(
+                input = request.request.input + extra,
+                tools = request.request.tools,
+                tool_choice = request.request.tool_choice
+            ),
+            apiUrl = request.apiUrl
+        )
     }
 }

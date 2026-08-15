@@ -158,6 +158,26 @@ class AgentExecutors(
     private val apiCatalogManager: ApiCatalogManager? = null
 ) {
 
+    /** 本次进程内是否已自动发起过 Shizuku 授权申请（拒绝后不再重复弹窗）。 */
+    @Volatile
+    private var shizukuRequestedThisSession = false
+
+    /**
+     * Shizuku 就绪检查：未授权时自动拉起一次系统授权弹窗（进程内仅一次），
+     * 未安装 / 未运行时返回可操作的指引文案。
+     *
+     * @return null 表示可用；否则返回失败原因（调用方直接回传给模型）。
+     */
+    private suspend fun requireShizuku(): String? {
+        val shell = shizuku ?: return "未获得 Shizuku 授权：请先安装并启动 Shizuku（Agent 设置 → 权限状态 → Shizuku）"
+        if (shell.isGranted()) return null
+        if (!shizukuRequestedThisSession) {
+            shizukuRequestedThisSession = true
+            if (shell.requestPermissionAndWait()) return null
+        }
+        return "未获得 Shizuku 授权：请在弹出的授权窗口中允许；若没有弹窗，请在 Agent 设置 → 权限状态 → Shizuku 中启动并授权后重试"
+    }
+
     fun listApps(query: String?): String {
         val apps = runCatching {
             val pm = context.packageManager
@@ -182,6 +202,26 @@ class AgentExecutors(
             maxChars
         )
         return AgentSecurity.wrapUntrustedScreen(text.ifBlank { "当前屏幕无可见文本" })
+    }
+
+    /** 读取系统当前时间：日期时间 + 时区 + 时间戳（供 Agent 感知时间）。 */
+    fun getTime(): String {
+        val now = java.time.ZonedDateTime.now()
+        val formatter = java.time.format.DateTimeFormatter.ofPattern(
+            "yyyy-MM-dd HH:mm:ss EEE"
+        )
+        return buildString {
+            append("当前时间：").append(now.format(formatter))
+            append("\n时区：").append(now.zone.id)
+            append("\n时间戳（毫秒）：").append(now.toInstant().toEpochMilli())
+        }
+    }
+
+    /** 定时等待：挂起 [seconds] 秒（1~300），用于等界面加载、动画结束或定时衔接。 */
+    suspend fun sleep(seconds: Int): String {
+        val value = seconds.coerceIn(1, 300)
+        kotlinx.coroutines.delay(value * 1_000L)
+        return "已等待 $value 秒"
     }
 
     fun readNotifications(sinceIso: String?): String {
@@ -250,8 +290,8 @@ class AgentExecutors(
     }
 
     suspend fun appBattery(pkg: String): String {
+        requireShizuku()?.let { return it }
         val shell = shizuku ?: return "未获得 Shizuku 授权，无法读取耗电统计"
-        if (!shell.isGranted()) return "未获得 Shizuku 授权，无法读取耗电统计"
         val result = shell.exec(arrayOf("dumpsys", "batterystats", "--package", pkg))
         if (result.exitCode != 0) {
             return "读取耗电统计失败（退出码 ${result.exitCode}）：${result.output.ifBlank { "请检查包名" }}"
@@ -265,8 +305,8 @@ class AgentExecutors(
     }
 
     suspend fun systemLogs(maxLines: Int, filter: String?): String {
+        requireShizuku()?.let { return it }
         val shell = shizuku ?: return "未获得 Shizuku 授权，无法读取全局日志"
-        if (!shell.isGranted()) return "未获得 Shizuku 授权，无法读取全局日志"
         val limit = maxLines.coerceIn(10, 2000)
         val result = shell.exec(arrayOf("logcat", "-d", "-t", limit.toString()))
         if (result.exitCode != 0) {
@@ -282,8 +322,8 @@ class AgentExecutors(
 
     /** 读取指定应用的实时日志（logcat --pid，需要 Shizuku 授权）。 */
     suspend fun appLogs(pkg: String, maxLines: Int?, filter: String?): String {
+        requireShizuku()?.let { return it }
         val shell = shizuku ?: return "未获得 Shizuku 授权，无法读取应用日志"
-        if (!shell.isGranted()) return "未获得 Shizuku 授权，无法读取应用日志"
         val limit = (maxLines ?: 200).coerceIn(10, 2000)
         val pidResult = shell.exec(arrayOf("pidof", pkg))
         val pid = pidResult.output.trim()
@@ -338,8 +378,8 @@ class AgentExecutors(
 
     /** 列出目录内容（需要 Shizuku 授权）。 */
     suspend fun listFiles(path: String): String {
+        requireShizuku()?.let { return it }
         val shell = shizuku ?: return "未获得 Shizuku 授权，无法列出目录"
-        if (!shell.isGranted()) return "未获得 Shizuku 授权，无法列出目录"
         val result = shell.exec(arrayOf("ls", "-la", path))
         if (result.exitCode != 0) {
             return "列出目录失败（退出码 ${result.exitCode}）：${result.output.ifBlank { "请检查路径与权限" }}"
@@ -351,8 +391,8 @@ class AgentExecutors(
 
     /** 查询文件 / 目录元信息（大小 / 修改时间，需要 Shizuku 授权）。 */
     suspend fun fileInfo(path: String): String {
+        requireShizuku()?.let { return it }
         val shell = shizuku ?: return "未获得 Shizuku 授权，无法查询文件信息"
-        if (!shell.isGranted()) return "未获得 Shizuku 授权，无法查询文件信息"
         val result = shell.exec(arrayOf("ls", "-ld", path))
         if (result.exitCode != 0) {
             return "查询文件信息失败（退出码 ${result.exitCode}）：${result.output.ifBlank { "请检查路径与权限" }}"
@@ -367,8 +407,8 @@ class AgentExecutors(
 
     /** 读取文件文本内容（需要 Shizuku 授权）。 */
     suspend fun readFile(path: String, maxChars: Int?): String {
+        requireShizuku()?.let { return it }
         val shell = shizuku ?: return "未获得 Shizuku 授权，无法读取文件"
-        if (!shell.isGranted()) return "未获得 Shizuku 授权，无法读取文件"
         val result = shell.exec(arrayOf("cat", path))
         if (result.exitCode != 0) {
             return "读取文件失败（退出码 ${result.exitCode}）：${result.output.ifBlank { "请检查路径与权限" }}"
@@ -388,8 +428,8 @@ class AgentExecutors(
      * 避免微信等应用抢走文件打开意图；解析失败回退系统默认。
      */
     suspend fun revealFile(path: String, pkg: String?): String {
+        requireShizuku()?.let { return it }
         val shell = shizuku ?: return "未获得 Shizuku 授权，无法跳转文件"
-        if (!shell.isGranted()) return "未获得 Shizuku 授权，无法跳转文件"
         val target = pkg?.trim()?.takeIf { it.isNotEmpty() }
         if (target != null) {
             val resolve = shell.exec(
@@ -583,8 +623,8 @@ class AgentExecutors(
 
     /** 执行白名单安全命令（命令名已由安全层校验，参数数组直传不经过 shell 解析）。 */
     suspend fun runShell(command: String, args: List<String>?): String {
+        requireShizuku()?.let { return it }
         val shell = shizuku ?: return "未获得 Shizuku 授权，无法执行 Shell 命令"
-        if (!shell.isGranted()) return "未获得 Shizuku 授权，无法执行 Shell 命令"
         val full = buildList {
             add(command)
             args.orEmpty().forEach { add(it) }
@@ -822,9 +862,36 @@ class AgentExecutors(
     suspend fun uninstallApp(pkg: String): String =
         writeViaShizuku(uninstallCommand(pkg), "已卸载 $pkg")
 
+    /**
+     * 撤回专用：恢复应用启用状态（停用 ↔ 启用 互逆操作）。
+     * @param enable true = 恢复为启用（原停用）；false = 恢复为停用（原启用）。
+     * @return 恢复失败的包名列表（空 = 全部成功）。
+     */
+    suspend fun revertAppEnabledState(pkg: String, enable: Boolean): Boolean {
+        val shell = shizuku ?: return false
+        if (!shell.isGranted()) return false
+        val command = if (enable) enableCommand(pkg) else disableCommand(pkg)
+        return shell.exec(command).exitCode == 0
+    }
+
+    /**
+     * 撤回专用：删除本轮创建的文件/目录（rm -rf，仅删除确实存在的路径）。
+     * @return 删除失败的路径列表（空 = 全部成功或无需删除）。
+     */
+    suspend fun deleteFilesForWithdraw(paths: List<String>): List<String> {
+        val shell = shizuku ?: return paths
+        if (!shell.isGranted()) return paths
+        val failed = mutableListOf<String>()
+        paths.forEach { path ->
+            val result = shell.exec(arrayOf("rm", "-rf", path))
+            if (result.exitCode != 0) failed += path
+        }
+        return failed
+    }
+
     private suspend fun writeViaShizuku(command: Array<String>, success: String): String {
+        requireShizuku()?.let { return it }
         val shell = shizuku ?: return "未获得 Shizuku 授权，无法执行写入操作"
-        if (!shell.isGranted()) return "未获得 Shizuku 授权，无法执行写入操作"
         return formatShellResult(shell.exec(command), success)
     }
 
@@ -833,8 +900,8 @@ class AgentExecutors(
      * 内容 base64 编码后由固定形状的 sh -c 脚本解码落盘，避免把原文拼进命令参数。
      */
     private suspend fun writeTextViaShizuku(path: String, content: String, append: Boolean): String {
+        requireShizuku()?.let { return it }
         val shell = shizuku ?: return "未获得 Shizuku 授权，无法写入文件"
-        if (!shell.isGranted()) return "未获得 Shizuku 授权，无法写入文件"
         val encoded = android.util.Base64.encodeToString(
             content.toByteArray(Charsets.UTF_8),
             android.util.Base64.NO_WRAP

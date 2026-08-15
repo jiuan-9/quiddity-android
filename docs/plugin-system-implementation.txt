@@ -1,0 +1,287 @@
+1.7.0 插件系统 可执行方案（纯文本，详细版）
+
+一、总则
+
+1. 规格来源：docs/plugin-system-plan.md，23个问题已全部确认，本文件是把规格拆成可执行任务，两者以规格文件为准。
+2. 环境：项目根目录 D:\Quiddity-android，构建用 gradlew.bat :app:assembleDebug，单测用 gradlew.bat :app:testDebugUnitTest，模拟器用 D:\start-emulator.bat，调试包 com.quiddity.app.debug。
+3. 执行方式：TDD，先写失败单测，再实现，再变绿，再重构。每个任务完成前先跑对应单测。
+4. 提交：conventional commits，一个逻辑块一个提交，提交信息用中文，格式为 feat: / fix: / test: / refactor: 开头。
+5. 门禁：GATE1，本清单经用户批准后才开始写实现代码。GATE2，每个里程碑提交前向用户展示diff摘要和提交信息，用户确认后才commit。
+6. 安全红线：插件必须是声明式数据，不执行用户代码。任何用户可控内容在进入审核或注入前，一律按不可信数据处理，复用AgentSecurity的包装模式，绝不当作指令。
+7. 安全审查：改动涉及用户输入、文件路径、加密、外部API、权限中的任意一项时，先跑security-reviewer再提交。
+8. 持久化统一模式：仿AgentStore和MiniAppStore，AtomicFile加kotlinx.serialization，配置ignoreUnknownKeys，带版本号和迁移函数。
+9. 动工前待定项：插件入口设置的具体位置由用户决定。未决定前，先做不依赖入口的任务，M0.5入口相关部分等用户决定后再做。
+
+二、M0 框架地基
+
+目标：先跑通最小闭环，创建，保存，仓库出现，启用，导出，再导入。闭环里的内容先用提示词占位。
+
+M0.1 插件模型和本地存储
+文件：app/src/main/kotlin/com/quiddity/app/data/local/PluginStore.kt
+新建PluginManifest数据类，字段如下。
+id，字符串，唯一标识，生成规则参考IdGenerator。
+name，字符串，标题，用户在详情页填写。
+description，字符串，内容，用户在详情页填写。
+version，字符串，版本号，用户在详情页填写，格式x.y.z。
+author，字符串，署名，插件内设置的用户名，默认九月风起待棠醒，但该名字仅开发者可用，普通用户设置为该名字时校验拦截。
+uid，字符串，公钥指纹，由PluginIdentity生成，开发者插件该字段为空，展示位置显示官方。
+type，枚举，prompt，tool，workflow，ui。
+scope，枚举，prompt为chat，agent，group，all，默认all；tool和workflow为agent；ui为global。
+modules，字符串列表，仅ui使用，可选theme，bubble，wallpaper，icon。
+content，字符串，仅prompt使用，纯文本指令正文，禁止markdown。
+tools，对象列表，仅tool使用，每个元素包含底层工具名和拼接顺序。
+workflow，对象，仅workflow使用，包含nodes，edges，options，结构对齐桌面端workflows.json。
+uiTheme，uiBubble，uiIcons，uiWallpaper，对象，仅ui使用，结构见M4。
+schemaVersion，整数，当前为1。
+minAppVersion，字符串，插件要求的最低应用版本。
+signature，字符串，签名，导出时生成。
+signer，字符串，公钥，导出时携带。
+enabled，布尔，启用状态。
+createdAt，updatedAt，长整数，时间戳。
+marketUrl，字符串，预留云端市场字段，v1不使用。
+
+存储逻辑。
+数据文件放在filesDir/quiddity-data/plugins.json。
+读写用AtomicFile，序列化用kotlinx.serialization，ignoreUnknownKeys，encodeDefaults。
+提供load，save，list，listByType，byId，upsert，remove，setEnabled。
+覆盖规则：同id版本号不同直接覆盖保留启用状态，版本号相同先弹窗确认再覆盖。
+迁移函数：schemaVersion从旧版本迁移，未知字段忽略。
+测试文件：app/src/test/kotlin/com/quiddity/app/data/local/PluginStoreTest.kt
+测试点：序列化反序列化，未知字段忽略，版本迁移，覆盖规则，启用状态读写。
+
+M0.2 插件文件编解码
+文件：app/src/main/kotlin/com/quiddity/app/util/PluginCodec.kt
+文件格式：.quiddity-plugin，ZIP容器，内部必须有manifest.json，可以有assets文件夹。
+导出：接收PluginManifest和资产字节映射，写manifest.json，写assets下的文件，压缩为ZIP。
+导入：打开ZIP，读取manifest.json，解析为PluginManifest，校验schemaVersion和minAppVersion，校验manifest里引用的资产在包内真实存在，缺失则拒绝导入。
+安全限制：文件大小上限50MB，资产格式白名单png，jpeg，webp，资产文件名用DataPorter.safeAssetName清洗，禁止路径穿越。
+测试文件：app/src/test/kotlin/com/quiddity/app/util/PluginCodecTest.kt
+测试点：打包解包往返，manifest缺失，资产引用缺失，超大小限制，恶意文件名，格式白名单。
+
+M0.3 插件身份和签名
+文件：app/src/main/kotlin/com/quiddity/app/domain/plugin/PluginIdentity.kt
+内容。
+首次使用时通过Android Keystore生成密钥对，别名quiddity_plugin_identity，算法RSA2048或EC P256，私钥永不出设备。
+生成后从Keystore读取公钥，计算SHA-256指纹，转十六进制，取前12位作为UID。
+提供sign方法，对规范化的manifest内容计算签名。
+提供verify方法，用包内公钥验签，验签失败视为文件被篡改，拒绝导入。
+提供isOfficial方法，用户名等于九月风起待棠醒时为官方身份，UID位置显示官方。
+测试文件：app/src/test/kotlin/com/quiddity/app/domain/plugin/PluginIdentityTest.kt
+测试点：签名验签成功，内容篡改后验签失败，UID在同一设备上稳定，官方标识判断。
+
+M0.4 动态插件注册表
+文件：app/src/main/kotlin/com/quiddity/app/domain/plugin/PluginRegistry.kt
+内容：运行期从PluginStore加载插件列表，与静态MiniAppRegistry并行存在。
+提供listByType，byId，enabledList，enabledByType。
+提供通知机制，插件启用或停用后，相关依赖方刷新，提示词注入，工具表，工作流选择设置，主题覆盖。
+测试文件：app/src/test/kotlin/com/quiddity/app/domain/plugin/PluginRegistryTest.kt
+测试点：加载，分类，启用状态过滤。
+
+M0.5 插件小应用骨架和入口
+文件：app/src/main/kotlin/com/quiddity/app/ui/miniapps/plugin/ 目录下新建。
+PluginMiniApp.kt，实现MiniApp接口，id为plugin，注册到MiniAppRegistry.all的第一位。
+入口抽象：新建PluginEntryMode枚举，成员CENTER_FIRST，HOME，SETTINGS，v1默认CENTER_FIRST，放在小应用中心首位，不做默认收藏。入口读取配置决定形态，代码不写死。
+主页：底部四个tab，提示词，tool，workflow，ui，点击切换。中间是插件列表，按当前tab类型过滤。右上角头像，点击进入仓库页。
+仓库页：上部是用户头像，中间是tab栏，中下部分是插件列表。创建插件的入口在这里。
+详情页：顶部固定安全警示文案，内容为，一切行为与开发者无关，请谨慎分辨发布者的名誉状态，勿相信陌生人的文件；该文件（全部类型）涉及隐私等重要信息，请谨慎分辨！该文案系统固定，插件不可修改。
+详情页其余部分：标题，内容，版本号，作者名加UID，适用范围，模块或能力清单，高危项开关，启用开关。
+详情页编辑：导出前必须打开自己的详情页，编辑标题，内容，版本号，保存后才能导出。
+测试：注册顺序，路由可达，入口配置切换。
+
+M0.6 导入导出全链路
+文件：ui/miniapps/plugin/ 下的导入导出相关页面。
+导入流程：文件来源两个，系统文件选择器，聊天消息插件卡片。进入解析，展示预览页，内容包括作者，UID，类型，版本，schemaVersion，最低App版本，能力清单，高危项。用户确认后落盘到PluginStore。验签失败，schemaVersion不兼容，最低版本不满足，资产缺失，任意一项都拒绝导入并提示原因。
+导出流程：详情页编辑完成后，打包为.quiddity-plugin，走系统分享，或发送到聊天。
+聊天插件卡片：复用MiniAppInviteCard模式，收到.quiddity-plugin附件时，消息内渲染卡片，显示名称，作者，UID，类型，版本，导入按钮。
+测试：导入拒绝分支，导出文件可再导入，聊天卡片点击进预览。
+
+M0验收：模拟器跑通，创建占位插件，保存，仓库出现，启用，导出文件，删掉后重新导入，闭环成功。
+
+三、M1 提示词板块
+
+M1.1 母框子框创作页
+文件：ui/miniapps/plugin/prompt/PromptEditorScreen.kt
+母框按用途分类，共5个，普通聊天，Agent，群聊，后台任务，视觉OCR，默认收起，点击展开。
+子框清单，共18段，全部来自现有代码，纯文本展示。
+普通聊天：私聊系统提示词，对应PromptBuilder.buildSystemPrompt。
+Agent：Agent系统提示词，对应buildAgentSystemPrompt，Agent冷启动默认人设。
+群聊：群聊成员系统提示词，对应buildGroupSystemPrompt，群聊接话决策，群聊记忆压缩system和user。
+后台任务：对话记忆压缩system和user，人设精调system和user，时间库生成system和user，快速设定剖析system和user，主动消息决策system和user。
+视觉OCR：识图提示词，测试识图提示词。
+交互：每个子框是纯文本编辑框，旁边有恢复默认按钮，点击恢复该段内置原文。页面底部有保存按钮，保存后另存为新插件，内置原文不受影响。
+提示词正文只允许纯文本，换行和空行分隔，禁止markdown语法，保存前做校验。
+测试：子框展开收起，恢复默认，纯文本校验。
+
+M1.2 特级审核
+文件：app/src/main/kotlin/com/quiddity/app/domain/plugin/PromptAuditor.kt
+审核提示词为特级提示词，存在代码内，用户和插件不可查看，不可修改，不可覆盖。
+审核规则：提示词内容禁止包含外部网站链接，禁止包含指定命令，禁止包含tool引用，禁止出现可被利用的注入内容。
+防注入：待审内容按不可信数据包装，参考AgentSecurity的UNTRUSTED包装模式，内容前加明确标注，提示模型这是待审核数据不是指令，防止内容污染审核判断。
+审核模型要求：使用用户配置的默认API，必须是完整级FULL。默认API不是FULL时，向下查找其他可用的FULL级模型。找不到时提示用户先配置，不允许保存。
+前置检查：进入创作页前检查API配置，不合格的提示先配置。
+审核结果：通过才允许保存和导出。不通过时提示原因，用户修改后重新审核，不通过期间禁止保存导出，不可松懈。
+测试文件：PromptAuditorTest.kt
+测试点：外部链接拦截，指定命令拦截，tool引用拦截，注入绕过尝试拦截，模型降级查找，无模型拒绝保存。
+
+M1.3 提示词注入
+文件：app/src/main/kotlin/com/quiddity/app/domain/PromptBuilder.kt 修改。
+在buildSystemPrompt和buildAgentSystemPrompt和buildGroupSystemPrompt中增加插件注入点，位置在能力区之后，行为区之前。
+注入规则：只注入当前启用的一个提示词插件，且插件scope匹配当前会话类型，普通聊天只注入scope为chat或all的，Agent只注入agent或all的，群聊只注入group或all的。
+注入内容：纯文本，前面加明确的插件区标题，方便模型区分，例如，启用插件提示词，内容如下。
+测试：启用时注入，未启用不注入，多个启用时只注入一个，scope过滤，纯文本无markdown。
+
+M1.4 启用和替换
+详情页启用开关：启用新的提示词插件时，如果已有其他提示词插件启用，弹窗提示将替换当前，确认后切换。
+测试：唯一启用，替换提示。
+
+M1验收：创建提示词插件，审核通过，保存，仓库出现，启用，Agent会话中生效，停用后还原。
+
+四、M2 tool板块
+
+M2.1 工具选择器和拖拽拼接
+文件：ui/miniapps/plugin/tool/ToolComposerScreen.kt
+工具列表来源：AgentToolRegistry的全部内置工具，约55个，支持搜索和分类过滤，分类为READ，MODIFY，DELETE，ACT，OCR。
+交互：从工具列表拖入拼接区，拼接区内可排序，点击查看工具定义和参数说明。底层工具参数只读，界面不提供修改入口，只允许调整拼接顺序。
+对外名称和描述不在创作页填写，在插件详情页的标题栏目填写。
+测试：搜索，分类，拖入，排序，参数只读。
+
+M2.2 对外工具生成和注册
+文件：app/src/main/kotlin/com/quiddity/app/domain/agent/AgentTools.kt 修改。
+启用tool插件后，生成对外AgentTool，名称为插件标题，描述为插件内容，execute逻辑为按拼接顺序串行调用底层工具。
+底层调用全部走AgentSecurity.executeGated，受工具开关，黑名单，确认策略，审计约束，插件不能绕过。
+工具总数上限100，包含系统内置约55个，注册时超出上限则拒绝并提示。
+测试：注册上限，执行顺序，参数只读，安全门控透传。
+
+M2.3 高危能力
+高危工具清单：写文件，shell，卸载应用，强制停止，修改权限，模拟点击，剪贴板读写等。
+导入预览页列出插件引用的全部能力，高危项显著标记。
+高危项默认禁用，用户到详情页手动开启后才生效。
+测试：高危默认关闭，手动开启后生效。
+
+M2验收：拼接一个新工具，例如手机体检，启用，Agent对话中模型可调用，串行执行结果正确。
+
+五、M3 workflow板块
+
+M3.1 数据模型
+文件：app/src/main/kotlin/com/quiddity/app/domain/plugin/workflow/WorkflowModels.kt
+对齐桌面端Quiddity-Agent的workflows.json，参考D:\Quiddity-Agent\src\main\workflow\。
+WorkflowNode：id，type，title，params，pos。
+WorkflowEdge：from，to，label，label可为空表示正常流程，或为是，否。
+WorkflowOptions：failPolicy，retryCap。
+v1不做rings，不做subflow，不做evaluate，decide，human。
+节点类型v1只支持：start，think，act，verify，end。
+测试：序列化，未知节点类型拒绝。
+
+M3.2 校验器
+文件：app/src/main/kotlin/com/quiddity/app/domain/plugin/workflow/WorkflowValidator.kt
+参考桌面端validator.js，翻译为Kotlin纯函数。
+v1规则：有且仅有一个start，至少一个end，start无入线，end无出线，每个节点入线出线符合额度，无孤立节点，verify的label固定为是和否，回路访问上限防死循环，引用的节点id存在。
+保存时软校验，提示但不阻止保存。运行前硬校验，失败拒绝执行并指出具体节点。
+测试：逐规则，参考桌面端tests/workflow-engine.test.js和validator.test.js。
+
+M3.3 执行引擎
+文件：app/src/main/kotlin/com/quiddity/app/domain/plugin/workflow/WorkflowEngine.kt
+移植桌面端workflow-engine.js的状态机和DAG调度，用Kotlin协程实现。
+节点状态机：pending到ready到running到success或fail或aborted。
+节点执行：start写入初始任务，think调用一次LLM生成分析，act执行任务并允许调用工具，verify按标准判断是或否，end整合输出最终报告。
+act内部工具调用接到ChatRepository的工具调度和AgentWorkflowController的去重重试，所有调用走AgentSecurity。
+失败策略：ask询问用户，skip跳过，retry自动重试一次。
+内置4个工作流模板：PPT汇报生成，代码Bug修复，数据分析报告，闲聊陪聊，随包预置为插件数据文件，与用户自制同格式。
+测试：状态机，条件选路，汇合，失败策略，回路上限，内置模板可执行。
+
+M3.4 简化画布
+文件：ui/miniapps/plugin/workflow/WorkflowCanvasScreen.kt
+用Compose Canvas实现，节点可拖放，从节点端口拖出连线到另一个节点，连线可标记为是或否或正常，点击节点选中可删除，双击节点查看定义和参数。
+平移和缩放画布，手势单指拖动，双指缩放。
+新建画布时自动放置start节点。
+测试：画布交互逻辑，保存软校验，运行前硬校验。
+
+M3.5 Agent会话工作流选择设置
+位置：Agent会话界面，参考桌面端输入区工作流选择器。
+显示规则：启用的workflow插件数量为0时不显示该设置。
+内容：默认工作流选项，加上全部已启用的workflow插件列表。
+选择持久化并绑定当前会话，参考desktop的conv.workflowId。
+执行：会话发送后，Agent按工具调用机制执行选中的工作流，一次执行跑完整张图。
+测试：0个不显示，选择持久化，执行结果正确。
+
+M3验收：内置模板能跑，新建画布流程保存，启用，选择，执行，结果正确。
+
+六、M4 UI板块
+
+M4.1 主题覆盖层
+文件：app/src/main/kotlin/com/quiddity/app/ui/theme/Theme.kt 修改。
+QuiddityLightColors和QuiddityDarkColors改为默认值加插件覆盖两段合并，插件提供深色和浅色各21个颜色令牌，未提供的用默认值。
+颜色令牌清单：primary，onPrimary，primaryContainer，onPrimaryContainer，secondary，onSecondary，tertiary，background，onBackground，surface，onSurface，surfaceVariant，onSurfaceVariant，surfaceContainer，surfaceContainerLow，surfaceContainerHigh，error，onError，outline，outlineVariant。
+保留现有的0.4秒颜色过渡动画。
+测试：插件色板生效，深色浅色分别正确，未提供令牌用默认。
+
+M4.2 气泡和Markdown样式令牌
+文件：app/src/main/kotlin/com/quiddity/app/ui/chat/components/MessageBubble.kt 修改。
+气泡样式参数化：用户气泡和AI气泡的底色，边框色，边框宽度，圆角。
+Markdown样式令牌化：applyMarkdownStyles中的标题颜色，链接颜色，引用颜色，代码块背景和文字色，加粗和列表颜色，全部由插件提供，未提供用默认。
+测试：样式随插件变化，停用后还原。
+
+M4.3 图标模块
+文件：ui/miniapps/plugin/ui/IconModuleEditor.kt
+界面：竖排列表，每一项左边是原图标，右边是用户上传图，点上传选择图片。
+可替换图标清单：发送，返回，菜单，箭头，设置等常用图标，先做可枚举的固定清单。
+渲染：图标渲染层支持Bitmap覆盖ImageVector，加载插件资产中的图片。
+图片处理：上传后按96dp语义尺寸等比缩放，透明PNG化，深色和浅色两套描边自动适配，处理失败提示原因。
+测试：替换生效，尺寸正确，透明保留，深浅色描边正确。
+
+M4.4 壁纸模块
+复用WallpaperPanel和ListWallpaperPanel的现有管线：选择图片，复制到内部存储，裁剪，亮度采样，对比度遮罩。
+插件壁纸资产落地到filesDir/ui_plugin_assets/插件id/目录。
+生效优先级：会话级手动壁纸大于插件默认壁纸大于内置。
+测试：插件壁纸生效，会话级覆盖，暗化正确。
+
+M4.5 资产安全
+格式白名单：png，jpeg，webp。
+单资产大小限制。
+资产名清洗复用DataPorter.safeAssetName。
+测试：恶意资产被拒。
+
+M4.6 启用规则和实时预览
+主题类模块，配色，字体形状，壁纸，同类同时只启用一个，启用新的提示替换。
+气泡和图标可以和其他类型共存，同一图标只启用一个来源。
+编辑页提供实时预览，内嵌样例聊天界面复用MessageBubble组件，预览配色，气泡，Markdown样式。
+每个模块，每个图标有独立恢复默认按钮，页面底部保存。
+测试：唯一启用，逐项恢复，预览正确。
+
+M4验收：导入UI插件，启用，全局生效，逐项恢复默认，停用完整还原，深浅色正确。
+
+七、M5 安全加固与验收
+
+M5.1 全链路安全核对
+导入校验：验签，schemaVersion，最低App版本，资产完整性，能力清单，高危默认禁用，任意一项不过都拒绝。
+审核不可绕过：直接改plugins.json，复制审核通过的内容再修改，跳过审核入口，所有路径都必须过审核，发现绕过视为严重问题。
+权限：插件调用的任何工具都受现有工具开关，黑名单，确认策略，审计约束。
+固定警示文案：详情页顶部文案系统固定，任何插件不可修改不可删除。
+测试：渗透式手工用例。
+
+M5.2 聊天插件卡片
+复用MiniAppInviteCard模式，.quiddity-plugin附件渲染卡片，显示名称，作者，UID，类型，版本，导入按钮。
+测试：消息内卡片，点击进预览。
+
+M5.3 模拟器全流程验证
+四个板块各跑一遍：创建，审核，保存，仓库，启用，导出，再导入，更新覆盖。
+更新覆盖分支：版本不同直接覆盖，版本相同弹窗确认。
+测试：每条路径记录结果。
+
+M5.4 构建与单测
+gradlew.bat :app:testDebugUnitTest 全部通过。
+gradlew.bat :app:assembleDebug 构建通过。
+回归：现有Agent相关单测不回归。
+
+M5验收：以上全部通过，安全为重点。
+
+八、依赖顺序和里程碑
+
+M0到M1到M2到M3到M4到M5，串行推进，每个里程碑结束内测一轮。
+M1是第一个可交付切片，验证创建到审核到注入的完整链路。
+所有里程碑完成后进入1.7.0发布流程，gradlew.bat :app:assembleRelease。
+
+九、待定项
+
+1. 插件入口设置的具体位置，用户决定后做M0.5。
+2. 内置提示词示例清单的内容，可后续调整，不影响框架。

@@ -18,7 +18,7 @@ class AgentToolRegistryTest {
 
     private fun context(
         switches: AgentToolSwitches = AgentToolSwitches(),
-        whitelist: Set<String> = emptySet(),
+        blacklist: Set<String> = emptySet(),
         audit: MutableList<AgentAuditEntry> = mutableListOf(),
         autoConfirm: Boolean = false,
         confirmRequest: (suspend (AgentTool, kotlinx.serialization.json.JsonObject) -> Boolean)? = null,
@@ -31,24 +31,23 @@ class AgentToolRegistryTest {
             type = ConversationType.AGENT
         ),
         switches = switches,
-        whitelist = whitelist,
+        blacklist = blacklist,
         auditAppend = { audit += it },
         autoConfirm = autoConfirm,
         confirmRequest = confirmRequest,
         confirmRequestBatch = confirmRequestBatch
     )
 
-    private fun j(args: String) = args
-
     @Test
-    fun defaultRegistry_containsAllFiftyFourToolsWithMetadata() {
-        assertEquals(54, registry.tools().size)
+    fun defaultRegistry_containsAllFiftySixToolsWithMetadata() {
+        assertEquals(56, registry.tools().size)
 
         val basic = listOf(
-            "list_apps", "read_screen", "read_notifications", "usage_stats", "foreground_app",
+            "list_apps", "read_screen", "get_time", "read_notifications", "usage_stats", "foreground_app",
             "app_permissions", "app_install_info", "app_battery", "traffic_ranking",
             "file_access", "screenshot", "system_logs", "app_logs",
-            "ocr_image", "notify_self", "toast_monitor", "notification_guard", "app_usage_detail"
+            "ocr_image", "notify_self", "toast_monitor", "notification_guard", "app_usage_detail",
+            "sleep"
         )
         val advancedConfirm = listOf(
             "disable_app", "enable_app", "set_appops", "force_stop", "uninstall_app",
@@ -86,34 +85,30 @@ class AgentToolRegistryTest {
     }
 
     @Test
-    fun defaultRegistry_toolsAreCategorized() {
+    fun defaultRegistry_toolsAreCategorizedIntoFiveGroups() {
         val expected = mapOf(
-            AgentToolCategory.SENSE to setOf(
-                "read_screen", "read_notifications", "usage_stats", "foreground_app"
-            ),
             AgentToolCategory.READ to setOf(
+                "read_screen", "read_notifications", "usage_stats", "foreground_app",
                 "list_apps", "app_permissions", "app_install_info", "app_battery",
-                "traffic_ranking", "file_access", "screenshot", "system_logs", "app_logs"
+                "traffic_ranking", "file_access", "system_logs", "app_logs",
+                "read_file", "list_files", "file_info", "read_clipboard",
+                "toast_monitor", "notification_guard", "app_usage_detail", "get_time"
             ),
-            AgentToolCategory.FILE to setOf(
-                "read_file", "list_files", "file_info", "reveal_file",
+            AgentToolCategory.MODIFY to setOf(
                 "create_file", "write_file", "append_file", "rename_file", "mkdir",
-                "move_file", "copy_file", "delete_file"
+                "move_file", "copy_file", "write_clipboard",
+                "set_appops", "disable_app", "enable_app", "force_stop"
             ),
-            AgentToolCategory.IMAGE to setOf("ocr_image"),
-            AgentToolCategory.INTERACT to setOf(
-                "notify_self", "read_clipboard", "write_clipboard",
-                "clear_clipboard", "dismiss_notification", "reply_notification", "schedule_notify"
+            AgentToolCategory.DELETE to setOf(
+                "delete_file", "clear_clipboard", "dismiss_notification", "uninstall_app"
             ),
-            AgentToolCategory.MONITOR to setOf("toast_monitor", "notification_guard"),
-            AgentToolCategory.SYSTEM to setOf("run_shell", "app_usage_detail"),
-            AgentToolCategory.TOUCH to setOf(
+            AgentToolCategory.ACT to setOf(
+                "screenshot", "reveal_file", "run_shell",
                 "click", "long_press", "click_text", "scroll", "global_action",
-                "input_text", "click_id", "click_desc", "drag", "scroll_to_text", "lock_screen"
+                "input_text", "click_id", "click_desc", "drag", "scroll_to_text", "lock_screen",
+                "open_app", "notify_self", "reply_notification", "schedule_notify", "sleep"
             ),
-            AgentToolCategory.WRITE to setOf(
-                "disable_app", "enable_app", "set_appops", "force_stop", "uninstall_app"
-            )
+            AgentToolCategory.OCR to setOf("ocr_image")
         )
         expected.forEach { (category, names) ->
             names.forEach { name ->
@@ -122,7 +117,32 @@ class AgentToolRegistryTest {
                 assertEquals(category, tool.category, name)
             }
         }
-        assertEquals(54, registry.tools().size)
+        assertEquals(56, registry.tools().size)
+    }
+
+    @Test
+    fun actionDescription_formatsActionTextByToolAndArgs() {
+        fun args(vararg pairs: Pair<String, String>): kotlinx.serialization.json.JsonObject =
+            kotlinx.serialization.json.JsonObject(
+                pairs.associate { (k, v) -> k to kotlinx.serialization.json.JsonPrimitive(v) }
+            )
+
+        assertEquals("模拟点击（300, 1200）", AgentToolRegistry.actionDescription("click", args("x" to "300", "y" to "1200")))
+        assertEquals("向上滑动", AgentToolRegistry.actionDescription("scroll", args("direction" to "up", "distance" to "500")))
+        assertEquals("点击文字「发送」", AgentToolRegistry.actionDescription("click_text", args("text" to "发送")))
+        assertEquals("写入文件 /sdcard/a.txt", AgentToolRegistry.actionDescription("write_file", args("path" to "/sdcard/a.txt")))
+        assertEquals("强制停止应用 com.tencent.mm", AgentToolRegistry.actionDescription("force_stop", args("pkg" to "com.tencent.mm")))
+        assertEquals("等待 5 秒", AgentToolRegistry.actionDescription("sleep", args("seconds" to "5")))
+        assertEquals("执行 Shell 命令", AgentToolRegistry.actionDescription("run_shell", args("command" to "ls")))
+        assertEquals("打开应用 com.example", AgentToolRegistry.actionDescription("open_app", args("pkg" to "com.example")))
+        assertEquals("读取屏幕", AgentToolRegistry.actionDescription("read_screen", args()))
+    }
+
+    @Test
+    fun categoryToolsOf_matchesRegistryCategories() {
+        val all = AgentToolCategory.ALL.flatMap { AgentToolCategory.toolsOf(it) }.toSet()
+        assertEquals(registry.tools().size, all.size)
+        assertEquals(registry.tools().map { it.name }.toSet(), all)
     }
 
     @Test
@@ -133,7 +153,7 @@ class AgentToolRegistryTest {
 
     @Test
     fun dispatch_disabledTool_returnsDisabledMessage() {
-        val switches = AgentToolSwitches().copy(sense_screen = false)
+        val switches = AgentToolSwitches(tools = mapOf("read_screen" to false))
         val result = runBlockingTest { registry.dispatch("read_screen", "{}", context(switches = switches)) }
         assertTrue(result.contains("未启用") || result.contains("disabled"))
     }
@@ -227,15 +247,34 @@ class AgentToolRegistryTest {
     }
 
     @Test
-    fun validateArgs_revealFilePkgIsNotWhitelistedTarget() {
-        val tool = registry["reveal_file"]!!
-        assertNull(AgentSecurity.validateArgs(tool, parse("""{"path":"/sdcard","pkg":"com.google.android.documentsui"}""")))
-        val gate = AgentSecurity.whitelistGate(
-            tool,
-            parse("""{"path":"/sdcard","pkg":"com.google.android.documentsui"}"""),
-            emptySet()
+    fun blacklistGate_allowsByDefault_deniesBlacklistedPkgAndPath() {
+        val disableTool = registry["disable_app"]!!
+        val readTool = registry["read_file"]!!
+        // 默认空黑名单：全应用权限
+        assertNull(AgentSecurity.blacklistGate(disableTool, parse("""{"pkg":"com.tencent.mm"}"""), emptySet()))
+        assertNull(AgentSecurity.blacklistGate(readTool, parse("""{"path":"/sdcard/a.txt"}"""), emptySet()))
+        // 包名命中：拒绝（查看与更改都拒绝）
+        val denied = AgentSecurity.blacklistGate(disableTool, parse("""{"pkg":"com.tencent.mm"}"""), setOf("com.tencent.mm"))
+        assertNotNull(denied)
+        assertTrue(denied!!.contains("黑名单"))
+        // 路径命中：目录前缀封锁一切子路径
+        val pathDenied = AgentSecurity.blacklistGate(
+            readTool,
+            parse("""{"path":"/sdcard/Download/private/note.txt"}"""),
+            setOf("/sdcard/Download/private")
         )
-        assertNull(gate)
+        assertNotNull(pathDenied)
+        assertTrue(pathDenied!!.contains("黑名单"))
+        // 未命中路径：放行
+        assertNull(
+            AgentSecurity.blacklistGate(
+                readTool,
+                parse("""{"path":"/sdcard/Download/note.txt"}"""),
+                setOf("/sdcard/Download/private")
+            )
+        )
+        // 非 pkg/路径工具不受黑名单门控（如读屏）
+        assertNull(AgentSecurity.blacklistGate(registry["read_screen"]!!, parse("""{}"""), setOf("com.tencent.mm")))
     }
 
     @Test
@@ -247,9 +286,9 @@ class AgentToolRegistryTest {
     }
 
     @Test
-    fun notificationGuard_switchedBySenseNotifications() {
-        val on = AgentToolSwitches().copy(sense_notifications = true)
-        val off = AgentToolSwitches().copy(sense_notifications = false)
+    fun notificationGuard_switchedByPerToolSwitch() {
+        val on = AgentToolSwitches(tools = mapOf("notification_guard" to true))
+        val off = AgentToolSwitches(tools = mapOf("notification_guard" to false))
         assertTrue(AgentSecurity.isSwitchEnabled(registry["notification_guard"]!!, on))
         assertFalse(AgentSecurity.isSwitchEnabled(registry["notification_guard"]!!, off))
     }
@@ -265,7 +304,9 @@ class AgentToolRegistryTest {
                     AgentToolCallRequest("list_files", """{"path":"/sdcard"}""")
                 ),
                 context(
-                    switches = AgentToolSwitches().copy(write_files = true, read_files = true),
+                    switches = AgentToolSwitches(
+                        tools = mapOf("create_file" to true, "list_files" to true)
+                    ),
                     audit = audit,
                     confirmRequestBatch = { items ->
                         confirmCount++
@@ -293,7 +334,9 @@ class AgentToolRegistryTest {
                     AgentToolCallRequest("list_files", """{"path":"/sdcard"}""")
                 ),
                 context(
-                    switches = AgentToolSwitches().copy(write_files = true, read_files = true),
+                    switches = AgentToolSwitches(
+                        tools = mapOf("create_file" to true, "list_files" to true)
+                    ),
                     audit = audit,
                     confirmRequestBatch = { _ -> false }
                 )
@@ -310,7 +353,7 @@ class AgentToolRegistryTest {
             registry.dispatchAll(
                 listOf(AgentToolCallRequest("create_file", """{"path":"/sdcard/a.txt"}""")),
                 context(
-                    switches = AgentToolSwitches().copy(write_files = true),
+                    switches = AgentToolSwitches(tools = mapOf("create_file" to true)),
                     audit = audit,
                     autoConfirm = true
                 )
@@ -322,18 +365,19 @@ class AgentToolRegistryTest {
     }
 
     @Test
-    fun dispatch_advancedToolWithoutWhitelist_denied() {
+    fun dispatch_blacklistedPkg_denied() {
         val result = runBlockingTest {
             registry.dispatch(
                 "disable_app",
                 """{"pkg":"com.tencent.mm"}""",
                 context(
-                    switches = AgentToolSwitches().copy(write_disable = true),
+                    switches = AgentToolSwitches(tools = mapOf("disable_app" to true)),
+                    blacklist = setOf("com.tencent.mm"),
                     confirmRequest = { _, _ -> true }
                 )
             )
         }
-        assertTrue(result.contains("白名单") || result.contains("whitelist") || result.contains("拒绝"))
+        assertTrue(result.contains("黑名单") || result.contains("拒绝"))
     }
 
     @Test
@@ -344,8 +388,7 @@ class AgentToolRegistryTest {
                 "disable_app",
                 """{"pkg":"com.tencent.mm"}""",
                 context(
-                    switches = AgentToolSwitches().copy(write_disable = true),
-                    whitelist = setOf("com.tencent.mm"),
+                    switches = AgentToolSwitches(tools = mapOf("disable_app" to true)),
                     audit = audit,
                     confirmRequest = { _, _ -> true }
                 )
@@ -366,8 +409,7 @@ class AgentToolRegistryTest {
                 "disable_app",
                 """{"pkg":"com.tencent.mm"}""",
                 context(
-                    switches = AgentToolSwitches().copy(write_disable = true),
-                    whitelist = setOf("com.tencent.mm"),
+                    switches = AgentToolSwitches(tools = mapOf("disable_app" to true)),
                     audit = audit,
                     confirmRequest = { _, _ -> false }
                 )
@@ -387,8 +429,7 @@ class AgentToolRegistryTest {
                 "disable_app",
                 """{"pkg":"com.tencent.mm","confirmed":true}""",
                 context(
-                    switches = AgentToolSwitches().copy(write_disable = true),
-                    whitelist = setOf("com.tencent.mm"),
+                    switches = AgentToolSwitches(tools = mapOf("disable_app" to true)),
                     audit = audit
                 )
             )
@@ -407,8 +448,7 @@ class AgentToolRegistryTest {
                 "disable_app",
                 """{"pkg":"com.tencent.mm"}""",
                 context(
-                    switches = AgentToolSwitches().copy(write_disable = true),
-                    whitelist = setOf("com.tencent.mm"),
+                    switches = AgentToolSwitches(tools = mapOf("disable_app" to true)),
                     audit = audit
                 )
             )
@@ -426,8 +466,7 @@ class AgentToolRegistryTest {
                 "force_stop",
                 """{"pkg":"bad pkg"}""",
                 context(
-                    switches = AgentToolSwitches().copy(write_force_stop = true),
-                    whitelist = setOf("bad pkg"),
+                    switches = AgentToolSwitches(tools = mapOf("force_stop" to true)),
                     audit = audit,
                     confirmRequest = { _, _ -> true }
                 )
@@ -441,9 +480,23 @@ class AgentToolRegistryTest {
 
     @Test
     fun dispatch_respectsStoreSwitchState() {
-        val switches = AgentToolSwitches().copy(read_apps = false)
+        val switches = AgentToolSwitches(tools = mapOf("list_apps" to false))
         val result = runBlockingTest { registry.dispatch("list_apps", "{}", context(switches = switches)) }
         assertTrue(result.contains("未启用") || result.contains("disabled"))
+    }
+
+    @Test
+    fun roundEffects_tracksCreatedAndChangedItems() {
+        val effects = AgentRoundEffects()
+        effects.record("create_file", parse("""{"path":"/sdcard/a.txt"}"""), ok = true)
+        effects.record("mkdir", parse("""{"path":"/sdcard/dir"}"""), ok = true)
+        effects.record("write_file", parse("""{"path":"/sdcard/exists.txt","content":"x"}"""), ok = true)
+        effects.record("disable_app", parse("""{"pkg":"com.x"}"""), ok = true)
+        effects.record("create_file", parse("""{"path":"/sdcard/fail.txt"}"""), ok = false)
+        assertEquals(listOf("/sdcard/a.txt", "/sdcard/dir"), effects.createdFiles())
+        assertTrue(effects.changedItems().any { it.contains("写入 /sdcard/exists.txt") })
+        assertTrue(effects.changedItems().any { it.contains("停用 com.x") })
+        assertFalse(effects.createdFiles().contains("/sdcard/fail.txt"))
     }
 
     @Test

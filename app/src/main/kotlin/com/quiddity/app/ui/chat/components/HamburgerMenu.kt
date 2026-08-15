@@ -1743,15 +1743,21 @@ private fun MainMenuContent(
 
             // 主动消息（对应算法文档 2.2 会话级开启）
             }
+            // Agent 会话不支持主动消息（时间库），不展示该区块
+            if (conversation?.type != ConversationType.AGENT) {
             MenuSectionCard(title = "主动消息") {
             ToggleMenuRow(
                 title = "主动消息",
-                subtitle = if (conversation?.activeMessageEnabled == true) {
+                subtitle = if (!settings.proactiveMessageEnabled) {
+                    "总设置未开启，请先到总设置开启"
+                } else if (conversation?.activeMessageEnabled == true) {
                     "已开启：AI 按时间库主动发消息"
                 } else {
                     "开启后立即生成当日时间库"
                 },
                 checked = conversation?.activeMessageEnabled == true,
+                // 全局总开关关闭：本会话开关置灰不可操作（1.6.2）
+                enabled = settings.proactiveMessageEnabled,
                 onCheckedChange = onActiveMessageChange,
             )
             // 系统条件引导：会话级开启后展示精确闹钟 / 电池优化状态与一键跳转
@@ -1769,6 +1775,7 @@ private fun MainMenuContent(
             }
 
             // 数据
+            }
             }
             MenuSectionCard(title = "数据") {
             MenuRow(

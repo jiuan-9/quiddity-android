@@ -678,13 +678,16 @@ fun ChatScreen(
     // swipeEnabled 不含 !showHamburger：菜单打开时手势保持 enabled，由 ChatDragController
     // 根据 menuOpen 状态区分"右滑关菜单"与"右滑返回"。否则菜单打开后无法滑动关闭，只能系统返回键（卡死根因）。
     // 多选模式下禁用横滑，避免误触退出会话。
-    val swipeEnabled = !isGenerating && rewritingMessageId == null && !reeditSheetOpen &&
+    // 生成/加载中仍允许左滑打开汉堡菜单；右滑返回由 backGestureEnabledState 单独禁用。
+    val swipeEnabled = rewritingMessageId == null && !reeditSheetOpen &&
         !isCompressing && !multiSelectMode && !searchActive &&
         // 无障碍模拟手势注入期间禁用应用内左右滑手势，避免 AI 操作屏幕时"划退"退出会话
         !com.quiddity.app.active.ScreenReaderService.injecting
     // rememberUpdatedState：pointerInput 用 Unit key 不重启，通过它读取最新 swipeEnabled，
     // 避免 left-swipe 过程中 showHamburger 翻转导致 pointerInput 重启、手势被打断（左滑卡死根因）。
     val swipeEnabledState = rememberUpdatedState(swipeEnabled)
+    // 生成/压缩中禁用右滑返回（防止误触退出会话），左滑菜单不受影响
+    val backGestureEnabledState = rememberUpdatedState(!isGenerating && !isCompressing)
 
     val dragController = remember(screenWidthPx) {
         ChatDragController(
@@ -720,9 +723,15 @@ fun ChatScreen(
             .pointerInput(Unit) {
                 detectNativeHorizontalSwipe(
                     enabled = { swipeEnabledState.value },
-                    onDrag = { totalDx, _ -> dragController.onDrag(totalDx) },
+                    onDrag = { totalDx, _ ->
+                        if (totalDx <= 0f || backGestureEnabledState.value) {
+                            dragController.onDrag(totalDx)
+                        }
+                    },
                     onDragEnd = { totalDx, velocityDx ->
-                        dragController.onDragEnd(totalDx, velocityDx)
+                        if (totalDx <= 0f || backGestureEnabledState.value) {
+                            dragController.onDragEnd(totalDx, velocityDx)
+                        }
                     },
                     onDragCancel = { dragController.onDragCancel() }
                 )

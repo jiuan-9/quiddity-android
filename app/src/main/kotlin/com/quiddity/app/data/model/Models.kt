@@ -424,6 +424,21 @@ data class Message(
      */
     val toolSegmentEnds: List<Int> = emptyList(),
     /**
+     * 本轮会话创建/更改的文件路径（Agent 模式撤回追踪，1.6.0）。
+     * - 记录该条 AI 消息对应的一轮用户指令中，AI 通过工具创建的文件/目录路径
+     *   （create_file / mkdir / copy_file / move_file / rename_file 的目标）；
+     * - 撤回该轮时按此清单删除创建物；更改项（写入既有文件、应用状态）见 [changedItems]；
+     * - 导出时不携带（文件在设备存储上，路径不可迁移），导入后撤回只问「确认撤回？」。
+     */
+    val createdPaths: List<String> = emptyList(),
+    /**
+     * 本轮会话更改的项目摘要（Agent 模式撤回提示，1.6.0）。
+     * - 如「写入 /sdcard/x.txt」「修改 com.xxx 权限（不可自动恢复）」；
+     * - 撤回确认弹窗中与 [createdPaths] 一起展示，提示用户本轮影响范围；
+     * - 仅展示提示，不参与删除。
+     */
+    val changedItems: List<String> = emptyList(),
+    /**
      * 工具调用历史（持久化到消息）：生成结束后把本轮的 [com.quiddity.app.ui.chat.ToolTrace]
      * 固化进消息，之后重新打开会话仍能看到工具调用记录（段间渲染，与正文分界）。
      * - 空列表 = 无工具调用；
@@ -664,7 +679,15 @@ data class ExportPayload(
      * 资产节（schema v2）：壁纸 / 头像 Base64 内嵌。
      * v1 文件为 null（资产平铺在顶层字段）。
      */
-    val assets: ExportAssets? = null
+    val assets: ExportAssets? = null,
+    /**
+     * Agent 模式设置（1.6.0 架构重整）：工具开关、黑名单、权限管控、审计日志。
+     * - 旧备份文件为 null（不导入 Agent 设置，保持本机现状）；
+     * - 审计日志随备份导出/导入（执行结果、日期、时间、工具名称）；
+     * - 注意：消息中的撤回追踪字段（createdPaths / changedItems）**不随导出携带**——
+     *   创建物位于设备存储上，无法随备份迁移；导入后撤回只问「确认撤回？」。
+     */
+    val agentSettings: com.quiddity.app.data.local.AgentSettings? = null
 ) {
     companion object {
         const val SCHEMA_VERSION_1 = 1

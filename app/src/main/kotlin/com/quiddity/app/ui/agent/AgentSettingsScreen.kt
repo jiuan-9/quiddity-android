@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Process
 import android.provider.Settings
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
@@ -39,9 +40,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Article
 import androidx.compose.material.icons.filled.Apps
@@ -101,6 +104,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -111,14 +115,19 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.quiddity.app.active.NotificationBridge
 import com.quiddity.app.active.ScreenReaderService
 import com.quiddity.app.active.ShizukuStatus
+import com.quiddity.app.data.local.AgentAuditEntry
 import com.quiddity.app.data.local.AgentPermissionControl
+import com.quiddity.app.data.local.AgentToolSwitches
 import com.quiddity.app.di.ServiceLocator
+import com.quiddity.app.domain.agent.AgentToolCategory
+import com.quiddity.app.domain.agent.AgentToolRegistry
 import com.quiddity.app.ui.settings.ClickableRow
 import com.quiddity.app.ui.settings.SettingsBottomSheet
 import com.quiddity.app.ui.settings.SettingsSectionCard
 import com.quiddity.app.ui.settings.SettingsViewModel
-import com.quiddity.app.ui.settings.ToggleRow
+import com.quiddity.app.ui.components.QuiddityToggleSwitch
 import com.quiddity.app.ui.theme.Motion
+import com.quiddity.app.util.DateUtils
 import kotlinx.coroutines.launch
 import rikka.shizuku.Shizuku
 
@@ -169,7 +178,8 @@ fun AgentSettingsScreen(
     val store = ServiceLocator.agentStore
     val settings by store.settings.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
-    var showAddWhitelist by rememberSaveable { mutableStateOf(false) }
+    var showAddBlacklist by rememberSaveable { mutableStateOf(false) }
+    var showAuditDetail by rememberSaveable { mutableStateOf(false) }
     var showPrivacy by rememberSaveable { mutableStateOf(false) }
     var showClearSessions by rememberSaveable { mutableStateOf(false) }
     var showGlobalSettings by rememberSaveable { mutableStateOf(false) }
@@ -224,6 +234,9 @@ fun AgentSettingsScreen(
             onBack()
         }
     }
+
+    // 系统返回键：无子弹窗打开时关闭设置面板（子弹窗是独立窗口，会优先消费返回键）
+    BackHandler(enabled = true) { dismissSheet() }
 
     Box(
         modifier = Modifier
@@ -435,356 +448,36 @@ fun AgentSettingsScreen(
                                 title = "工具使用开关",
                                 defaultExpanded = false
                             ) {
-                                // ===== 感知类：依赖系统权限，未授权时开关置灰 =====
-                                ToggleRow(
-                                    icon = Icons.Filled.Visibility,
-                                    title = "读屏",
-                                    subtitle = toolStatusSubtitle("读取屏幕文本", "无障碍服务", accessibilityEnabled),
-                                    checked = settings.toolSwitches.sense_screen,
-                                    onCheckedChange = { on ->
-                                        scope.launch { store.setToolSwitch("sense_screen", on) }
-                                    },
-                                    helpText = "打开后，Agent 才能使用「读取屏幕」工具（需要无障碍权限）。",
-                                    onHelpClick = { helpText = "打开后，Agent 才能使用「读取屏幕」工具（需要无障碍权限）。" },
-                                    enabled = accessibilityEnabled
-                                )
-                                ToggleRow(
-                                    icon = Icons.Filled.Notifications,
-                                    title = "通知",
-                                    subtitle = toolStatusSubtitle("读取最近的通知 / 通知变化实时推送", "通知使用权", notificationEnabled),
-                                    checked = settings.toolSwitches.sense_notifications,
-                                    onCheckedChange = { on ->
-                                        scope.launch { store.setToolSwitch("sense_notifications", on) }
-                                    },
-                                    helpText = "打开后，Agent 才能使用「读取通知」「通知守卫」（实时推送通知变化）工具（需要通知使用权）。",
-                                    onHelpClick = { helpText = "打开后，Agent 才能使用「读取通知」「通知守卫」（实时推送通知变化）工具（需要通知使用权）。" },
-                                    enabled = notificationEnabled
-                                )
-                                ToggleRow(
-                                    icon = Icons.Filled.Info,
-                                    title = "Toast 监听",
-                                    subtitle = toolStatusSubtitle("捕获两秒即消失的瞬时提示", "无障碍服务", accessibilityEnabled),
-                                    checked = settings.toolSwitches.sense_toasts,
-                                    onCheckedChange = { on ->
-                                        scope.launch { store.setToolSwitch("sense_toasts", on) }
-                                    },
-                                    helpText = "打开后，Agent 才能使用「Toast 监听」工具捕获瞬时弹窗（需要无障碍服务）。",
-                                    onHelpClick = { helpText = "打开后，Agent 才能使用「Toast 监听」工具捕获瞬时弹窗（需要无障碍服务）。" },
-                                    enabled = accessibilityEnabled
-                                )
-                                ToggleRow(
-                                    icon = Icons.Filled.Speed,
-                                    title = "用量与前台应用",
-                                    subtitle = toolStatusSubtitle("用量统计 / 用量明细 / 前台应用", "使用情况访问", usageEnabled),
-                                    checked = settings.toolSwitches.sense_usage,
-                                    onCheckedChange = { on ->
-                                        scope.launch { store.setToolSwitch("sense_usage", on) }
-                                    },
-                                    helpText = "打开后，Agent 才能使用「用量统计」「用量明细」（启动次数/最后使用时间）「前台应用」工具。",
-                                    onHelpClick = { helpText = "打开后，Agent 才能使用「用量统计」「用量明细」（启动次数/最后使用时间）「前台应用」工具。" },
-                                    enabled = usageEnabled
-                                )
-                                // ===== 读取类：无需额外权限 =====
-                                ToggleRow(
-                                    icon = Icons.Filled.Apps,
-                                    title = "应用列表",
-                                    subtitle = "列出已安装应用",
-                                    checked = settings.toolSwitches.read_apps,
-                                    onCheckedChange = { on ->
-                                        scope.launch { store.setToolSwitch("read_apps", on) }
-                                    },
-                                    helpText = "打开后，Agent 才能列出你手机上的应用。",
-                                    onHelpClick = { helpText = "打开后，Agent 才能列出你手机上的应用。" }
-                                )
-                                ToggleRow(
-                                    icon = Icons.Filled.ManageSearch,
-                                    title = "应用信息",
-                                    subtitle = "权限清单 / 安装时间来源 / 文件访问能力",
-                                    checked = settings.toolSwitches.read_app_info,
-                                    onCheckedChange = { on ->
-                                        scope.launch { store.setToolSwitch("read_app_info", on) }
-                                    },
-                                    helpText = "打开后，Agent 才能查询应用的权限清单、安装时间与来源、文件访问能力。",
-                                    onHelpClick = { helpText = "打开后，Agent 才能查询应用的权限清单、安装时间与来源、文件访问能力。" }
-                                )
-                                ToggleRow(
-                                    icon = Icons.Filled.BatteryFull,
-                                    title = "后台耗电",
-                                    subtitle = toolStatusSubtitle("查询应用后台耗电统计", "Shizuku 授权", shizukuReady),
-                                    checked = settings.toolSwitches.read_battery,
-                                    onCheckedChange = { on ->
-                                        scope.launch { store.setToolSwitch("read_battery", on) }
-                                    },
-                                    helpText = "打开后，Agent 才能查询指定应用的后台耗电（需要 Shizuku 授权）。",
-                                    onHelpClick = { helpText = "打开后，Agent 才能查询指定应用的后台耗电（需要 Shizuku 授权）。" },
-                                    enabled = shizukuReady
-                                )
-                                ToggleRow(
-                                    icon = Icons.Filled.DataUsage,
-                                    title = "流量排行",
-                                    subtitle = toolStatusSubtitle("按流量统计已安装应用", "使用情况访问", usageEnabled),
-                                    checked = settings.toolSwitches.read_traffic,
-                                    onCheckedChange = { on ->
-                                        scope.launch { store.setToolSwitch("read_traffic", on) }
-                                    },
-                                    helpText = "打开后，Agent 才能按接收/发送流量排行应用（需要使用情况访问权限）。",
-                                    onHelpClick = { helpText = "打开后，Agent 才能按接收/发送流量排行应用（需要使用情况访问权限）。" },
-                                    enabled = usageEnabled
-                                )
-                                ToggleRow(
-                                    icon = Icons.Filled.PhotoCamera,
-                                    title = "截图",
-                                    subtitle = toolStatusSubtitle("截取当前屏幕并保存", "无障碍服务", accessibilityEnabled),
-                                    checked = settings.toolSwitches.read_screenshot,
-                                    onCheckedChange = { on ->
-                                        scope.launch { store.setToolSwitch("read_screenshot", on) }
-                                    },
-                                    helpText = "打开后，Agent 才能截取当前屏幕（需要无障碍权限与 Android 11+）。",
-                                    onHelpClick = { helpText = "打开后，Agent 才能截取当前屏幕（需要无障碍权限与 Android 11+）。" },
-                                    enabled = accessibilityEnabled
-                                )
-                                ToggleRow(
-                                    icon = Icons.Filled.Article,
-                                    title = "全局日志",
-                                    subtitle = toolStatusSubtitle("查看所有应用的日志报告", "Shizuku 授权", shizukuReady),
-                                    checked = settings.toolSwitches.read_logs,
-                                    onCheckedChange = { on ->
-                                        scope.launch { store.setToolSwitch("read_logs", on) }
-                                    },
-                                    helpText = "打开后，Agent 才能读取全局系统日志（logcat，覆盖所有应用；需要 Shizuku 授权）。",
-                                    onHelpClick = { helpText = "打开后，Agent 才能读取全局系统日志（logcat，覆盖所有应用；需要 Shizuku 授权）。" },
-                                    enabled = shizukuReady
-                                )
-                                ToggleRow(
-                                    icon = Icons.Filled.Article,
-                                    title = "应用日志",
-                                    subtitle = toolStatusSubtitle("按应用读取实时日志（需该应用正在运行）", "Shizuku 授权", shizukuReady),
-                                    checked = settings.toolSwitches.read_logs,
-                                    onCheckedChange = { on ->
-                                        scope.launch { store.setToolSwitch("read_logs", on) }
-                                    },
-                                    helpText = "打开后，Agent 才能按应用读取实时日志（logcat --pid）；需要 Shizuku 授权，且目标应用正在运行。",
-                                    onHelpClick = { helpText = "打开后，Agent 才能按应用读取实时日志（logcat --pid）；需要 Shizuku 授权，且目标应用正在运行。" },
-                                    enabled = shizukuReady
-                                )
-                                // ===== 识图类：OCR 识别（依赖视觉 OCR 模型配置） =====
-                                ToggleRow(
-                                    icon = Icons.Filled.Image,
-                                    title = "识图 OCR",
-                                    subtitle = "识别截图 / 图片中的文字",
-                                    checked = settings.toolSwitches.read_ocr,
-                                    onCheckedChange = { on ->
-                                        scope.launch { store.setToolSwitch("read_ocr", on) }
-                                    },
-                                    helpText = "打开后，Agent 才能对截图或图片执行 OCR 识别（需要先在总设置中配置视觉 OCR 模型）。",
-                                    onHelpClick = { helpText = "打开后，Agent 才能对截图或图片执行 OCR 识别（需要先在总设置中配置视觉 OCR 模型）。" }
-                                )
-                                // ===== 文件操作：读取/跳转与写入分离，均需 Shizuku 授权 =====
-                                ToggleRow(
-                                    icon = Icons.Filled.Description,
-                                    title = "文件读取",
-                                    subtitle = toolStatusSubtitle("读取内容 / 列目录 / 元信息 / 跳转定位", "Shizuku 授权", shizukuReady),
-                                    checked = settings.toolSwitches.read_files,
-                                    onCheckedChange = { on ->
-                                        scope.launch { store.setToolSwitch("read_files", on) }
-                                    },
-                                    helpText = "打开后，Agent 才能读取文件内容、列出目录、查询文件元信息，或用文件管理器跳转定位（可指定包名避开微信抢走打开意图）；需要 Shizuku 授权。",
-                                    onHelpClick = { helpText = "打开后，Agent 才能读取文件内容、列出目录、查询文件元信息，或用文件管理器跳转定位（可指定包名避开微信抢走打开意图）；需要 Shizuku 授权。" },
-                                    enabled = shizukuReady
-                                )
-                                ToggleRow(
-                                    icon = Icons.Filled.Delete,
-                                    title = "文件写入",
-                                    subtitle = toolStatusSubtitle("创建 / 写入 / 追加 / 重命名 / 建目录 / 移动 / 复制 / 删除", "Shizuku 授权", shizukuReady),
-                                    checked = settings.toolSwitches.write_files,
-                                    onCheckedChange = { on ->
-                                        scope.launch { store.setToolSwitch("write_files", on) }
-                                    },
-                                    helpText = "打开后，Agent 才能创建文件、写入/追加内容、重命名、建目录、移动、复制、删除；每次操作都会弹窗确认，删除不可恢复。",
-                                    onHelpClick = { helpText = "打开后，Agent 才能创建文件、写入/追加内容、重命名、建目录、移动、复制、删除；每次操作都会弹窗确认，删除不可恢复。" },
-                                    enabled = shizukuReady
-                                )
-                                // ===== 主动交互类：提醒与剪贴板（剪贴板涉及隐私，默认关闭） =====
-                                ToggleRow(
-                                    icon = Icons.Filled.Send,
-                                    title = "主动提醒",
-                                    subtitle = "Agent 主动向通知栏推送消息 / 提醒",
-                                    checked = settings.toolSwitches.interact_notify,
-                                    onCheckedChange = { on ->
-                                        scope.launch { store.setToolSwitch("interact_notify", on) }
-                                    },
-                                    helpText = "打开后，Agent 才能主动向通知栏推送提醒（如定时提醒、任务完成通知）。",
-                                    onHelpClick = { helpText = "打开后，Agent 才能主动向通知栏推送提醒（如定时提醒、任务完成通知）。" }
-                                )
-                                ToggleRow(
-                                    icon = Icons.Filled.ContentCopy,
-                                    title = "剪贴板读取",
-                                    subtitle = "读取当前剪贴板文本（涉及隐私，默认关闭）",
-                                    checked = settings.toolSwitches.read_clipboard,
-                                    onCheckedChange = { on ->
-                                        scope.launch { store.setToolSwitch("read_clipboard", on) }
-                                    },
-                                    helpText = "打开后，Agent 才能读取剪贴板内容；每次读取都会弹窗确认。",
-                                    onHelpClick = { helpText = "打开后，Agent 才能读取剪贴板内容；每次读取都会弹窗确认。" }
-                                )
-                                ToggleRow(
-                                    icon = Icons.Filled.ContentPaste,
-                                    title = "剪贴板写入",
-                                    subtitle = "把文本写入剪贴板（默认关闭）",
-                                    checked = settings.toolSwitches.write_clipboard,
-                                    onCheckedChange = { on ->
-                                        scope.launch { store.setToolSwitch("write_clipboard", on) }
-                                    },
-                                    helpText = "打开后，Agent 才能把文本写入剪贴板（如复制代码、验证码）；每次写入都会弹窗确认。",
-                                    onHelpClick = { helpText = "打开后，Agent 才能把文本写入剪贴板（如复制代码、验证码）；每次写入都会弹窗确认。" }
-                                )
-                                // ===== 系统增强类：白名单安全命令（仅只读命令，需 Shizuku 授权） =====
-                                ToggleRow(
-                                    icon = Icons.Filled.Terminal,
-                                    title = "Shell 安全命令",
-                                    subtitle = toolStatusSubtitle("执行白名单内的只读命令（ls / cat / getprop 等）", "Shizuku 授权", shizukuReady),
-                                    checked = settings.toolSwitches.run_shell,
-                                    onCheckedChange = { on ->
-                                        scope.launch { store.setToolSwitch("run_shell", on) }
-                                    },
-                                    helpText = "打开后，Agent 才能执行白名单内的安全只读 Shell 命令；命令名固定白名单，参数不可含 shell 元字符，每次执行都会弹窗确认。",
-                                    onHelpClick = { helpText = "打开后，Agent 才能执行白名单内的安全只读 Shell 命令；命令名固定白名单，参数不可含 shell 元字符，每次执行都会弹窗确认。" },
-                                    enabled = shizukuReady
-                                )
-                                // ===== 触控类：模拟点击 / 长按 / 滑动 / 系统动作（需无障碍服务） =====
-                                ToggleRow(
-                                    icon = Icons.Filled.Visibility,
-                                    title = "模拟点击",
-                                    subtitle = toolStatusSubtitle("点击 / 长按 / 点击文字 / 滑动 / 系统动作", "无障碍服务", accessibilityEnabled),
-                                    checked = settings.toolSwitches.simulate_click,
-                                    onCheckedChange = { on ->
-                                        scope.launch { store.setToolSwitch("simulate_click", on) }
-                                    },
-                                    helpText = "打开后，Agent 才能模拟点击、长按、滑动与返回/首页等系统动作；需要无障碍服务，每次执行都会弹窗确认。",
-                                    onHelpClick = { helpText = "打开后，Agent 才能模拟点击、长按、滑动与返回/首页等系统动作；需要无障碍服务，每次执行都会弹窗确认。" },
-                                    enabled = accessibilityEnabled
-                                )
-                                // ===== 打开应用：直接系统跳转目标应用，快速导航（免确认，无需无障碍） =====
-                                ToggleRow(
-                                    icon = Icons.Filled.OpenInNew,
-                                    title = "打开应用",
-                                    subtitle = "直接跳转到指定应用（快速导航，免确认）",
-                                    checked = settings.toolSwitches.open_app,
-                                    onCheckedChange = { on ->
-                                        scope.launch { store.setToolSwitch("open_app", on) }
-                                    },
-                                    helpText = "打开后，Agent 可直接跳转到指定应用（如打开微信/抖音），用于快速导航；系统级跳转，不需要无障碍服务，执行时不再弹确认。",
-                                    onHelpClick = { helpText = "打开后，Agent 可直接跳转到指定应用（如打开微信/抖音），用于快速导航；系统级跳转，不需要无障碍服务，执行时不再弹确认。" },
-                                    enabled = true
-                                )
-                                // ===== 屏幕操作小窗：模拟操作时进入画中画，目标应用保持全屏 =====
-                                ToggleRow(
-                                    icon = Icons.Filled.PictureInPicture,
-                                    title = "屏幕操作小窗",
-                                    subtitle = "滑动/点击时进入画中画小窗，目标应用保持全屏（Android 12+）",
-                                    checked = settings.pipOnScreenOps,
-                                    onCheckedChange = { on ->
-                                        scope.launch { store.setPipOnScreenOps(on) }
-                                    },
-                                    helpText = "打开后，Agent 执行滑动/点击等屏幕操作时，Quiddity 自动进入画中画小窗展示操作状态；操作完成后保持小窗，点小窗即可恢复全屏。",
-                                    onHelpClick = { helpText = "打开后，Agent 执行滑动/点击等屏幕操作时，Quiddity 自动进入画中画小窗展示操作状态；操作完成后保持小窗，点小窗即可恢复全屏。" },
-                                    enabled = true
-                                )
-                                // ===== 写入类：无论是否授权都有开关；Shizuku 未授权/未配对时置灰 =====
-                                ToggleRow(
-                                    icon = Icons.Filled.Block,
-                                    title = "停用与启用应用",
-                                    subtitle = toolStatusSubtitle("停用/启用指定应用", "Shizuku 授权", shizukuReady),
-                                    checked = settings.toolSwitches.write_disable,
-                                    onCheckedChange = { on ->
-                                        scope.launch { store.setToolSwitch("write_disable", on) }
-                                    },
-                                    helpText = "停用后应用图标消失、无法运行；需 Shizuku 授权，且目标应用必须在白名单内。",
-                                    onHelpClick = { helpText = "停用后应用图标消失、无法运行；需 Shizuku 授权，且目标应用必须在白名单内。" },
-                                    enabled = shizukuReady
-                                )
-                                ToggleRow(
-                                    icon = Icons.Filled.Lock,
-                                    title = "权限修改",
-                                    subtitle = toolStatusSubtitle("修改应用的权限模式", "Shizuku 授权", shizukuReady),
-                                    checked = settings.toolSwitches.write_appops,
-                                    onCheckedChange = { on ->
-                                        scope.launch { store.setToolSwitch("write_appops", on) }
-                                    },
-                                    helpText = "修改应用的权限模式（如拒绝震动、定位等）；需 Shizuku 授权 + 白名单。",
-                                    onHelpClick = { helpText = "修改应用的权限模式（如拒绝震动、定位等）；需 Shizuku 授权 + 白名单。" },
-                                    enabled = shizukuReady
-                                )
-                                ToggleRow(
-                                    icon = Icons.Filled.Stop,
-                                    title = "强制停止",
-                                    subtitle = toolStatusSubtitle("立即停止应用的后台运行", "Shizuku 授权", shizukuReady),
-                                    checked = settings.toolSwitches.write_force_stop,
-                                    onCheckedChange = { on ->
-                                        scope.launch { store.setToolSwitch("write_force_stop", on) }
-                                    },
-                                    helpText = "立即停止应用的后台运行；需 Shizuku 授权 + 白名单。",
-                                    onHelpClick = { helpText = "立即停止应用的后台运行；需 Shizuku 授权 + 白名单。" },
-                                    enabled = shizukuReady
-                                )
-                                ToggleRow(
-                                    icon = Icons.Filled.Delete,
-                                    title = "卸载应用",
-                                    subtitle = toolStatusSubtitle("卸载指定应用", "Shizuku 授权", shizukuReady),
-                                    checked = settings.toolSwitches.write_uninstall,
-                                    onCheckedChange = { on ->
-                                        scope.launch { store.setToolSwitch("write_uninstall", on) }
-                                    },
-                                    helpText = "卸载指定应用；需 Shizuku 授权 + 白名单，卸载后数据不可恢复。",
-                                    onHelpClick = { helpText = "卸载指定应用；需 Shizuku 授权 + 白名单，卸载后数据不可恢复。" },
-                                    enabled = shizukuReady
-                                )
-                            }
-                        }
-
-                        item(key = "whitelist", contentType = { "section" }) {
-                            SettingsSectionCard(title = "白名单（写入工具门控）") {
-                                if (settings.whitelist.isEmpty()) {
-                                    ClickableRow(
-                                        icon = Icons.Filled.Info,
-                                        title = "暂无白名单",
-                                        subtitle = "写入类工具将被拒绝执行",
-                                        onClick = { showAddWhitelist = true },
-                                        helpText = "只有加入白名单的应用，Agent 才能对它执行停用、卸载等写入操作。",
-                                        onHelpClick = { helpText = "只有加入白名单的应用，Agent 才能对它执行停用、卸载等写入操作。" }
-                                    )
-                                }
-                                settings.whitelist.forEach { pkg ->
-                                    ClickableRow(
-                                        icon = Icons.Filled.Lock,
-                                        title = pkg,
-                                        subtitle = "已加入白名单",
-                                        onClick = {},
-                                        trailingContent = {
-                                            IconButton(onClick = { scope.launch { store.removeWhitelist(pkg) } }) {
-                                                Icon(
-                                                    imageVector = Icons.Filled.Close,
-                                                    contentDescription = "移除 $pkg",
-                                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                    modifier = Modifier.size(18.dp)
+                                // ===== 五分类（只读 / 更改 / 删除 / 行为 / 识图）：
+                                // 每类一张卡片：主开关一键全开/全关（任一工具关闭即呈现关态），
+                                // 默认收起工具明细，展开后每个工具独立启停 + 问号查看作用 =====
+                                AgentToolCategory.ALL.forEach { category ->
+                                    ToolCategoryCard(
+                                        category = category,
+                                        switches = settings.toolSwitches,
+                                        accessibilityEnabled = accessibilityEnabled,
+                                        notificationEnabled = notificationEnabled,
+                                        usageEnabled = usageEnabled,
+                                        shizukuReady = shizukuReady,
+                                        onToolSwitch = { name, on ->
+                                            scope.launch { store.setToolSwitch(name, on) }
+                                        },
+                                        onCategorySwitch = { on ->
+                                            scope.launch {
+                                                store.setCategorySwitch(
+                                                    AgentToolCategory.toolsOf(category),
+                                                    on
                                                 )
                                             }
-                                        }
+                                        },
+                                        onHelp = { text -> helpText = text }
                                     )
                                 }
-                                ClickableRow(
-                                    icon = Icons.Filled.Add,
-                                    title = "添加包名",
-                                    subtitle = "加入后写入类工具才可执行",
-                                    onClick = { showAddWhitelist = true },
-                                    helpText = "输入应用包名（如 com.tencent.mm）加入白名单，写入工具才能对该应用生效。",
-                                    onHelpClick = { helpText = "输入应用包名（如 com.tencent.mm）加入白名单，写入工具才能对该应用生效。" }
-                                )
                             }
                         }
 
                         item(key = "permissionControl", contentType = { "section" }) {
-                            SettingsSectionCard(title = "权限管控") {
+                            SettingsSectionCard(title = "权限管控", tallHeader = true) {
                                 ClickableRow(
                                     icon = Icons.Filled.Lock,
                                     title = "过问",
@@ -806,10 +499,10 @@ fun AgentSettingsScreen(
                                 ClickableRow(
                                     icon = Icons.Filled.CheckCircle,
                                     title = "完全",
-                                    subtitle = "信任开关与白名单，不再逐次确认，自动执行",
+                                    subtitle = "信任开关与黑名单，不再逐次确认，自动执行",
                                     onClick = { scope.launch { store.setPermissionControl(AgentPermissionControl.FULL) } },
-                                    helpText = "危险 / 写入类工具将自动执行（仍受工具开关与包名白名单约束），不再弹确认框。",
-                                    onHelpClick = { helpText = "危险 / 写入类工具将自动执行（仍受工具开关与包名白名单约束），不再弹确认框。" },
+                                    helpText = "危险 / 写入类工具将自动执行（仍受工具开关与黑名单约束），不再弹确认框。",
+                                    onHelpClick = { helpText = "危险 / 写入类工具将自动执行（仍受工具开关与黑名单约束），不再弹确认框。" },
                                     trailingContent = {
                                         if (settings.permissionControl == AgentPermissionControl.FULL) {
                                             Icon(
@@ -821,18 +514,121 @@ fun AgentSettingsScreen(
                                         }
                                     }
                                 )
+                                // ===== 黑名单（v1 白名单语义反转）：默认全应用权限；
+                                // 跟随「过问」权限模式：过问开启时展开显示，切到「完全」自动收起；
+                                // 黑名单列表与添加入口合并为一个整体区块 =====
+                                AnimatedVisibility(
+                                    visible = settings.permissionControl == AgentPermissionControl.ASK,
+                                    enter = fadeIn(tween(Motion.DurationShort)) +
+                                        expandVertically(tween(Motion.DurationShort, easing = Motion.EasingEmphasizedDecelerate)),
+                                    exit = fadeOut(tween(Motion.DurationShort)) +
+                                        shrinkVertically(tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate))
+                                ) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 6.dp)
+                                            .clip(RoundedCornerShape(16.dp))
+                                            .background(MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.5f))
+                                    ) {
+                                        // 头部：黑名单标题 + 说明 + 添加按钮（合为一体）
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Filled.Block,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                            Spacer(modifier = Modifier.size(10.dp))
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = "黑名单",
+                                                    style = MaterialTheme.typography.bodyLarge,
+                                                    color = MaterialTheme.colorScheme.onSurface
+                                                )
+                                                Text(
+                                                    text = "默认全应用权限；命中的应用/文件 AI 无权查看、更改、删除",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                                )
+                                            }
+                                            TextButton(onClick = { showAddBlacklist = true }) {
+                                                Icon(
+                                                    imageVector = Icons.Filled.Add,
+                                                    contentDescription = "添加黑名单",
+                                                    tint = MaterialTheme.colorScheme.primary,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                                Spacer(modifier = Modifier.size(2.dp))
+                                                Text(
+                                                    text = "添加",
+                                                    style = MaterialTheme.typography.labelMedium,
+                                                    color = MaterialTheme.colorScheme.primary
+                                                )
+                                            }
+                                        }
+                                        // 条目列表
+                                        if (settings.blacklist.isEmpty()) {
+                                            Text(
+                                                text = "暂无黑名单条目",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                                modifier = Modifier.padding(start = 44.dp, end = 14.dp, bottom = 12.dp)
+                                            )
+                                        } else {
+                                            settings.blacklist.forEach { entry ->
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(start = 44.dp, end = 8.dp, top = 2.dp, bottom = 2.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Text(
+                                                        text = entry,
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        fontFamily = FontFamily.Monospace,
+                                                        color = MaterialTheme.colorScheme.onSurface,
+                                                        modifier = Modifier.weight(1f)
+                                                    )
+                                                    IconButton(onClick = { scope.launch { store.removeBlacklist(entry) } }) {
+                                                        Icon(
+                                                            imageVector = Icons.Filled.Close,
+                                                            contentDescription = "移出黑名单 $entry",
+                                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                            modifier = Modifier.size(18.dp)
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                            Spacer(modifier = Modifier.size(4.dp))
+                                        }
+                                    }
+                                }
                             }
                         }
 
                         item(key = "privacy", contentType = { "section" }) {
-                            SettingsSectionCard(title = "数据与隐私") {
+                            SettingsSectionCard(title = "数据与隐私", tallHeader = true) {
                                 ClickableRow(
                                     icon = Icons.Filled.Description,
                                     title = "审计记录",
                                     subtitle = "${settings.audit.size} 条（最多保留 500 条）",
-                                    onClick = { scope.launch { store.clearAudit() } },
-                                    helpText = "记录每次工具执行的明细（时间、工具、参数、是否确认）；点击可清空。",
-                                    onHelpClick = { helpText = "记录每次工具执行的明细（时间、工具、参数、是否确认）；点击可清空。" }
+                                    onClick = { showAuditDetail = true },
+                                    helpText = "记录每次工具执行的明细（执行结果、日期、时间、工具名称）；点进查看详情。",
+                                    onHelpClick = { helpText = "记录每次工具执行的明细（执行结果、日期、时间、工具名称）；点进查看详情。" },
+                                    trailingContent = {
+                                        Icon(
+                                            imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                                            contentDescription = "查看详情",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
                                 )
                                 ClickableRow(
                                     icon = Icons.Filled.Delete,
@@ -854,7 +650,7 @@ fun AgentSettingsScreen(
                         }
 
                         item(key = "support", contentType = { "section" }) {
-                            SettingsSectionCard(title = "支持") {
+                            SettingsSectionCard(title = "支持", defaultExpanded = true, tallHeader = true) {
                                 ClickableRow(
                                     icon = Icons.Filled.Settings,
                                     title = "总设置",
@@ -879,14 +675,22 @@ fun AgentSettingsScreen(
         }
     }
 
-    // ===== 添加白名单弹窗 =====
-    if (showAddWhitelist) {
-        AddWhitelistDialog(
-            onDismiss = { showAddWhitelist = false },
-            onAdd = { pkg ->
-                scope.launch { store.addWhitelist(pkg) }
-                showAddWhitelist = false
+    // ===== 添加黑名单弹窗 =====
+    if (showAddBlacklist) {
+        AddBlacklistDialog(
+            onDismiss = { showAddBlacklist = false },
+            onAdd = { entry ->
+                scope.launch { store.addBlacklist(entry) }
+                showAddBlacklist = false
             }
+        )
+    }
+
+    // ===== 审计记录详情弹窗：只读展示 AI 工具使用日志 =====
+    if (showAuditDetail) {
+        AuditDetailDialog(
+            audit = settings.audit,
+            onDismiss = { showAuditDetail = false }
         )
     }
 
@@ -987,18 +791,118 @@ fun AgentSettingsScreen(
     }
 }
 
-/** 工具行副标题：所需权限未授权时附加「需XX（未开启）」，开关置灰原因一目了然。 */
-private fun toolStatusSubtitle(base: String, need: String?, granted: Boolean): String =
-    if (need == null || granted) base else "$base · 需$need（未开启）"
-
 /** 可展开设置分组：点头部展开/收起（用于权限状态、工具使用开关）。 */
 @Composable
 private fun ExpandableSettingsSection(
     title: String,
+    subtitle: String = "",
     defaultExpanded: Boolean = false,
     content: @Composable ColumnScope.() -> Unit
 ) {
     var expanded by rememberSaveable(title) { mutableStateOf(defaultExpanded) }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .clip(RoundedCornerShape(20.dp))
+            .background(com.quiddity.app.ui.components.glassCardColor())
+            .padding(horizontal = 4.dp, vertical = 6.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) { expanded = !expanded }
+                // 设置大项统一头部高度（60dp，约原 2 倍）：未展开时所有大项等高
+                .height(60.dp)
+                .padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(4.dp)
+                    .height(16.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(MaterialTheme.colorScheme.primary)
+            )
+            Spacer(modifier = Modifier.size(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                if (subtitle.isNotEmpty()) {
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            Icon(
+                imageVector = Icons.Filled.ExpandMore,
+                contentDescription = if (expanded) "收起" else "展开",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .size(20.dp)
+                    .graphicsLayer {
+                        rotationZ = if (expanded) 180f else 0f
+                    }
+            )
+        }
+        AnimatedVisibility(
+            visible = expanded,
+            enter = fadeIn(tween(Motion.DurationShort)) +
+                expandVertically(tween(Motion.DurationShort, easing = Motion.EasingEmphasizedDecelerate)),
+            exit = fadeOut(tween(Motion.DurationShort)) +
+                shrinkVertically(tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate))
+        ) {
+            Column(content = content)
+        }
+    }
+}
+/** 工具分类卡片：主开关（一键全开/全关）+ 展开后的每工具独立开关（中文名 + 问号说明）。 */
+@Composable
+private fun ToolCategoryCard(
+    category: AgentToolCategory,
+    switches: AgentToolSwitches,
+    accessibilityEnabled: Boolean,
+    notificationEnabled: Boolean,
+    usageEnabled: Boolean,
+    shizukuReady: Boolean,
+    onToolSwitch: (String, Boolean) -> Unit,
+    onCategorySwitch: (Boolean) -> Unit,
+    onHelp: (String) -> Unit
+) {
+    val tools = AgentToolCategory.toolsOf(category).sortedBy { AgentToolRegistry.displayName(it) }
+    // 主开关状态 = 权限可用的工具全部开启（未授权权限的工具不计入，
+    // 避免「没给权限、五个分类却全显示开启」的误导）
+    val allOn = categoryMasterOn(tools, switches) { toolName ->
+        toolGateInfo(
+            toolName,
+            accessibilityEnabled,
+            notificationEnabled,
+            usageEnabled,
+            shizukuReady
+        ).first
+    }
+    // 分类内缺失的系统权限（去重）：存在缺权限工具时，主开关不允许开启，并 Toast 提示
+    val missingPermissions = tools.mapNotNull { toolName ->
+        val (usable, need) = toolGateInfo(
+            toolName,
+            accessibilityEnabled,
+            notificationEnabled,
+            usageEnabled,
+            shizukuReady
+        )
+        if (!usable) need else null
+    }.distinct()
+    val contextForToast = LocalContext.current
+    var expanded by rememberSaveable(category.id) { mutableStateOf(false) }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1025,13 +929,36 @@ private fun ExpandableSettingsSection(
                     .background(MaterialTheme.colorScheme.primary)
             )
             Spacer(modifier = Modifier.size(10.dp))
-            Text(
-                text = title,
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.weight(1f)
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = category.title,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    text = category.subtitle,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            // 主开关：全部（可用）工具开启才显示开；点击一键全开 / 全关；
+            // 分类内存在未授权权限的工具时不允许开启，并提示缺失权限
+            QuiddityToggleSwitch(
+                checked = allOn,
+                onCheckedChange = { target ->
+                    if (target && missingPermissions.isNotEmpty()) {
+                        Toast.makeText(
+                            contextForToast,
+                            "${missingPermissions.joinToString("、")}未开启，无法开启该类工具",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    } else {
+                        onCategorySwitch(target)
+                    }
+                }
             )
+            Spacer(modifier = Modifier.size(4.dp))
             Icon(
                 imageVector = Icons.Filled.ExpandMore,
                 contentDescription = if (expanded) "收起" else "展开",
@@ -1050,10 +977,221 @@ private fun ExpandableSettingsSection(
             exit = fadeOut(tween(Motion.DurationShort)) +
                 shrinkVertically(tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate))
         ) {
-            Column(content = content)
+            Column {
+                tools.forEach { toolName ->
+                    AgentToolRow(
+                        toolName = toolName,
+                        switches = switches,
+                        accessibilityEnabled = accessibilityEnabled,
+                        notificationEnabled = notificationEnabled,
+                        usageEnabled = usageEnabled,
+                        shizukuReady = shizukuReady,
+                        onCheckedChange = { on -> onToolSwitch(toolName, on) },
+                        onHelp = { onHelp(AgentToolRegistry.toolExplanation(toolName)) }
+                    )
+                }
+            }
         }
     }
 }
+
+/** 单个工具行：中文名 + 问号说明 + 独立开关；所需权限未授权时开关置灰并注明。 */
+@Composable
+private fun AgentToolRow(
+    toolName: String,
+    switches: AgentToolSwitches,
+    accessibilityEnabled: Boolean,
+    notificationEnabled: Boolean,
+    usageEnabled: Boolean,
+    shizukuReady: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    onHelp: () -> Unit
+) {
+    val (gateEnabled, need) = toolGateInfo(
+        toolName,
+        accessibilityEnabled,
+        notificationEnabled,
+        usageEnabled,
+        shizukuReady
+    )
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 10.dp)
+                .graphicsLayer { alpha = if (gateEnabled) 1f else 0.5f },
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = AgentToolRegistry.displayName(toolName),
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                if (need != null) {
+                    Text(
+                        text = "需" + need + "（未开启）",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                    )
+                }
+            }
+            IconButton(onClick = onHelp) {
+                Icon(
+                    imageVector = Icons.Filled.HelpOutline,
+                    contentDescription = "工具作用说明",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+            QuiddityToggleSwitch(
+                checked = switches.isEnabled(toolName),
+                onCheckedChange = onCheckedChange,
+                enabled = gateEnabled
+            )
+        }
+    }
+}
+
+/**
+ * 分类主开关状态（纯函数，1.6.1）：
+ * - 只统计「权限已授予」的工具（[isUsable] 为 true）；
+ * - 权限可用的工具全部开启 → 主开关显示开；任一可用工具关闭 → 显示关；
+ * - 分类内没有任何可用工具（如全部依赖未授权的权限）→ 显示关。
+ */
+internal fun categoryMasterOn(
+    tools: Collection<String>,
+    switches: AgentToolSwitches,
+    isUsable: (String) -> Boolean
+): Boolean {
+    val usable = tools.filter { isUsable(it) }
+    return usable.isNotEmpty() && usable.all { switches.isEnabled(it) }
+}
+
+/** 工具行权限门控信息：返回 (是否可操作, 未授权时的所需权限名)。 */
+private fun toolGateInfo(
+    toolName: String,
+    accessibilityEnabled: Boolean,
+    notificationEnabled: Boolean,
+    usageEnabled: Boolean,
+    shizukuReady: Boolean
+): Pair<Boolean, String?> = when (toolName) {
+    "read_screen", "toast_monitor", "screenshot" ->
+        accessibilityEnabled to (if (accessibilityEnabled) null else "无障碍服务")
+    "read_notifications", "notification_guard", "dismiss_notification", "reply_notification" ->
+        notificationEnabled to (if (notificationEnabled) null else "通知使用权")
+    "usage_stats", "foreground_app", "app_usage_detail", "traffic_ranking" ->
+        usageEnabled to (if (usageEnabled) null else "使用情况访问")
+    "app_battery", "system_logs", "app_logs", "read_file", "list_files", "file_info",
+    "reveal_file", "create_file", "write_file", "append_file", "rename_file", "mkdir",
+    "move_file", "copy_file", "delete_file", "run_shell", "disable_app", "enable_app",
+    "set_appops", "force_stop", "uninstall_app" ->
+        shizukuReady to (if (shizukuReady) null else "Shizuku 授权")
+    "click", "long_press", "click_text", "scroll", "global_action", "input_text",
+    "click_id", "click_desc", "drag", "scroll_to_text", "lock_screen" ->
+        accessibilityEnabled to (if (accessibilityEnabled) null else "无障碍服务")
+    else -> true to null
+}
+
+/** 添加黑名单弹窗：应用包名 或 文件/目录路径（默认全应用权限，命中即拒绝 AI 查看/更改/删除）。 */
+@Composable
+private fun AddBlacklistDialog(
+    onDismiss: () -> Unit,
+    onAdd: (String) -> Unit
+) {
+    var input by rememberSaveable { mutableStateOf("") }
+    val valid = input.trim().isNotEmpty()
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("添加黑名单") },
+        text = {
+            OutlinedTextField(
+                value = input,
+                onValueChange = { input = it },
+                label = { Text("应用包名 或 文件/目录路径") },
+                placeholder = { Text("例如 com.tencent.mm 或 /sdcard/Download/private") },
+                singleLine = true
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = { onAdd(input.trim()) }, enabled = valid) { Text("添加") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        }
+    )
+}
+
+/** 审计记录详情弹窗：只读展示 AI 工具使用日志（执行结果 / 日期 / 时间 / 工具名称）。 */
+@Composable
+private fun AuditDetailDialog(
+    audit: List<AgentAuditEntry>,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("AI 工具使用日志") },
+        text = {
+            if (audit.isEmpty()) {
+                Text("暂无工具执行记录。", style = MaterialTheme.typography.bodyMedium)
+            } else {
+                LazyColumn(
+                    modifier = Modifier.heightIn(max = 420.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(audit.reversed()) { entry ->
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                                .padding(horizontal = 12.dp, vertical = 10.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = AgentToolRegistry.displayName(entry.tool),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Text(
+                                    text = when {
+                                        entry.ok -> "✓ 成功"
+                                        entry.confirmed -> "✕ 失败"
+                                        else -> "已取消"
+                                    },
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = if (entry.ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                                )
+                            }
+                            Spacer(modifier = Modifier.size(4.dp))
+                            Text(
+                                text = formatAuditDateTime(entry.ts),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("关闭") }
+        }
+    )
+}
+
+/** 审计时间格式化：ISO 时间戳 → 「yyyy-MM-dd HH:mm」。 */
+private fun formatAuditDateTime(iso: String): String = runCatching {
+    val instant = java.time.Instant.parse(iso)
+    val millis = instant.toEpochMilli()
+    DateUtils.formatTimestamp(millis)
+}.getOrDefault(iso)
 
 /** 底部弹层顶部抓手：拖拽面板 1:1 跟随，超阈值关闭，否则回弹。 */
 @Composable
@@ -1122,34 +1260,6 @@ private fun AgentSheetGrabBar(
             )
         }
     }
-}
-
-@Composable
-private fun AddWhitelistDialog(
-    onDismiss: () -> Unit,
-    onAdd: (String) -> Unit
-) {
-    var input by rememberSaveable { mutableStateOf("") }
-    val pkgRegex = Regex("^[a-zA-Z0-9._]+$")
-    val valid = input.trim().isNotEmpty() && pkgRegex.matches(input.trim())
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("添加白名单包名") },
-        text = {
-            OutlinedTextField(
-                value = input,
-                onValueChange = { input = it },
-                label = { Text("例如 com.tencent.mm") },
-                singleLine = true
-            )
-        },
-        confirmButton = {
-            TextButton(onClick = { onAdd(input.trim()) }, enabled = valid) { Text("添加") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
-        }
-    )
 }
 
 private fun hasUsageAccess(context: Context): Boolean = runCatching {

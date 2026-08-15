@@ -237,4 +237,5 @@ class AgentExecutorsTest {
         val long = listOf("x".repeat(600))
         assertEquals(400, AgentExecutors.formatSystemLogs(long, 10).length)
     }
+
 }

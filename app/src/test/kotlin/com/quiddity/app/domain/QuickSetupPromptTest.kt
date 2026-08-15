@@ -4,6 +4,7 @@ import com.quiddity.app.data.model.Persona
 import com.quiddity.app.data.model.UserPersona
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -60,12 +61,14 @@ class QuickSetupPromptTest {
     }
 
     @Test
-    fun `system prompt emphasizes divergence and density`() {
+    fun `system prompt emphasizes analysis over expansion`() {
         val sys = QuickSetupPrompt.QUICK_SETUP_SYSTEM_PROMPT
-        assertTrue(sys.contains("合理发散"))
+        // 1.6.0：剖析定位——禁止扩写/注水，而不是拉长用户描述
+        assertTrue(sys.contains("剖析"))
+        assertTrue(sys.contains("禁止扩写与注水"))
+        assertTrue(sys.contains("克制推断"))
         assertTrue(sys.contains("具体胜于抽象"))
-        assertTrue(sys.contains("密度优先"))
-        assertTrue(sys.contains("每个字段都必须填充"))
+        assertFalse(sys.contains("合理发散"), "剖析模式不应鼓励发散补全")
     }
 
     @Test

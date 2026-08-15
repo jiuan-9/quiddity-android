@@ -185,6 +185,7 @@ fun AgentChatScreen(
     val chatError by viewModel.chatError.collectAsStateWithLifecycle()
     val toolTraces by viewModel.toolTraces.collectAsStateWithLifecycle()
     val pendingConfirm by viewModel.pendingToolConfirm.collectAsStateWithLifecycle()
+    val pendingWithdraw by viewModel.pendingWithdraw.collectAsStateWithLifecycle()
     val pendingImageUri by viewModel.pendingImageUri.collectAsStateWithLifecycle()
     val ocrState by viewModel.ocrState.collectAsStateWithLifecycle()
     val pendingReedit by viewModel.pendingReedit.collectAsStateWithLifecycle()
@@ -280,12 +281,14 @@ fun AgentChatScreen(
     val screenWidthPx = with(LocalDensity.current) {
         configuration.screenWidthDp.dp.toPx()
     }
-    // 多选 / 生成中 / 改写或重新编辑框打开时禁用整屏滑动，避免误触菜单或拖屏；
+    // 多选 / 改写或重新编辑框打开时禁用整屏滑动，避免误触菜单或拖屏；
+    // 生成/加载中仍允许左滑打开汉堡菜单；右滑返回由 backGestureEnabledState 单独禁用。
     // 无障碍模拟手势注入期间同样禁用，避免 AI 操作屏幕时"划退"退出会话
-    val swipeEnabled = !isGenerating && !multiSelectMode &&
-        rewritingMessageId == null && !reeditSheetOpen &&
+    val swipeEnabled = !multiSelectMode && rewritingMessageId == null && !reeditSheetOpen &&
         !com.quiddity.app.active.ScreenReaderService.injecting
     val swipeEnabledState = rememberUpdatedState(swipeEnabled)
+    // 生成中禁用右滑返回（防止误触退出会话），左滑菜单不受影响
+    val backGestureEnabledState = rememberUpdatedState(!isGenerating)
     val dragController = remember(screenWidthPx) {
         ChatDragController(
             scope = scope,
@@ -362,9 +365,15 @@ fun AgentChatScreen(
             .pointerInput(Unit) {
                 detectNativeHorizontalSwipe(
                     enabled = { swipeEnabledState.value },
-                    onDrag = { totalDx, _ -> dragController.onDrag(totalDx) },
+                    onDrag = { totalDx, _ ->
+                        if (totalDx <= 0f || backGestureEnabledState.value) {
+                            dragController.onDrag(totalDx)
+                        }
+                    },
                     onDragEnd = { totalDx, velocityDx ->
-                        dragController.onDragEnd(totalDx, velocityDx)
+                        if (totalDx <= 0f || backGestureEnabledState.value) {
+                            dragController.onDragEnd(totalDx, velocityDx)
+                        }
                     },
                     onDragCancel = { dragController.onDragCancel() }
                 )
@@ -663,6 +672,16 @@ fun AgentChatScreen(
                                             )
                                     )
                                     Spacer(modifier = Modifier.size(8.dp))
+                                    // 方案 B' 进度提示：复杂任务（累计 4 次以上工具操作）时
+                                    // 显示「已执行 N 次工具操作」，让用户感知整体进度（0~3 次不显示）
+                                    if (toolTraces.size >= 4) {
+                                        Text(
+                                            text = "已执行 ${toolTraces.size} 次工具操作",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                            modifier = Modifier.padding(bottom = 6.dp)
+                                        )
+                                    }
                                     toolTraces.forEach { trace ->
                                         ToolTraceLine(UiTrace(trace.name, trace.status, trace.summary))
                                     }
@@ -687,7 +706,9 @@ fun AgentChatScreen(
                                 markdownEnabled = settings.markdownEnabled,
                                 userAvatarUri = settings.userAvatarUri,
                                 aiAvatarUri = conversation?.persona?.aiAvatarUri,
-                                aiName = conversation?.persona?.name.orEmpty(),
+                                aiName = conversation?.let {
+                                    it.persona.name.ifBlank { it.title }
+                                }.orEmpty(),
                                 animateEntry = message.timestamp >= openedAtMs,
                                 isLatestAi = message.id == latestAi?.id,
                                 segmentEnds = effectiveSegmentEnds,
@@ -702,7 +723,7 @@ fun AgentChatScreen(
                                 onContinue = { viewModel.continueGeneration() },
                                 onRewrite = { rewritingMessageId = message.id },
                                 onWithdraw = if (message.id == lastUserMsgId) {
-                                    { viewModel.withdrawMessage(message.id) }
+                                    { viewModel.requestAgentWithdraw(message.id) }
                                 } else null
                             )
                         }
@@ -856,6 +877,57 @@ fun AgentChatScreen(
             },
             dismissButton = {
                 TextButton(onClick = { viewModel.confirmTool(false) }) { Text("取消") }
+            }
+        )
+    }
+
+    // ===== Agent 撤回确认弹窗：本轮有创建/更改项目时列出清单；无项目时只问「确认撤回？」 =====
+    pendingWithdraw?.let { proposal ->
+        AlertDialog(
+            onDismissRequest = { viewModel.cancelAgentWithdraw() },
+            title = { Text("确认撤回？") },
+            text = {
+                if (proposal.hasEffects) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            text = "本轮有创建/更改项目：",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        proposal.createdPaths.forEach { path ->
+                            Text(
+                                text = "· 创建 $path",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        proposal.changedItems.forEach { item ->
+                            Text(
+                                text = "· $item",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Text(
+                            text = "撤回将删除本轮创建的文件并移除消息，不可恢复。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        )
+                    }
+                } else {
+                    Text(
+                        text = "撤回该消息（及之后的所有消息）？",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.confirmAgentWithdraw() }) { Text("确认撤回") }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.cancelAgentWithdraw() }) { Text("取消") }
             }
         )
     }
@@ -1016,8 +1088,12 @@ private fun AgentMessageLine(
             )
             Spacer(modifier = Modifier.size(10.dp))
         }
+        // weight(1f, fill=false)：长消息时正文列最多占满剩余空间（行宽 - 头像区），
+        // 头像永远留在屏幕内，不会被挤出（短消息仍按内容自适应宽度）
         Column(
-            modifier = Modifier.widthIn(max = 460.dp),
+            modifier = Modifier
+                .weight(1f, fill = false)
+                .widthIn(max = 460.dp),
             horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
         ) {
             if (message.isThinking) {
@@ -1423,7 +1499,7 @@ private data class UiTrace(
     val summary: String?
 )
 
-/** 单条工具痕迹：亮灰色工具名（点击文字展开详情），与正文空行分隔；加载中为工具名滑动高亮。 */
+/** 单条工具痕迹：灰色工具名（点击展开/收起详情，拉开/收起动画），与正文空行分隔；加载中为工具名滑动高亮。 */
 @Composable
 private fun ToolTraceLine(trace: UiTrace) {
     val colorScheme = MaterialTheme.colorScheme
@@ -1437,11 +1513,13 @@ private fun ToolTraceLine(trace: UiTrace) {
     }
     var expanded by remember(trace.name, trace.summary) { mutableStateOf(false) }
     Column(modifier = Modifier.fillMaxWidth()) {
-        // 点击工具名文字展开/收起详情
+        // 点击工具名文字展开/收起详情（拉开 / 收起动画）
         Text(
             text = AgentToolRegistry.displayName(trace.name),
             style = MaterialTheme.typography.labelMedium,
-            color = colorScheme.onSurfaceVariant,
+            // 固定灰色（Material 灰 500）：暗色/亮色主题下都是明显的灰色，不会近似白色
+            color = Color(0xFF9E9E9E),
+            fontStyle = FontStyle.Italic,
             fontWeight = FontWeight.Medium,
             modifier = Modifier
                 .clip(RoundedCornerShape(6.dp))
@@ -1451,20 +1529,30 @@ private fun ToolTraceLine(trace: UiTrace) {
                 ) { expanded = !expanded }
                 .padding(vertical = 2.dp, horizontal = 2.dp)
         )
-        if (expanded) {
-            Text(
-                text = if (trace.status == "done") "✓ 成功" else "✕ 失败",
-                style = MaterialTheme.typography.labelSmall,
-                color = if (trace.status == "done") colorScheme.primary else colorScheme.error,
-                modifier = Modifier.padding(start = 8.dp, top = 4.dp)
-            )
-            trace.summary?.takeIf { it.isNotBlank() }?.let { summary ->
+        AnimatedVisibility(
+            visible = expanded,
+            enter = expandVertically(
+                animationSpec = tween(Motion.DurationShort, easing = Motion.EasingEmphasizedDecelerate)
+            ) + fadeIn(tween(Motion.DurationShort, easing = Motion.EasingEmphasizedDecelerate)),
+            exit = shrinkVertically(
+                animationSpec = tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate)
+            ) + fadeOut(tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate))
+        ) {
+            Column {
                 Text(
-                    text = summary,
+                    text = if (trace.status == "done") "✓ 成功" else "✕ 失败",
                     style = MaterialTheme.typography.labelSmall,
-                    color = colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
-                    modifier = Modifier.padding(start = 8.dp, top = 2.dp)
+                    color = if (trace.status == "done") colorScheme.primary else colorScheme.error,
+                    modifier = Modifier.padding(start = 8.dp, top = 4.dp)
                 )
+                trace.summary?.takeIf { it.isNotBlank() }?.let { summary ->
+                    Text(
+                        text = summary,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                        modifier = Modifier.padding(start = 8.dp, top = 2.dp)
+                    )
+                }
             }
         }
     }

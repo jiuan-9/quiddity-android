@@ -1,5 +1,9 @@
 package com.quiddity.app
 
+import android.Manifest
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.view.Display
@@ -7,34 +11,26 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.background
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.size
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Density
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
-import com.quiddity.app.active.OperationPipController
+import com.quiddity.app.active.OperationNotifyController
+import com.quiddity.app.data.model.ConversationType
 import com.quiddity.app.di.ServiceLocator
+import com.quiddity.app.ui.navigation.QuiddityRoute
 import com.quiddity.app.ui.navigation.QuiddityNavHost
 import com.quiddity.app.ui.theme.QuiddityTheme
 import kotlinx.coroutines.flow.SharingStarted
@@ -69,13 +65,29 @@ import kotlinx.coroutines.launch
 // 当前规则：仅承载 Compose 根容器；状态栏图标颜色跟随应用主题。
 class MainActivity : ComponentActivity() {
 
-    // ===== 屏幕操作小窗（PiP）：操作状态文本 + 小窗模式标记（全屏时隐藏状态层） =====
-    private var pipStatusText by androidx.compose.runtime.mutableStateOf("正在操作屏幕")
-    private var pipMode by androidx.compose.runtime.mutableStateOf(false)
+    /** 通知深链待消费的会话路由（主动消息 / 行动弹窗点击后直接进入对应会话框）。 */
+    private var pendingConversationRoute by androidx.compose.runtime.mutableStateOf<String?>(null)
+
+    /** Android 13+ 通知权限申请（首次行动弹窗被系统静默丢弃时触发）。 */
+    private val notificationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* 授权结果无需处理 */ }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         super.onCreate(savedInstanceState)
+        // 行动通知弹窗宿主：Agent 执行行动类工具时由应用发系统通知弹窗说明正在进行的操作
+        OperationNotifyController.attach(this)
+        OperationNotifyController.onRequestNotificationPermission = {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+        pendingConversationRoute = conversationRouteFromIntent(intent)
         // 全局沉浸式（内容延伸到系统栏，壁纸/背景铺满全屏）。
         // 键盘处理在聊天页内完成：窗口可见区域测量键盘高度 + 内容平滑跟随（见 ChatScreen）。
         enableEdgeToEdge()
@@ -97,17 +109,6 @@ class MainActivity : ComponentActivity() {
                 started = SharingStarted.WhileSubscribed(5_000L),
                 initialValue = ServiceLocator.settingsRepository.currentSnapshot()
             )
-
-        // ===== 屏幕操作小窗（PiP）桥注册：Agent 执行模拟操作时自动进小窗 =====
-        // 目标应用保持全屏供 AI 操作，Quiddity 以小窗展示操作状态；退出由用户点开或
-        // AI 主动调用（global_action exit_pip），不自动恢复。
-        OperationPipController.onEnterPipRequest = { status ->
-            runOnUiThread { enterOperationPip(status) }
-        }
-        OperationPipController.onStatusUpdate = { text ->
-            runOnUiThread { pipStatusText = text }
-        }
-        OperationPipController.inPip = false
 
         // ===== 三条开发规范（位于文件中间位置） =====
         // 1. 问题修复规范：所有代码问题修复必须采用系统性解决方案，严禁使用临时性补丁或 hack 手段。
@@ -143,88 +144,58 @@ class MainActivity : ComponentActivity() {
             CompositionLocalProvider(LocalDensity provides scaledDensity) {
                 Box(modifier = Modifier.fillMaxSize()) {
                     QuiddityTheme(darkMode = settings.darkMode) {
-                        QuiddityNavHost()
-                    }
-                    // PiP 小窗状态层：全屏时隐藏；进入小窗后盖住聊天，只显示操作状态。
-                    // 用叠加层而非替换 NavHost，避免导航状态因组合切换丢失。
-                    if (pipMode) {
-                        PipStatusOverlay(statusText = pipStatusText)
+                        QuiddityNavHost(
+                            pendingConversationRoute = pendingConversationRoute,
+                            onPendingConversationConsumed = { pendingConversationRoute = null }
+                        )
                     }
                 }
             }
         }
     }
 
-    // ===== 屏幕操作小窗（PiP）：进入 / 退出 / 状态更新 =====
-    // 自动进入需要 Android 12+（前台应用可无手势请求）；Android 8~11 不支持自动进入，保持全屏现状。
-    private fun enterOperationPip(status: String) {
-        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.S) return
-        if (pipMode) {
-            pipStatusText = status
-            return
-        }
-        val store = ServiceLocator.agentStore
-        if (store?.snapshot()?.pipOnScreenOps == false) return
-        pipStatusText = status
-        runCatching {
-            enterPictureInPictureMode(
-                android.app.PictureInPictureParams.Builder()
-                    .setAspectRatio(android.util.Rational(16, 9))
-                    .build()
-            )
-        }
-    }
-
-    // 注：Android 无编程退出画中画的 API——进入小窗后恢复全屏只能由用户点击小窗完成。
-
-    override fun onPictureInPictureModeChanged(
-        isInPictureInPictureMode: Boolean,
-        newConfig: android.content.res.Configuration
-    ) {
-        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
-        OperationPipController.inPip = isInPictureInPictureMode
-        pipMode = isInPictureInPictureMode
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        pendingConversationRoute = conversationRouteFromIntent(intent)
     }
 
     override fun onDestroy() {
-        OperationPipController.onEnterPipRequest = null
-        OperationPipController.onStatusUpdate = null
-        OperationPipController.inPip = false
+        OperationNotifyController.detach(this)
         super.onDestroy()
     }
-}
 
-/** PiP 小窗状态层：深色全屏 + 居中大字操作状态（小窗内可读），提示用户点按恢复。 */
-@Composable
-private fun PipStatusOverlay(statusText: String) {
-    val colorScheme = MaterialTheme.colorScheme
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(androidx.compose.ui.graphics.Color(0xFF1B1B1F)),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-                text = "🤖",
-                fontSize = 48.sp,
-                style = MaterialTheme.typography.displayMedium
-            )
-            Spacer(modifier = Modifier.size(12.dp))
-            Text(
-                text = statusText,
-                style = MaterialTheme.typography.titleMedium,
-                color = androidx.compose.ui.graphics.Color.White,
-                textAlign = TextAlign.Center
-            )
-            Spacer(modifier = Modifier.size(8.dp))
-            Text(
-                text = "AI 正在操作屏幕",
-                style = MaterialTheme.typography.labelSmall,
-                color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.6f)
-            )
+    /** 解析通知深链 Intent → 会话路由（agentchat/{id} / chat/{id}）；无会话参数返回 null。 */
+    private fun conversationRouteFromIntent(intent: Intent?): String? {
+        val conversationId = intent?.getStringExtra(EXTRA_OPEN_CONVERSATION_ID) ?: return null
+        val typeName = intent.getStringExtra(EXTRA_OPEN_CONVERSATION_TYPE)
+        return if (typeName == ConversationType.AGENT.name) {
+            QuiddityRoute.AgentChat.create(conversationId)
+        } else {
+            QuiddityRoute.Chat.create(conversationId)
         }
     }
+
+    companion object {
+        const val EXTRA_OPEN_CONVERSATION_ID = "open_conversation_id"
+        const val EXTRA_OPEN_CONVERSATION_TYPE = "open_conversation_type"
+
+        /** 构造跳转到指定会话的应用内 Intent（主动消息 / 行动弹窗通知点击使用）。 */
+        fun conversationIntent(
+            context: Context,
+            conversationId: String,
+            conversationType: ConversationType
+        ): Intent = Intent(context, MainActivity::class.java).apply {
+            addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP
+            )
+            putExtra(EXTRA_OPEN_CONVERSATION_ID, conversationId)
+            putExtra(EXTRA_OPEN_CONVERSATION_TYPE, conversationType.name)
+        }
+    }
+
 }
 
 /**

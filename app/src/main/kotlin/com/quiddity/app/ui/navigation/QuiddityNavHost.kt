@@ -13,6 +13,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.platform.LocalContext
@@ -81,10 +82,26 @@ import com.quiddity.app.ui.theme.Motion
 //   同时 popEnterTransition 让主页从左视差滑入——过渡期间双页面同屏，底层露出真正的 HomeScreen。
 // - 主页前进时不动画（exit=None），后退时从左视差滑入（popEnter）。
 @Composable
-fun QuiddityNavHost() {
+fun QuiddityNavHost(
+    pendingConversationRoute: String? = null,
+    onPendingConversationConsumed: () -> Unit = {}
+) {
     val navController = rememberNavController()
     val navigateThrottle = remember { NavigationThrottle() }
     val settingsRepo = remember { ServiceLocator.settingsRepository }
+
+    // ===== 通知深链：主动消息 / 行动弹窗点击后直接进入对应会话框 =====
+    // MainActivity 收到带会话参数的 Intent 后传入路由，此处消费并跳转；跳转后回调清空，
+    // 保证同一会话被再次点击时 LaunchedEffect 仍能重新触发。
+    LaunchedEffect(pendingConversationRoute) {
+        val route = pendingConversationRoute ?: return@LaunchedEffect
+        if (route.startsWith(QuiddityRoute.Chat.PATTERN_PREFIX) ||
+            route.startsWith(QuiddityRoute.AgentChat.PATTERN_PREFIX)
+        ) {
+            navigateThrottle.tryNavigate { navController.navigate(route) }
+        }
+        onPendingConversationConsumed()
+    }
 
     // ===== 版本更新（每次进入前台自动检查，对应算法：检查时机 = 每次 ON_RESUME） =====
     val updateController = rememberUpdateController()
@@ -154,7 +171,8 @@ fun QuiddityNavHost() {
                     settingsRepo,
                     ServiceLocator.conversationRepository,
                     ServiceLocator.apiCatalogManager,
-                    ServiceLocator.characterRepository
+                    ServiceLocator.characterRepository,
+                    ServiceLocator.agentStore
                 )
             )
             val settings by settingsVm.settings.collectAsStateWithLifecycle()
@@ -306,7 +324,8 @@ fun QuiddityNavHost() {
                     settingsRepo,
                     ServiceLocator.conversationRepository,
                     ServiceLocator.apiCatalogManager,
-                    ServiceLocator.characterRepository
+                    ServiceLocator.characterRepository,
+                    ServiceLocator.agentStore
                 )
             )
             ChatScreen(
@@ -359,7 +378,8 @@ fun QuiddityNavHost() {
                     settingsRepo,
                     ServiceLocator.conversationRepository,
                     ServiceLocator.apiCatalogManager,
-                    ServiceLocator.characterRepository
+                    ServiceLocator.characterRepository,
+                    ServiceLocator.agentStore
                 )
             )
             AgentChatScreen(
@@ -395,6 +415,7 @@ sealed class QuiddityRoute(val path: String) {
     }
     data object Chat : QuiddityRoute("chat/{convId}") {
         const val PATTERN = "chat/{convId}?messageId={messageId}"
+        const val PATTERN_PREFIX = "chat/"
         const val ARG_CONV_ID = "convId"
         const val ARG_MESSAGE_ID = "messageId"
         fun create(convId: String, messageId: String? = null) =
@@ -411,6 +432,7 @@ sealed class QuiddityRoute(val path: String) {
 
     data object AgentChat : QuiddityRoute("agentchat/{convId}") {
         const val PATTERN = "agentchat/{convId}"
+        const val PATTERN_PREFIX = "agentchat/"
         const val ARG_CONV_ID = "convId"
         fun create(convId: String) = "agentchat/$convId"
         val arguments = listOf(

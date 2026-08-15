@@ -121,6 +121,6 @@ class AgentToolDefinitionTest {
     private fun testContext(): AgentContext = AgentContext(
         conversation = null,
         switches = com.quiddity.app.data.local.AgentToolSwitches(),
-        whitelist = emptySet()
+        blacklist = emptySet()
     )
 }

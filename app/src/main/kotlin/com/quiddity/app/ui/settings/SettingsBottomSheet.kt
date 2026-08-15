@@ -488,8 +488,8 @@ fun SettingsBottomSheet(
                             ToggleRow(
                                 icon = Icons.Filled.Notifications,
                                 title = "主动消息",
-                                subtitle = if (settings.proactiveMessageEnabled) "已开启（需在会话内单独启用）"
-                                else "AI 在指定时间主动发消息",
+                                subtitle = if (settings.proactiveMessageEnabled) "已开启（全局总开关，会话内可单独启用）"
+                                else "关闭后所有会话的主动消息停止",
                                 checked = settings.proactiveMessageEnabled,
                                 onCheckedChange = { enabled ->
                                     if (enabled) {
@@ -842,9 +842,10 @@ fun SettingsBottomSheet(
         if (showProactiveDialog) {
             ConfirmDialog(
                 title = "主动消息",
-                message = "为确保到点准时触发，建议同时完成：1) 将本应用的【电池优化】设为“不受限制”；" +
-                    "2) Android 12+ 在【闹钟和提醒】中允许本应用使用精确闹钟；3) 允许【自启动】。下方设置项会实时显示这几项状态并提供一键跳转。" +
-                    "总设置仅表示您已了解该功能，您需前往对应会话中单独开启该会话的时间库功能。",
+                message = "开启后，你可以在各会话的菜单中单独启用/停用主动消息；" +
+                    "关闭后所有会话的主动消息立即停止（会话内开关同时置灰）。" +
+                    "为确保到点准时触发，建议同时完成：1) 将本应用的【电池优化】设为“不受限制”；" +
+                    "2) Android 12+ 在【闹钟和提醒】中允许本应用使用精确闹钟；3) 允许【自启动】。下方设置项会实时显示这几项状态并提供一键跳转。",
                 confirmText = "我知道了",
                 cancelText = "取消",
                 onConfirm = {
@@ -1115,10 +1116,21 @@ private fun CenterGrabBar(
 internal fun SettingsSectionCard(
     title: String,
     modifier: Modifier = Modifier,
+    /**
+     * 大分区是否默认展开。
+     * - false（默认）：收起，点头部展开；
+     * - true：进入页面即展开（Agent 设置-支持 等需要用户第一时间看到入口的场景）。
+     */
+    defaultExpanded: Boolean = false,
+    /**
+     * 是否使用统一加高的头部（60dp，约常规 2 倍）。
+     * Agent 设置面板的所有大项都传 true，保证未展开时每张卡片等高、触控面积更大。
+     */
+    tallHeader: Boolean = false,
     content: @Composable ColumnScope.() -> Unit
 ) {
-    // 大分区默认收起，点头部展开/收起
-    var expanded by rememberSaveable(title) { mutableStateOf(false) }
+    // 大分区默认收起（可指定默认展开），点头部展开/收起
+    var expanded by rememberSaveable(title) { mutableStateOf(defaultExpanded) }
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -1135,7 +1147,15 @@ internal fun SettingsSectionCard(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null
                 ) { expanded = !expanded }
-                .padding(start = 12.dp, end = 8.dp, top = 6.dp, bottom = 8.dp),
+                // 统一加高头部（Agent 设置大项）：固定 60dp 等高；常规面板保持原内边距
+                .then(if (tallHeader) Modifier.height(60.dp) else Modifier)
+                .then(
+                    if (tallHeader) {
+                        Modifier.padding(horizontal = 12.dp)
+                    } else {
+                        Modifier.padding(start = 12.dp, end = 8.dp, top = 6.dp, bottom = 8.dp)
+                    }
+                ),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(

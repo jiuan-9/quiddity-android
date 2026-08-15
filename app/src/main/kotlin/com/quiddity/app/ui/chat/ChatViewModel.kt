@@ -26,6 +26,7 @@ import com.quiddity.app.domain.VisionOcrService
 import com.quiddity.app.util.IdGenerator
 import com.quiddity.app.util.ImageUtils
 import com.quiddity.app.util.QuiddityConstants
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -644,6 +645,14 @@ class ChatViewModel(
             _isGenerating.value = true
             _toolTraces.value = emptyList()
             _pendingToolConfirm.value = null
+            // Agent 模式：回复期间启动前台任务服务，用户切后台时进程不被回收，
+            // 通知栏统一显示「潮水无声，静待回荡」（Android 8+ 表现一致）
+            val agentTaskStarted = conv.type == com.quiddity.app.data.model.ConversationType.AGENT
+            if (agentTaskStarted) {
+                com.quiddity.app.active.AgentTaskService.start(
+                    com.quiddity.app.di.ServiceLocator.applicationContext
+                )
+            }
             try {
                 replyRunStart = System.currentTimeMillis()
                 replyRunChars = 0
@@ -679,6 +688,11 @@ class ChatViewModel(
                     _isGenerating.value = false
                     _toolTraces.value = emptyList()
                     _pendingToolConfirm.value = null
+                }
+                if (agentTaskStarted) {
+                    com.quiddity.app.active.AgentTaskService.stop(
+                        com.quiddity.app.di.ServiceLocator.applicationContext
+                    )
                 }
                 settleInterruptedStreams()
                 notifyIdleIfNoWork()
@@ -971,6 +985,14 @@ class ChatViewModel(
             // 用户停止生成 / 异常退出后，最后一条消息可能仍是 streaming=true，
             // 这种状态会卡住 UI（光标不消失），且与新 run 的消息产生视觉混乱
             cleanupStaleStreamingMessages()
+            // Agent 模式（重说 / 继续说）：同样启动前台任务服务保障后台存活
+            val agentTaskStarted = conversation.value?.type ==
+                com.quiddity.app.data.model.ConversationType.AGENT
+            if (agentTaskStarted) {
+                com.quiddity.app.active.AgentTaskService.start(
+                    com.quiddity.app.di.ServiceLocator.applicationContext
+                )
+            }
             try {
                 block()
             } catch (c: kotlinx.coroutines.CancellationException) {
@@ -984,6 +1006,11 @@ class ChatViewModel(
                     _isGenerating.value = false
                     _toolTraces.value = emptyList()
                     _pendingToolConfirm.value = null
+                }
+                if (agentTaskStarted) {
+                    com.quiddity.app.active.AgentTaskService.stop(
+                        com.quiddity.app.di.ServiceLocator.applicationContext
+                    )
                 }
                 settleInterruptedStreams()
                 notifyIdleIfNoWork()
@@ -1086,12 +1113,6 @@ class ChatViewModel(
             }
             is ChatRepository.Event.ToolUse -> {
                 _toolTraces.value = _toolTraces.value + ToolTrace(event.toolName, "running", null)
-                // 屏幕操作类工具：请求进入画中画小窗（目标应用保持全屏，Quiddity 小窗展示状态）
-                if (event.toolName in SCREEN_OP_TOOLS) {
-                    com.quiddity.app.active.OperationPipController.requestEnterPip(
-                        "正在${com.quiddity.app.domain.agent.AgentToolRegistry.actionFor(event.toolName)}"
-                    )
-                }
             }
             is ChatRepository.Event.ToolResult -> {
                 val updated = _toolTraces.value.toMutableList()
@@ -1106,17 +1127,28 @@ class ChatViewModel(
                     updated += ToolTrace(event.toolName, if (event.ok) "done" else "error", event.summary)
                 }
                 _toolTraces.value = updated
-                if (event.toolName in SCREEN_OP_TOOLS) {
-                    com.quiddity.app.active.OperationPipController.updateStatus(
-                        if (event.ok) "操作完成" else "操作失败"
-                    )
-                }
             }
             is ChatRepository.Event.ToolConfirmBatch -> {
                 _pendingToolConfirm.value = PendingToolConfirm(
                     items = event.items,
                     resume = event.resume
                 )
+            }
+            is ChatRepository.Event.AgentRoundEffects -> {
+                // 本轮行为追踪结果：固化进最后一条 AI 消息（撤回时按 createdPaths 删除创建物）
+                val target = lastCompletedAiMessage?.takeIf {
+                    it.role == Role.ASSISTANT && !it.isNotice && !it.isThinking
+                } ?: _messages.value.lastOrNull {
+                    it.role == Role.ASSISTANT && !it.isNotice && !it.isThinking
+                }
+                if (target != null) {
+                    conversationRepository.updateMessage(
+                        target.copy(
+                            createdPaths = event.createdPaths,
+                            changedItems = event.changedItems
+                        )
+                    )
+                }
             }
             is ChatRepository.Event.Done -> {
                 // 工具调用历史固化进最后一条 AI 消息：生成结束后痕迹不再从内存读取，
@@ -1149,6 +1181,8 @@ class ChatViewModel(
                 _activeSegmentEnds.value = emptyList()
                 _toolTraces.value = emptyList()
                 _pendingToolConfirm.value = null
+                // 任务结束兜底清理行动通知弹窗（正常流程每一步的完成弹窗会自动消失）
+                com.quiddity.app.active.OperationNotifyController.dismiss()
             }
             is ChatRepository.Event.Truncated -> {
                 // 回复被截断：不静默吞掉——群聊插入可见提示气泡，私聊弹提示
@@ -1180,6 +1214,7 @@ class ChatViewModel(
             is ChatRepository.Event.Error -> {
                 _toolTraces.value = emptyList()
                 _pendingToolConfirm.value = null
+                com.quiddity.app.active.OperationNotifyController.dismiss()
                 _errorEvent.value = event.throwable.message ?: "未知错误"
                 _chatError.value = chatRepository.classify(event.throwable)
             }
@@ -1256,6 +1291,7 @@ class ChatViewModel(
         cancelPendingSend() // 同时取消 pending 的发送延迟
         _toolTraces.value = emptyList()
         _pendingToolConfirm.value = null
+        com.quiddity.app.active.OperationNotifyController.dismiss()
         _isGenerating.value = false
         settleInterruptedStreams()
         notifyIdleIfNoWork()
@@ -1676,6 +1712,97 @@ class ChatViewModel(
         if (target.role == Role.USER && (target.content.isNotBlank() || target.imageUri != null)) {
             _pendingReedit.value = PendingReedit(target.content, target.ocrText, target.imageUri)
         }
+    }
+
+    // ===== Agent 模式撤回：确认弹窗 + 创建物删除（1.6.0 架构重整） =====
+
+    /**
+     * Agent 撤回提案：目标消息 + 本轮创建/更改项目清单。
+     * [createdPaths] 为本轮创建的文件（确认后删除）；[changedItems] 为更改项摘要（仅提示）。
+     */
+    data class WithdrawProposal(
+        val targetId: String,
+        val createdPaths: List<String>,
+        val changedItems: List<String>
+    ) {
+        /** 本轮是否有创建/更改项目（决定弹窗文案是否带项目清单）。 */
+        val hasEffects: Boolean get() = createdPaths.isNotEmpty() || changedItems.isNotEmpty()
+    }
+
+    /** Agent 撤回确认弹窗状态（null = 未弹窗）。 */
+    private val _pendingWithdraw = MutableStateFlow<WithdrawProposal?>(null)
+    val pendingWithdraw: StateFlow<WithdrawProposal?> = _pendingWithdraw.asStateFlow()
+
+    /**
+     * Agent 模式撤回入口：先收集本轮创建/更改项目，弹出确认框。
+     *
+     * 语义（与私聊撤回一致）：删除目标消息（含）之后的所有消息；
+     * 确认后删除本轮创建的文件（createdPaths），更改项仅提示不可自动恢复。
+     */
+    fun requestAgentWithdraw(messageId: String) {
+        if (_isGenerating.value) return
+        val current = _messages.value
+        if (current.isEmpty()) return
+        val targetIndex = current.indexOfFirst { it.id == messageId }
+        if (targetIndex < 0) return
+        // 收集目标消息（含）之后所有 AI 消息上固化的本轮创建/更改清单
+        val created = current.subList(targetIndex, current.size)
+            .flatMap { it.createdPaths }
+            .distinct()
+        val changed = current.subList(targetIndex, current.size)
+            .flatMap { it.changedItems }
+            .distinct()
+        _pendingWithdraw.value = WithdrawProposal(
+            targetId = messageId,
+            createdPaths = created,
+            changedItems = changed
+        )
+    }
+
+    /** Agent 撤回确认：删除创建物 + 删除消息，随后提供「重新编辑」入口。 */
+    fun confirmAgentWithdraw() {
+        val proposal = _pendingWithdraw.value ?: return
+        _pendingWithdraw.value = null
+        val current = _messages.value
+        val targetIndex = current.indexOfFirst { it.id == proposal.targetId }
+        if (targetIndex < 0) return
+        val target = current[targetIndex]
+        val newHistory = current.subList(0, targetIndex).toList()
+        viewModelScope.launch {
+            val executors = com.quiddity.app.di.ServiceLocator.agentExecutors
+            // 1. 删除本轮创建的文件（rm -rf，仅删确实存在的路径；失败不阻塞消息撤回）
+            if (proposal.createdPaths.isNotEmpty()) {
+                withContext(Dispatchers.IO) {
+                    executors.deleteFilesForWithdraw(proposal.createdPaths)
+                }
+            }
+            // 2. 恢复可逆的应用状态（停用 → 启用 / 启用 → 停用；不可逆项仅提示）
+            proposal.changedItems.forEach { item ->
+                val enable = item.startsWith("停用 ")
+                val disable = item.startsWith("启用 ")
+                if (enable || disable) {
+                    val pkg = item.substringAfter(if (enable) "停用 " else "启用 ")
+                        .substringBefore("（")
+                        .trim()
+                    if (pkg.isNotBlank()) {
+                        withContext(Dispatchers.IO) {
+                            executors.revertAppEnabledState(pkg, enable)
+                        }
+                    }
+                }
+            }
+            // 3. 删除消息（含目标）及其后所有
+            conversationRepository.replaceMessages(conversationId, newHistory)
+        }
+        // 撤回后提供「重新编辑」入口（与私聊一致）
+        if (target.role == Role.USER && (target.content.isNotBlank() || target.imageUri != null)) {
+            _pendingReedit.value = PendingReedit(target.content, target.ocrText, target.imageUri)
+        }
+    }
+
+    /** Agent 撤回取消：关闭确认弹窗。 */
+    fun cancelAgentWithdraw() {
+        _pendingWithdraw.value = null
     }
 
     /**
@@ -2428,6 +2555,8 @@ class ChatViewModel(
     fun ensureTimeLibraryGenerated() {
         viewModelScope.launch {
             val conv = conversation.value ?: return@launch
+            // 全局总开关关闭：静默跳过（不生成、不提示）
+            if (!settingsRepository.currentSnapshot().proactiveMessageEnabled) return@launch
             if (!conv.activeMessageEnabled) return@launch
             val today = java.time.LocalDate.now().toString()
             if (!TimeLibraryEngine.shouldGenerate(true, conv.timeLibraryGeneratedDate, today)) return@launch
@@ -2479,17 +2608,6 @@ class ChatViewModelFactory(
 data class PendingToolConfirm(
     val items: List<ChatRepository.ToolConfirmItem>,
     val resume: (Boolean) -> Unit
-)
-
-/**
- * 屏幕操作类工具：模拟点击/滑动/全局动作等改变前台屏幕状态，
- * 执行时自动进入画中画小窗（目标应用保持全屏，Quiddity 小窗展示操作状态）。
- * open_app 仅做系统跳转（跳转后目标应用即前台），不在此列，由后续操作工具触发小窗。
- */
-private val SCREEN_OP_TOOLS = setOf(
-    "click", "long_press", "click_text", "scroll", "global_action",
-    "input_text", "click_id", "click_desc", "drag", "scroll_to_text",
-    "lock_screen"
 )
 
 /**

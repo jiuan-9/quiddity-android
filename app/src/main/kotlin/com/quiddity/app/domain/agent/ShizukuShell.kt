@@ -36,4 +36,12 @@ data class AgentShellResult(
 interface ShizukuShell {
     fun isGranted(): Boolean
     suspend fun exec(command: Array<String>): AgentShellResult
+
+    /**
+     * 申请 Shizuku 授权并等待结果：
+     * - 已授权：立即返回 true；
+     * - Shizuku 未运行 / 无法发起请求：返回 false；
+     * - 未授权：拉起系统授权弹窗，等待用户决定后返回结果（超时按 false 处理）。
+     */
+    suspend fun requestPermissionAndWait(): Boolean
 }

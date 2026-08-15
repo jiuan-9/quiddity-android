@@ -84,7 +84,11 @@ class ActiveMessageService : Service() {
                 if (t is CancellationException) throw t
                 Log.e("ActiveMessageService", "主动消息处理失败", t)
             } finally {
-                stopSelf()
+                // 与 AgentTaskService 同理：startForegroundService 后立即 stopSelf
+                // 存在系统超时竞态（ForegroundServiceDidNotStartInTimeException），
+                // 延迟 1 秒再停止，确保 startForeground 已生效（1.6.2 加固）
+                android.os.Handler(android.os.Looper.getMainLooper())
+                    .postDelayed({ stopSelf() }, 1000)
             }
         }
         return START_NOT_STICKY
@@ -124,8 +128,10 @@ class ActiveMessageService : Service() {
     private fun buildNotification(): Notification =
         NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle("主动消息")
-            .setContentText("正在处理定时消息…")
+            // 文案约定（1.6.0）：不再使用「主动消息 xx 中」这类半成品字样；
+            // 前台处理期间统一显示「潮水无声，静待回荡」，处理完成后自动消失
+            .setContentTitle("潮水无声")
+            .setContentText("静待回荡")
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .build()

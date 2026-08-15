@@ -614,9 +614,10 @@ fun MessageBubble(
                             .border(1.dp, bubbleBorderColor, BubbleShape(isUser))
                             .background(bubbleColor)
                     ) {
+                        // 内容自适应宽度（不 fillMaxWidth）：短消息窄气泡、长消息顶到上限，
+                        // 修复「气泡宽度固定」——由文本实际宽度决定，而不是永远占满可用宽度
                         Column(
                             modifier = Modifier
-                                .fillMaxWidth()
                                 .padding(horizontal = 14.dp, vertical = 10.dp)
                         ) {
                             // ===== 应用内本地思考：气泡内可展开/收起（思考中为高亮滑块） =====

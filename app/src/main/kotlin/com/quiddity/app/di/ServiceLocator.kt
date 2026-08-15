@@ -68,6 +68,10 @@ object ServiceLocator {
     private lateinit var appContext: Context
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
+    /** 全局 Application Context（供无 UI 场景的前台服务启动等使用）。 */
+    val applicationContext: Context
+        get() = appContext
+
     lateinit var settingsStore: SettingsStore
         private set
     lateinit var conversationStore: ConversationStore
@@ -81,6 +85,10 @@ object ServiceLocator {
     lateinit var shizukuClient: ShizukuClient
         private set
     lateinit var chatApi: ChatApi
+        private set
+
+    /** Agent 工具执行器（撤回删除创建物等场景直接复用）。 */
+    lateinit var agentExecutors: AgentExecutors
         private set
 
     lateinit var settingsRepository: SettingsRepository
@@ -155,20 +163,19 @@ object ServiceLocator {
             apiCatalogManager
         )
         docsProvider = DocsProvider(apiCatalogManager)
+        agentExecutors = AgentExecutors(
+            appContext,
+            shizukuClient,
+            visionOcrService,
+            settingsRepository,
+            apiCatalogManager
+        )
         chatRepository = ChatRepository(
             api = chatApi,
             conversationRepo = conversationRepository,
             settingsRepo = settingsRepository,
             apiCatalogManager = apiCatalogManager,
-            agentToolRegistry = AgentToolRegistry.defaultRegistry(
-                AgentExecutors(
-                    appContext,
-                    shizukuClient,
-                    visionOcrService,
-                    settingsRepository,
-                    apiCatalogManager
-                )
-            ),
+            agentToolRegistry = AgentToolRegistry.defaultRegistry(agentExecutors),
             agentStore = agentStore
         )
         alarmScheduler = AlarmScheduler(appContext)

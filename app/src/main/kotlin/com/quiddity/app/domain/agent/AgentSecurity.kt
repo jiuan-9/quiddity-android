@@ -35,8 +35,8 @@ import kotlinx.serialization.json.JsonPrimitive
  * Agent 安全层：不可信包装之外的第一道程序化防线。
  *
  * - [validateArgs]：参数校验（pkg 正则、appops op/mode 枚举白名单）
- * - [whitelistGate]：写入工具要求 pkg 在 AgentStore 白名单内
- * - [executeGated]：校验 → 白名单 → 确认策略 → 执行 → 审计
+ * - [blacklistGate]：黑名单门控（默认全应用权限；黑名单内的应用/文件拒绝查看/更改/删除）
+ * - [executeGated]：校验 → 黑名单 → 确认策略 → 执行 → 审计 → 轮次效果记录
  */
 object AgentSecurity {
 
@@ -66,13 +66,38 @@ object AgentSecurity {
         "id", "uptime", "date", "stat", "find", "wc", "head", "tail", "echo"
     )
 
-    /** 需要包名白名单门控的写入工具（目标是第三方应用包名）。 */
-    private val WRITE_TARGET_TOOLS = setOf(
+    /** 目标为应用包名的工具（黑名单包名命中即拒绝）。 */
+    private val PKG_TARGET_TOOLS = setOf(
+        "app_permissions",
+        "app_install_info",
+        "app_battery",
+        "file_access",
+        "app_logs",
+        "open_app",
+        "dismiss_notification",
+        "reply_notification",
         "disable_app",
         "enable_app",
         "set_appops",
         "force_stop",
         "uninstall_app"
+    )
+
+    /** 携带文件路径参数的工具（黑名单路径命中即拒绝查看/更改/删除）。 */
+    private val PATH_TARGET_TOOLS = setOf(
+        "read_file",
+        "list_files",
+        "file_info",
+        "reveal_file",
+        "create_file",
+        "write_file",
+        "append_file",
+        "rename_file",
+        "mkdir",
+        "move_file",
+        "copy_file",
+        "delete_file",
+        "ocr_image"
     )
 
     /** 屏幕文本不可信包装：提示模型这是数据而非指令。 */
@@ -82,53 +107,11 @@ object AgentSecurity {
     fun wrapUntrustedNotifications(text: String): String = "$UNTRUSTED_NOTIFICATION_PREFIX\n$text"
 
     /**
-     * 工具开关门控：BASIC 工具默认开启，ADVANCED 工具默认关闭，
-     * 实际开关状态以 AgentStore 快照为准。
+     * 工具开关门控：v2 起为每工具独立开关（[AgentToolSwitches.isEnabled]），
+     * 工具注册表 enabledByDefault 仅用于旧数据迁移兜底。
      */
-    fun isSwitchEnabled(tool: AgentTool, switches: AgentToolSwitches): Boolean {
-        val name = tool.name
-        val raw = when (name) {
-            "list_apps" -> switches.read_apps
-            "read_screen" -> switches.sense_screen
-            "read_notifications" -> switches.sense_notifications
-            "usage_stats" -> switches.sense_usage
-            "foreground_app" -> switches.sense_usage
-            "read_system" -> switches.read_system
-            "app_permissions" -> switches.read_app_info
-            "app_install_info" -> switches.read_app_info
-            "file_access" -> switches.read_app_info
-            "app_battery" -> switches.read_battery
-            "traffic_ranking" -> switches.read_traffic
-            "screenshot" -> switches.read_screenshot
-            "system_logs" -> switches.read_logs
-            "app_logs" -> switches.read_logs
-            "read_file", "list_files", "file_info", "reveal_file" -> switches.read_files
-            "create_file", "write_file", "append_file", "rename_file", "mkdir",
-            "move_file", "copy_file", "delete_file" -> switches.write_files
-            "ocr_image" -> switches.read_ocr
-            "notify_self" -> switches.interact_notify
-            "read_clipboard" -> switches.read_clipboard
-            "write_clipboard" -> switches.write_clipboard
-            "toast_monitor" -> switches.sense_toasts
-            "notification_guard" -> switches.sense_notifications
-            "run_shell" -> switches.run_shell
-            "app_usage_detail" -> switches.sense_usage
-            "click", "long_press", "click_text", "scroll", "global_action",
-            "input_text", "click_id", "click_desc", "drag", "scroll_to_text", "lock_screen" ->
-                switches.simulate_click
-            "open_app" -> switches.open_app
-            "clear_clipboard" -> switches.write_clipboard
-            "dismiss_notification", "reply_notification" -> switches.sense_notifications
-            "schedule_notify" -> switches.interact_notify
-            "disable_app" -> switches.write_disable
-            "enable_app" -> switches.write_disable
-            "set_appops" -> switches.write_appops
-            "force_stop" -> switches.write_force_stop
-            "uninstall_app" -> switches.write_uninstall
-            else -> return true
-        }
-        return raw
-    }
+    fun isSwitchEnabled(tool: AgentTool, switches: AgentToolSwitches): Boolean =
+        switches.isEnabled(tool.name)
 
     /**
      * 参数校验。
@@ -288,21 +271,46 @@ object AgentSecurity {
     }
 
     /**
-     * 白名单门控：进阶写入工具的包名必须已加入白名单。
+     * 黑名单门控：默认全应用权限；黑名单内的应用包名与文件/目录路径，
+     * AI 无权查看、更改、删除。
+     *
+     * 匹配规则：
+     * - 包名：完全相等命中（app_permissions 等查询类工具同样拒绝——「无权查看」）
+     * - 路径：目标路径等于黑名单路径，或以黑名单目录为前缀（目录内一切被封锁）
      *
      * @return null 表示允许；否则返回中文拒绝描述。
      */
-    fun whitelistGate(tool: AgentTool, args: JsonObject, whitelist: Set<String>): String? {
-        if (tool.name !in WRITE_TARGET_TOOLS) return null
-        val pkg = (args["pkg"] as? JsonPrimitive)?.content.orEmpty()
-        if (pkg !in whitelist) {
-            return "拒绝执行：$pkg 不在白名单内，请先在 Agent 设置中添加"
+    fun blacklistGate(tool: AgentTool, args: JsonObject, blacklist: Set<String>): String? {
+        if (blacklist.isEmpty()) return null
+        val name = tool.name
+        if (name in PKG_TARGET_TOOLS) {
+            val pkg = (args["pkg"] as? JsonPrimitive)?.content.orEmpty()
+            if (pkg.isNotBlank() && pkg in blacklist) {
+                return "拒绝执行：$pkg 在黑名单内，AI 无权操作（可在 Agent 设置-权限管控-黑名单中移除）"
+            }
+        }
+        if (name in PATH_TARGET_TOOLS) {
+            val paths = listOfNotNull(
+                (args["path"] as? JsonPrimitive)?.content,
+                (args["src"] as? JsonPrimitive)?.content,
+                (args["dst"] as? JsonPrimitive)?.content
+            )
+            val hit = paths.firstOrNull { path ->
+                blacklist.any { entry ->
+                    val banned = entry.trim().trimEnd('/')
+                    if (banned.isEmpty()) return@any false
+                    path == banned || path.startsWith("$banned/")
+                }
+            }
+            if (hit != null) {
+                return "拒绝执行：$hit 在黑名单内，AI 无权查看或更改（可在 Agent 设置-权限管控-黑名单中移除）"
+            }
         }
         return null
     }
 
     /**
-     * 执行门控（校验 → 白名单 → 确认 → 执行 → 审计）。
+     * 执行门控（校验 → 黑名单 → 确认 → 执行 → 审计 → 轮次效果记录）。
      *
      * 每次确认工具要求参数携带「已确认」为真（P0 阶段由调用方
      * 在用户确认弹窗通过后补上；确认 UI 属后续阶段）。
@@ -335,17 +343,30 @@ object AgentSecurity {
             return validationError
         }
 
-        val gateError = whitelistGate(tool, effectiveArgs, ctx.whitelist)
+        val gateError = blacklistGate(tool, effectiveArgs, ctx.blacklist)
         if (gateError != null) {
             appendAudit(ctx, tool, argsText, ok = false, confirmed = confirmed(effectiveArgs))
             return gateError
         }
 
-        return runCatching {
+        val showPopup = shouldActionPopup(tool)
+        val description = AgentToolRegistry.actionDescription(tool.name, effectiveArgs)
+        val conversationId = ctx.conversation?.id
+        val conversationType = ctx.conversation?.type
+        if (showPopup) {
+            com.quiddity.app.active.OperationNotifyController.showActing(
+                description,
+                conversationId,
+                conversationType
+            )
+        }
+        val result = runCatching {
             tool.execute(ctx, effectiveArgs)
         }.fold(
             onSuccess = { result ->
                 appendAudit(ctx, tool, argsText, ok = true, confirmed = confirmed(effectiveArgs))
+                // 执行成功：记录到本轮行为追踪器（撤回时删除创建物 / 提示更改项）
+                ctx.roundEffects.record(tool.name, effectiveArgs, ok = true)
                 result
             },
             onFailure = { t ->
@@ -353,7 +374,42 @@ object AgentSecurity {
                 "工具 ${tool.name} 执行失败：${t.message ?: "未知错误"}"
             }
         )
+        if (showPopup) {
+            if (isActionSuccess(result)) {
+                com.quiddity.app.active.OperationNotifyController.showDone(
+                    description,
+                    conversationId,
+                    conversationType
+                )
+            } else {
+                com.quiddity.app.active.OperationNotifyController.showFailed(
+                    description,
+                    conversationId,
+                    conversationType
+                )
+            }
+        }
+        return result
     }
+
+    /**
+     * 是否弹行动通知：行为（ACT）/ 修改（MODIFY）/ 删除（DELETE）类工具一律弹窗，
+     * 读取类中需要用户确认的（如读取剪贴板）也弹窗；纯只读 / OCR 不弹。
+     */
+    private fun shouldActionPopup(tool: AgentTool): Boolean =
+        tool.confirm == AgentConfirmPolicy.ALWAYS_CONFIRM ||
+            (tool.category != AgentToolCategory.READ && tool.category != AgentToolCategory.OCR)
+
+    /** 行动结果是否成功（结果文案含失败语义即视为失败）。 */
+    private fun isActionSuccess(result: String): Boolean =
+        !result.contains("失败") &&
+            !result.contains("未启用") &&
+            !result.contains("未找到") &&
+            !result.contains("未获得") &&
+            !result.contains("取消") &&
+            !result.contains("超时") &&
+            !result.contains("不存在") &&
+            !result.contains("需要先开启")
 
     private fun withConfirmed(args: JsonObject): JsonObject {
         val map = args.toMutableMap()

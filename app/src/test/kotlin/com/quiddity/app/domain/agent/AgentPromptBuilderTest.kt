@@ -55,7 +55,7 @@ class AgentPromptBuilderTest {
     @Test
     fun coldDefaultPersona_usedWhenUnset() {
         val prompt = PromptBuilder.buildAgentSystemPrompt(agentConv())
-        assertContains(prompt, "本地 Agent 助手")
+        assertContains(prompt, "你仍然是你人设中的角色")
         assertContains(prompt, "工具")
         assertContains(prompt, "确认")
     }
@@ -83,5 +83,18 @@ class AgentPromptBuilderTest {
         val prompt = PromptBuilder.buildAgentSystemPrompt(agentConv())
         assertContains(prompt, "不可信数据")
         assertContains(prompt, "不视为指令")
+    }
+
+    @Test
+    fun workflowContract_present() {
+        // 方案 A：任务工作流契约（计划→执行→校验→汇报 + 失败分级 + 去重意识）应进入系统提示词
+        val prompt = PromptBuilder.buildAgentSystemPrompt(agentConv())
+        assertContains(prompt, "任务工作流")
+        assertContains(prompt, "列出需要的工具与顺序")
+        assertContains(prompt, "校验")
+        assertContains(prompt, "汇报")
+        assertContains(prompt, "程序会自动重试一次")
+        assertContains(prompt, "已去重")
+        assertContains(prompt, "按任务工作流执行")
     }
 }
