@@ -746,1089 +746,142 @@ fun ChatScreen(
                 else mod
             }
     ) {
-        if (wallpaperUri != null) {
-            AsyncImage(
-                model = coil.request.ImageRequest.Builder(LocalContext.current)
-                    .data(wallpaperUri)
-                    .size(1080)
-                    .build(),
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
-            )
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(wallpaperScrim)
-            )
-        }
+        ChatWallpaperLayer(
+            wallpaperUri = wallpaperUri,
+            wallpaperScrim = wallpaperScrim
+        )
 
         // ===== 内容层：顶栏 + 消息列表 + 输入栏（由外层 Box 的 graphicsLayer 统一驱动滑出） =====
         Column(
             modifier = Modifier
                 .fillMaxSize()
         ) {
-            // ===== 顶部栏（多选模式下切换为多选操作栏） =====
-            if (multiSelectMode) {
-                MultiSelectTopBar(
-                    selectedCount = selectedMessageIds.size,
-                    allSelected = selectedMessageIds == allSelectableIds && allSelectableIds.isNotEmpty(),
-                    onClose = { exitMultiSelect() },
-                    onSelectAll = { toggleSelectAll() }
-                )
-            } else {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .windowInsetsPadding(WindowInsets.statusBars)
-                        .height(56.dp)
-                        .padding(horizontal = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(48.dp)
-                            .clip(RoundedCornerShape(50))
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null
-                            ) { dragController.animateBackAndExit() },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "返回",
-                            tint = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
-                    Text(
-                        text = conversation?.persona?.name?.takeIf { it.isNotBlank() }
-                            ?: conversation?.title
-                            ?: "新会话",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
-                        textAlign = TextAlign.Center
-                    )
-                    // 头部不显示放大镜（私聊/群聊均无），查找聊天记录入口统一在会话设置内
-                    Box(
-                        modifier = Modifier
-                            .size(48.dp)
-                            .clip(RoundedCornerShape(50))
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null
-                            ) { dragController.toggleMenu() },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Menu,
-                            contentDescription = "菜单",
-                            tint = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
-                }
-            }
 
-            // ===== 会话内搜索条（顶栏搜索图标展开） =====
-            if (searchActive) {
-                ChatSearchBar(
-                    query = searchQuery,
-                    onQueryChange = { searchQuery = it },
-                    onClose = {
-                        searchActive = false
-                        searchQuery = ""
-                    }
-                )
-            }
-
-            // ===== 群聊 0 成员横幅（方案十.7：不能点名回复，点击跳成员管理） =====
-            if (isGroupChat && groupMembers.isEmpty()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null
-                        ) { showHamburger = true }
-                        .background(MaterialTheme.colorScheme.errorContainer)
-                        .padding(vertical = 10.dp),
-                    horizontalArrangement = Arrangement.Center
-                ) {
-                    Text(
-                        text = "请添加成员",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onErrorContainer
-                    )
-                }
-            }
+            ChatTopBarArea(
+                conversation = conversation,
+                multiSelectMode = multiSelectMode,
+                selectedMessageIds = selectedMessageIds,
+                allSelectableIds = allSelectableIds,
+                searchActive = searchActive,
+                searchQuery = searchQuery,
+                isGroupChat = isGroupChat,
+                groupEmpty = groupMembers.isEmpty(),
+                onExitMultiSelect = { exitMultiSelect() },
+                onSelectAll = { toggleSelectAll() },
+                onBack = { dragController.animateBackAndExit() },
+                onOpenMenu = { dragController.toggleMenu() },
+                onSearchQueryChange = { searchQuery = it },
+                onSearchClose = {
+                    searchActive = false
+                    searchQuery = ""
+                },
+                onOpenHamburger = { showHamburger = true }
+            )
 
             // ===== 消息列表区域（手势已挪到外层 Box，整屏生效） =====
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    // 键盘弹起时列表区域收缩（底部让位给键盘），气泡不进入顶栏、不与输入栏脱节
-                    .padding(bottom = with(density) { (-keyboardOffset.value).coerceAtLeast(0f).toDp() })
-            ) {
-                when {
-                    searchActive && searchQuery.isNotBlank() -> {
-                        val searchResults = remember(messages, searchQuery) {
-                            val q = searchQuery.trim()
-                            if (q.isEmpty()) emptyList()
-                            else ChatRecordSearch.searchResults(
-                                messages.filterNot { it.isNotice },
-                                q
-                            )
-                        }
-                        if (searchResults.isEmpty()) {
-                            Box(
-                                modifier = Modifier.fillMaxSize(),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = "未找到与“${searchQuery}”相关的消息",
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                                    textAlign = TextAlign.Center,
-                                    modifier = Modifier.padding(horizontal = 32.dp)
-                                )
-                            }
-                        } else {
-                            LazyColumn(
-                                modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(vertical = 12.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                items(searchResults, key = { it.id }) { msg ->
-                                    ChatSearchResultRow(
-                                        message = msg,
-                                        query = searchQuery,
-                                        onClick = {
-                                            searchActive = false
-                                            searchQuery = ""
-                                            pendingJumpMessageId = msg.id
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    isLoading -> Unit
-                    // 当前规则：仅有 isNotice 提示气泡时也视为空对话，保留"让AI先说"按钮
-                    messages.none { !it.isNotice } -> Box(
-                        modifier = Modifier.fillMaxSize()
-                    ) {
-                        if (isGroupChat) {
-                            Box(
-                                modifier = Modifier.fillMaxSize(),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = "暂无消息\n发送后点击下方成员头像，让 TA 回复",
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                                    textAlign = TextAlign.Center
-                                )
-                            }
-                        } else {
-                            EmptyChatState(
-                                personaName = conversation?.persona?.name.orEmpty(),
-                                onLetAiStart = { viewModel.letAiStart() },
-                                isGenerating = isGenerating
-                            )
-                        }
-                        // 场景/世界提示气泡显示在顶部，不遮挡居中的"让AI先说"按钮
-                        Column(modifier = Modifier.fillMaxWidth()) {
-                            messages.filter { it.isNotice && !it.miniAppId.isNullOrBlank() }
-                                .forEach { invite ->
-                                    MiniAppInviteCard(
-                                        title = invite.miniAppTitle?.takeIf { it.isNotBlank() }
-                                            ?: "小应用",
-                                        content = invite.content,
-                                        onClick = { invite.miniAppId?.let(onOpenMiniApp) }
-                                    )
-                                }
-                            if (sceneNoticeContent.isNotBlank()) {
-                                NoticeBubble(content = sceneNoticeContent)
-                            }
-                            if (!isGroupChat && isGenerating) {
-                                ThinkingBubble(aiAvatarUri = conversation?.persona?.aiAvatarUri)
-                            }
-                        }
-                    }
-                    else -> {
-                        val lastMsg = messages.lastOrNull()
-                        // 性能：asReversed + filterNot 每次重组都会新建整份列表，流式输出时 O(n) 分配拖累动画，
-                        // 这里按 messages 实例缓存，仅内容变化时重算。
-                        val displayMessages = remember(messages) {
-                            messages.asReversed().filterNot { it.isNotice }
-                        }
-                        // 当前会话是否启用思考（内部思考任意模型可用，思考期间动画气泡显示"思考中"）
-                        val thinkingActive = conversation?.thinkingEnabled == true
-                        // 群聊用头像栏三点表示正在回复，不显示私聊的思考气泡
-                        val showThinking = !isGroupChat && isGenerating &&
-                            (lastMsg == null || !(lastMsg.role == Role.ASSISTANT && lastMsg.isStreaming))
-                        LazyColumn(
-                            state = listState,
-                            modifier = Modifier.fillMaxSize(),
-                            // 消息从底部排列：最新一条贴近输入栏，消息少时气泡不挤在顶部
-                            reverseLayout = true,
-                            contentPadding = PaddingValues(vertical = 12.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            // 撤回后的「重新编辑」提示：reverseLayout 的第一项 = 最底部，
-                            // 显示在最后一条消息之下（与撤回互斥：生成中不可撤回，不会与思考气泡重叠）
-                            pendingReedit?.let {
-                                item(key = "reedit_notice", contentType = { "reedit" }) {
-                                    ReeditNoticeBubble(
-                                        onReedit = { reeditSheetOpen = true },
-                                        onDismiss = { viewModel.clearPendingReedit() }
-                                    )
-                                }
-                            }
-                            // 思考气泡：reverseLayout 的第一项 = 最底部，紧贴输入栏（标准"正在输入"位置）
-                            if (!isGroupChat) {
-                                item(key = "thinking_bubble", contentType = { "thinking" }) {
-                                    // 常驻 item + AnimatedVisibility：出现淡入、消失淡出，不再硬插硬删
-                                    Column(modifier = Modifier.fillMaxWidth()) {
-                                        AnimatedVisibility(
-                                            visible = showThinking,
-                                            enter = fadeIn(
-                                                tween(Motion.DurationShort, easing = Motion.EasingEmphasizedDecelerate)
-                                            ) + expandVertically(
-                                                tween(Motion.DurationShort, easing = Motion.EasingEmphasizedDecelerate)
-                                            ),
-                                            exit = fadeOut(
-                                                tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate)
-                                            ) + shrinkVertically(
-                                                tween(Motion.DurationShort, easing = Motion.EasingEmphasizedAccelerate)
-                                            )
-                                        ) {
-                                            ThinkingBubble(
-                                                aiAvatarUri = conversation?.persona?.aiAvatarUri,
-                                                thinkingLabel = if (thinkingActive) "思考中" else null
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-
-                            items(
-                                items = displayMessages,
-                                key = { it.id },
-                                contentType = { it.role.name }
-                            ) { message ->
-                                // 关键性能优化：key(message.id) + 独立 composable 让 ChatScreen 重组时
-                                // message 内容未变的气泡完全跳过重组（流式每个 token 触发 messages 变化，
-                                // 原实现会让所有气泡都重组，因为 lambda 参数每帧都是新实例）
-                                val rowSelected = selectedMessageIds.contains(message.id)
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .then(
-                                            if (multiSelectMode && !message.isNotice && !message.isGameLog) {
-                                                // 多选：点击整行勾选，选中行整行高亮
-                                                Modifier
-                                                    .clip(RoundedCornerShape(10.dp))
-                                                    .background(
-                                                        if (rowSelected) {
-                                                            MaterialTheme.colorScheme.primaryContainer
-                                                                .copy(alpha = 0.35f)
-                                                        } else {
-                                                            Color.Transparent
-                                                        }
-                                                    )
-                                                    .clickable(
-                                                        interactionSource = remember {
-                                                            MutableInteractionSource()
-                                                        },
-                                                        indication = null
-                                                    ) { toggleSelection(message.id) }
-                                            } else {
-                                                Modifier
-                                            }
-                                        )
-                                        .padding(
-                                            horizontal = if (multiSelectMode && !message.isNotice && !message.isGameLog) 4.dp else 0.dp
-                                        )
-                                ) {
-                                    key(message.id) {
-                                        if (message.isGameLog) {
-                                            GameLogBubble(
-                                                content = message.content,
-                                                miniAppTitle = message.miniAppTitle
-                                            )
-                                        } else {
-                                            MessageBubbleItem(
-                                                message = message,
-                                                isLastAi = message.role == Role.ASSISTANT &&
-                                                    !message.isThinking &&
-                                                    messages.lastOrNull { !it.isNotice && !it.isGameLog }?.id == message.id,
-                                                isGroupChat = isGroupChat,
-                                                inMultiSelect = multiSelectMode,
-                                                isGenerating = isGenerating,
-                                                userAvatarUri = settings.userAvatarUri,
-                                                aiAvatarUri = conversation?.persona?.aiAvatarUri,
-                                                aiName = conversation?.persona?.name,
-                                                senderName = if (message.role == Role.USER) {
-                                                    if (isGroupChat) "我" else null
-                                                } else {
-                                                    if (isGroupChat) {
-                                                        message.senderId?.let {
-                                                            senderNameMap[it]
-                                                                ?.takeIf { name -> name.isNotBlank() }
-                                                                ?: "未知成员"
-                                                        }
-                                                    } else null
-                                                },
-                                                senderAvatarUri = if (isGroupChat) {
-                                                    message.senderId?.let { senderAvatarMap[it] }
-                                                } else null,
-                                                bracketGrayEnabled = settings.bracketGrayEnabled,
-                                                markdownEnabled = settings.markdownEnabled,
-                                                typingDelayEnabled = settings.typingDelayEnabled,
-                                                typingDelayMsPerChar = settings.typingDelayMsPerChar,
-                                                isSelected = selectedMessageIds.contains(message.id),
-                                                isHighlighted = highlightMessageId == message.id,
-                                                isWithdrawing = expandedActionId == message.id,
-                                                isActionsExpanded = expandedActionId == message.id,
-                                                animateEntry = message.timestamp >= openedAtMs,
-                                                viewModel = viewModel,
-                                                onEnterMultiSelect = ::enterMultiSelect,
-                                                onToggleSelection = ::toggleSelection,
-                                                onToggleActions = {
-                                                    if (!message.isThinking) {
-                                                        expandedActionId = if (expandedActionId == message.id) {
-                                                            null
-                                                        } else {
-                                                            message.id
-                                                        }
-                                                    }
-                                                },
-                                                onStartRewrite = { rewritingMessageId = it; expandedActionId = null }
-                                            )
-                                        }
-                                    }
-                                }
-
-                            }
-
-                            // 小应用邀请卡片：按时间倒序固定在列表顶部区域，点击跳回对应小应用
-                            items(
-                                items = messages.filter { it.isNotice && !it.miniAppId.isNullOrBlank() },
-                                key = { it.id }
-                            ) { invite ->
-                                MiniAppInviteCard(
-                                    title = invite.miniAppTitle?.takeIf { it.isNotBlank() }
-                                        ?: "小应用",
-                                    content = invite.content,
-                                    onClick = { invite.miniAppId?.let(onOpenMiniApp) }
-                                )
-                            }
-
-                            // 场景/世界提示气泡：固定在消息列表最顶部（reverseLayout 的最后一项），
-                            // 长存、随场景设置实时更新
-                            if (sceneNoticeContent.isNotBlank()) {
-                                item(key = "scene_notice_bubble", contentType = { "notice" }) {
-                                    NoticeBubble(content = sceneNoticeContent)
-                                }
-                            }
-                        }
-                    }
+            ChatMessageListArea(
+                conversation = conversation,
+                messages = messages,
+                isLoading = isLoading,
+                isGenerating = isGenerating,
+                isGroupChat = isGroupChat,
+                searchActive = searchActive,
+                searchQuery = searchQuery,
+                sceneNoticeContent = sceneNoticeContent,
+                pendingReedit = pendingReedit,
+                selectedMessageIds = selectedMessageIds,
+                multiSelectMode = multiSelectMode,
+                listState = listState,
+                keyboardOffset = keyboardOffset,
+                density = density,
+                settings = settings,
+                senderNameMap = senderNameMap,
+                senderAvatarMap = senderAvatarMap,
+                highlightMessageId = highlightMessageId,
+                expandedActionId = expandedActionId,
+                openedAtMs = openedAtMs,
+                viewModel = viewModel,
+                onOpenMiniApp = onOpenMiniApp,
+                onEnterMultiSelect = { enterMultiSelect(it) },
+                onToggleSelection = { toggleSelection(it) },
+                onSearchResultClick = {
+                    searchActive = false
+                    searchQuery = ""
+                    pendingJumpMessageId = it
+                },
+                onReedit = { reeditSheetOpen = true },
+                onDismissReedit = { viewModel.clearPendingReedit() },
+                onStartRewrite = {
+                    rewritingMessageId = it
+                    expandedActionId = null
+                },
+                onToggleActions = { messageId ->
+                    expandedActionId = if (expandedActionId == messageId) null else messageId
                 }
-            }
-
+            )
             // 输入栏区域：随键盘升起/降下（与消息列表同步偏移），顶栏与背景不动
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .graphicsLayer {
-                        translationY = keyboardOffset.value
-                    }
-            ) {
-                // 输入栏：多选模式下切换为底部操作栏（复制/导出长图/删除），搜索时隐藏
-                if (multiSelectMode) {
-                    MultiSelectActionBar(
-                        selectedCount = selectedMessageIds.size,
-                        onCopy = { copySelectedMessages() },
-                        onExportImage = { exportSelectedAsImage() },
-                        onDelete = { deleteSelectedMessages() }
-                    )
-                } else if (!searchActive) {
-                    ChatInputBar(
-                        enterToSend = settings.enterToSend,
-                        isGenerating = isGenerating,
-                        allowSendWhileGenerating = isGroupChat,
-                        onSend = { text ->
-                            val imageUri = pendingImageUri
-                            if (imageUri != null) {
-                                viewModel.sendMessageWithImage(context, text, imageUri)
-                            } else {
-                                viewModel.sendMessage(text)
-                            }
-                        },
-                        onStop = { viewModel.stopGeneration() },
-                        enabled = !showHamburger,
-                        transparent = wallpaperUri != null,
-                        onTextChange = { text -> viewModel.updateInputText(text) },
-                        isCompressing = isCompressing,
-                        onPickImage = { imagePickerLauncher.launch("image/*") },
-                        pendingImageUri = pendingImageUri,
-                        onRemoveImage = { viewModel.clearPendingImage() },
-                        ocrBusy = ocrState is com.quiddity.app.ui.chat.OcrState.Recognizing,
-                        // 群聊成员头像栏（方案十一：并入输入框容器、靠左、随键盘一起动）
-                        header = if (isGroupChat) {
-                            { mentionScope ->
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(16.dp))
-                                        .background(
-                                            MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.45f)
-                                        )
-                                        .padding(horizontal = 10.dp, vertical = 6.dp)
-                                ) {
-                                    GroupAvatarBar(
-                                        members = groupMembers,
-                                        queue = groupQueue,
-                                        onTap = { member ->
-                                            val memberName = member.persona?.name.orEmpty()
-                                            if (mentionScope.isMentionPending && memberName.isNotBlank()) {
-                                                // @ 点名：把「@名字」（蓝色）插入输入框
-                                                mentionScope.insertMention(memberName)
-                                            } else {
-                                                // 普通点名回复：头像点击触发该成员回复
-                                                viewModel.enqueueGroupMember(member.id)
-                                            }
-                                        }
-                                    )
-                                }
-                            }
-                        } else {
-                            null
-                        }
-                    )
-                }
-            }
+            ChatInputBarArea(
+                viewModel = viewModel,
+                context = context,
+                settings = settings,
+                isGenerating = isGenerating,
+                isCompressing = isCompressing,
+                isGroupChat = isGroupChat,
+                multiSelectMode = multiSelectMode,
+                searchActive = searchActive,
+                selectedMessageIds = selectedMessageIds,
+                pendingImageUri = pendingImageUri,
+                ocrState = ocrState,
+                wallpaperUri = wallpaperUri,
+                showHamburger = showHamburger,
+                groupMembers = groupMembers,
+                groupQueue = groupQueue,
+                imagePickerLauncher = imagePickerLauncher,
+                keyboardOffset = keyboardOffset,
+                onCopy = { copySelectedMessages() },
+                onExportImage = { exportSelectedAsImage() },
+                onDelete = { deleteSelectedMessages() }
+            )
         }
 
         // 遮罩由 HamburgerMenu 内部自己管理（alpha 跟菜单同步，0.4s 淡入淡出），
         // 这里不再单独放一个 Box 避免跟消息列表抢事件。
     }
 
-    // ===== 汉堡菜单 =====
-    HamburgerMenu(
-        visible = showHamburger,
+    ChatScreenDialogs(
+        showHamburger = showHamburger,
         menuAlphaState = dragController.menuAlphaState,
+        isCompressing = isCompressing,
+        showUserNameDialog = showUserNameDialog,
+        userNameInput = userNameInput,
+        conversation = conversation,
+        messages = messages,
+        rewritingMessageId = rewritingMessageId,
+        pendingReedit = pendingReedit,
+        reeditSheetOpen = reeditSheetOpen,
         viewModel = viewModel,
         settingsViewModel = settingsViewModel,
-        onDismiss = { dragController.closeMenu() },
-        onDeleteConversation = {
-            viewModel.deleteCurrentConversation()
-            onBack()
-        },
-        onJumpToMessage = { id ->
-            // 走统一的 pendingJumpMessageId 定位机制（自动滚动协程消费），
-            // 避免与 IME 收起/菜单关闭动画竞争导致跳转被拉回底部
-            pendingJumpMessageId = id
-        }
-    )
-
-    // ===== 压缩进度弹窗 =====
-    CompressionProgressDialog(visible = isCompressing)
-
-    // ===== 私聊用户名强制弹窗（方案九.6） =====
-    if (showUserNameDialog) {
-        AlertDialog(
-            onDismissRequest = { showUserNameDialog = false },
-            title = { Text("设置用户名") },
-            text = {
-                OutlinedTextField(
-                    value = userNameInput,
-                    onValueChange = { userNameInput = it },
-                    label = { Text("用户名（未填写不能发送消息）") },
-                    singleLine = true
+        onBack = onBack,
+        onCloseMenu = { dragController.closeMenu() },
+        onJumpToMessage = { pendingJumpMessageId = it },
+        onUserNameInputChange = { userNameInput = it },
+        onUserNameConfirm = {
+            val conv = conversation
+            if (conv != null) {
+                viewModel.updateUserPersona(
+                    conv.userPersona.copy(name = userNameInput.trim())
                 )
-            },
-            confirmButton = {
-                TextButton(
-                    enabled = userNameInput.isNotBlank(),
-                    onClick = {
-                        val conv = conversation
-                        if (conv != null) {
-                            viewModel.updateUserPersona(
-                                conv.userPersona.copy(name = userNameInput.trim())
-                            )
-                        }
-                        showUserNameDialog = false
-                    }
-                ) {
-                    Text("确定")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showUserNameDialog = false }) {
-                    Text("暂不设置")
-                }
             }
-        )
-    }
-
-    // ===== 消息改写底部弹出框 =====
-    rewritingMessageId?.let { msgId ->
-        val targetMsg = messages.firstOrNull { it.id == msgId }
-        if (targetMsg != null) {
-            RewriteBottomSheet(
-                initialText = targetMsg.content,
-                onSave = { newContent ->
-                    viewModel.rewriteMessage(msgId, newContent)
-                    rewritingMessageId = null
-                },
-                onDismiss = { rewritingMessageId = null }
-            )
-        } else {
-            rewritingMessageId = null
-        }
-    }
-
-    // ===== 撤回后「重新编辑」底部弹出框（预填被撤回消息原文，保存后作为新消息发出） =====
-    if (reeditSheetOpen) {
-        val pending = pendingReedit
-        if (pending != null) {
-            RewriteBottomSheet(
-                initialText = pending.content,
-                placeholder = "编辑消息…",
-                onSave = { newContent ->
-                    viewModel.resendReedit(newContent)
-                    reeditSheetOpen = false
-                },
-                onDismiss = { reeditSheetOpen = false }
-            )
-        } else {
-            reeditSheetOpen = false
-        }
-    }
+            showUserNameDialog = false
+        },
+        onDismissUserNameDialog = { showUserNameDialog = false },
+        onDismissRewrite = { rewritingMessageId = null },
+        onDismissReeditSheet = { reeditSheetOpen = false }
+    )
 }
 
-/**
- * 将 Compose Color 转换为 ARGB Int（导出长图样式使用）。
- */
 private fun androidx.compose.ui.graphics.Color.toArgbInt(): Int =
     (alpha * 255f).roundToInt() shl 24 or
         ((red * 255f).roundToInt() shl 16) or
         ((green * 255f).roundToInt() shl 8) or
         (blue * 255f).roundToInt()
-
-// ===== 三条开发规范（位于文件中间位置） =====
-// 1. 问题修复规范：所有代码问题修复必须采用系统性解决方案，严禁使用临时性补丁或 hack 手段。
-//    修复内容需完全融入现有代码架构，确保代码逻辑的连贯性、可维护性和可扩展性。
-// 2. 代码注释规范：文件内仅允许保留两类注释——当前规则说明注释与模块划分注释（// ===== xxx =====）。
-//    除此之外，禁止出现任何形式的代码注释（包括单行 / 多行 / 临时调试注释）。
-// 3. 构建交付要求：完成所有开发任务并通过单元测试和集成测试后，必须将项目打包为标准 APK。
-//    APK 需满足：签名有效且符合发布标准、包含完整功能模块、经过基础性能与兼容性测试。
-
-@Composable
-private fun EmptyChatState(
-    personaName: String,
-    onLetAiStart: () -> Unit,
-    isGenerating: Boolean
-) {
-    val aiName = personaName.ifBlank { "AI" }
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
-    ) {
-        // Box+background+clip 替代 Surface：避免 CompositionLocalProvider 与 elevation 处理开销
-        Box(
-            modifier = Modifier
-                .clip(RoundedCornerShape(24.dp))
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = onLetAiStart
-                )
-                .background(MaterialTheme.colorScheme.surfaceContainerLow)
-                .padding(horizontal = 28.dp, vertical = 14.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = if (isGenerating) "$aiName 正在说话..." else "让 $aiName 先发消息",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurface,
-                fontWeight = FontWeight.Medium
-            )
-        }
-    }
-}
-
-@Composable
-private fun ThinkingBubble(
-    aiAvatarUri: String?,
-    thinkingLabel: String? = null
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.Start,
-        verticalAlignment = Alignment.Top
-    ) {
-        Box(
-            modifier = Modifier
-                .size(40.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.surfaceContainerLow),
-            contentAlignment = Alignment.Center
-        ) {
-            if (aiAvatarUri != null) {
-                AsyncImage(
-                    model = aiAvatarUri,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize().clip(CircleShape)
-                )
-            } else {
-                Icon(
-                    imageVector = Icons.Filled.Person,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(22.dp)
-                )
-            }
-        }
-        Spacer(modifier = Modifier.size(8.dp))
-        // Box+background+clip 替代 Surface：去除 CompositionLocalProvider 开销
-        Box(
-            modifier = Modifier
-                .widthIn(max = 360.dp)
-                .clip(RoundedCornerShape(18.dp, 18.dp, 18.dp, 4.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .padding(horizontal = 18.dp, vertical = 14.dp),
-            contentAlignment = Alignment.CenterStart
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                if (thinkingLabel != null) {
-                    com.quiddity.app.ui.components.ShimmerHighlightText(
-                        text = thinkingLabel,
-                        icon = Icons.Filled.AutoAwesome
-                    )
-                }
-                TypingIndicator()
-            }
-        }
-    }
-}
-
-/**
- * 多选模式顶部操作栏（精简版）。
- *
- * 布局：关闭按钮 | 已选 N 项 | 全选（文字按钮）
- * - 复制 / 导出长图 / 删除 操作移到底部操作栏，避免遮挡聊天内容
- */
-@Composable
-private fun MultiSelectTopBar(
-    selectedCount: Int,
-    allSelected: Boolean,
-    onClose: () -> Unit,
-    onSelectAll: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .windowInsetsPadding(WindowInsets.statusBars)
-            .height(48.dp)
-            .padding(horizontal = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(
-            modifier = Modifier
-                .size(40.dp)
-                .clip(RoundedCornerShape(50))
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = onClose
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.Filled.Close,
-                contentDescription = "退出多选",
-                tint = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.size(22.dp)
-            )
-        }
-        Text(
-            text = "已选 $selectedCount 项",
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.Medium,
-            color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
-        )
-        TextButton(onClick = onSelectAll) {
-            Text(
-                text = if (allSelected) "取消全选" else "全选",
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Medium
-            )
-        }
-    }
-}
-
-/**
- * 多选模式底部操作栏：复制 / 导出长图 / 删除。
- * 放置在原输入栏位置，选中数为 0 时置灰不可点。
- */
-@Composable
-private fun MultiSelectActionBar(
-    selectedCount: Int,
-    onCopy: () -> Unit,
-    onExportImage: () -> Unit,
-    onDelete: () -> Unit
-) {
-    Surface(color = MaterialTheme.colorScheme.background) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .windowInsetsPadding(WindowInsets.navigationBars)
-                .padding(vertical = 6.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            MultiSelectActionButton(
-                icon = Icons.Filled.ContentCopy,
-                label = "复制",
-                enabled = selectedCount > 0,
-                tint = MaterialTheme.colorScheme.onSurface,
-                onClick = onCopy
-            )
-            MultiSelectActionButton(
-                icon = Icons.Filled.IosShare,
-                label = "导出长图",
-                enabled = selectedCount > 0,
-                tint = MaterialTheme.colorScheme.primary,
-                onClick = onExportImage
-            )
-            MultiSelectActionButton(
-                icon = Icons.Filled.Delete,
-                label = "删除",
-                enabled = selectedCount > 0,
-                tint = MaterialTheme.colorScheme.error,
-                onClick = onDelete
-            )
-        }
-    }
-}
-
-@Composable
-private fun MultiSelectActionButton(
-    icon: ImageVector,
-    label: String,
-    enabled: Boolean,
-    tint: Color,
-    onClick: () -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .clip(RoundedCornerShape(12.dp))
-            .clickable(
-                enabled = enabled,
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick
-            )
-            .padding(horizontal = 20.dp, vertical = 4.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = if (enabled) tint else tint.copy(alpha = 0.35f),
-            modifier = Modifier.size(22.dp)
-        )
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = if (enabled) tint else tint.copy(alpha = 0.35f),
-            fontWeight = FontWeight.Medium
-        )
-    }
-}
-
-/**
- * 单条消息气泡的包装层。
- *
- * 性能关键：把 ChatScreen 内的 lambda 计算下沉到这里 + 用 `remember` 缓存。
- * 与父级 `key(message.id)` 配合，确保 ChatScreen 重组时（流式 token 触发 messages 变化）：
- * - 不同 message.id 的气泡完全跳过（key 阻断）
- * - 同 message.id 的气泡：其 lambdas 因 remember 引用稳定，MessageBubble 可跳过重组
- *
- * 关键技巧：lambda 的 remember key 全部为稳定来源（viewModel / message.id / 状态枚举），
- * lambda body 内部直接调用 viewModel.xxx() 或用父级函数引用 (::fun) 避免捕获新 lambda 实例。
- */
-@Composable
-private fun MessageBubbleItem(
-    message: Message,
-    isLastAi: Boolean,
-    isGroupChat: Boolean,
-    inMultiSelect: Boolean,
-    isGenerating: Boolean,
-    userAvatarUri: String?,
-    aiAvatarUri: String?,
-    aiName: String?,
-    senderName: String?,
-    senderAvatarUri: String?,
-    bracketGrayEnabled: Boolean,
-    markdownEnabled: Boolean,
-    typingDelayEnabled: Boolean,
-    typingDelayMsPerChar: Int,
-    isSelected: Boolean,
-    isHighlighted: Boolean,
-    isWithdrawing: Boolean,
-    isActionsExpanded: Boolean,
-    animateEntry: Boolean,
-    viewModel: ChatViewModel,
-    onEnterMultiSelect: (String) -> Unit,
-    onToggleSelection: (String) -> Unit,
-    onToggleActions: () -> Unit,
-    onStartRewrite: (String) -> Unit
-) {
-    val mid = message.id
-    val isUserMsg = message.role == Role.USER
-
-    // ===== 缓存 viewModel 直接回调（稳定来源：viewModel）=====
-    val regen = remember(viewModel, mid, isGroupChat) {
-        if (isGroupChat) {
-            { viewModel.regenerateGroupMemberMessage(mid) }
-        } else {
-            { viewModel.regenerate() }
-        }
-    }
-    // 继续说仅私聊（继续最后一条 AI 回复）；群聊继续接话靠点头像点名，不提供继续说
-    val cont = remember(viewModel) { { viewModel.continueGeneration() } }
-    val withdraw = remember(viewModel, mid) {
-        {
-            viewModel.withdrawMessage(mid)
-            onToggleActions()
-        }
-    }
-
-    // ===== 缓存依赖状态的回调（key 用稳定的状态枚举）=====
-    // lambda body 用 { ... } 包裹成 () -> Unit 表达式，避免 Kotlin 把单语句函数调用当成 Unit 返回值
-    // （推断出 Unit 而非 () -> Unit，类型不匹配）。
-    // 重说：私聊=重说 AI 这一整轮；群聊=仅限最后一条成员消息（方案：群聊重说仅末条）
-    val onRegenFinal: (() -> Unit)? = if (!inMultiSelect && !isGenerating && !isUserMsg && isLastAi) {
-        remember<() -> Unit>(inMultiSelect, isLastAi, isGenerating, regen) { { regen() } }
-    } else null
-    val onContFinal: (() -> Unit)? = if (!inMultiSelect && isLastAi && !isGenerating && !isGroupChat) {
-        remember<() -> Unit>(inMultiSelect, isLastAi, isGenerating, cont) { { cont() } }
-    } else null
-    val onWithdrawFinal: (() -> Unit)? = if (!inMultiSelect && isUserMsg && !isGenerating) {
-        remember<() -> Unit>(inMultiSelect, isUserMsg, isGenerating, withdraw) { { withdraw() } }
-    } else null
-    val onBubbleClickFinal: (() -> Unit)? = if (!inMultiSelect && isUserMsg && !isGenerating) {
-        remember<() -> Unit>(inMultiSelect, isUserMsg, isGenerating) { { onToggleActions() } }
-    } else null
-    val onLongClickFinal: (() -> Unit)? = if (!inMultiSelect && !isGenerating) {
-        remember<() -> Unit>(inMultiSelect, isGenerating) { { onEnterMultiSelect(mid) } }
-    } else null
-    // AI 消息操作面板：展开时提供改写/删除；重说/继续说按各自可用性显示。
-    val onRewriteFinal: (() -> Unit)? = if (!inMultiSelect && !isUserMsg && !isGenerating && isActionsExpanded) {
-        remember<() -> Unit>(inMultiSelect, isUserMsg, isGenerating, isActionsExpanded) {
-            { onStartRewrite(mid) }
-        }
-    } else null
-    val onSelectFinal: (() -> Unit)? = if (inMultiSelect) {
-        remember<() -> Unit>(inMultiSelect) { { onToggleSelection(mid) } }
-    } else null
-
-    MessageBubble(
-        message = message,
-        isGroupChat = isGroupChat,
-        userAvatarUri = userAvatarUri,
-        aiAvatarUri = aiAvatarUri,
-        aiName = aiName,
-        senderName = senderName,
-        senderAvatarUri = senderAvatarUri,
-        bracketGrayEnabled = bracketGrayEnabled,
-        markdownEnabled = markdownEnabled,
-        typingDelayEnabled = typingDelayEnabled,
-        typingDelayMsPerChar = typingDelayMsPerChar,
-        isLastAiMessage = isLastAi,
-        onRegenerate = onRegenFinal,
-        onContinue = onContFinal,
-        onWithdraw = onWithdrawFinal,
-        isWithdrawing = isWithdrawing,
-        onBubbleClick = onBubbleClickFinal,
-        onLongClick = onLongClickFinal,
-        isActionsExpanded = isActionsExpanded,
-        animateEntry = animateEntry,
-        onToggleActions = if (!inMultiSelect && !isUserMsg && !isGenerating) {
-            remember<() -> Unit>(inMultiSelect, isUserMsg, isGenerating) { { onToggleActions() } }
-        } else null,
-        onRewrite = onRewriteFinal,
-        isHighlighted = isHighlighted,
-        multiSelectMode = inMultiSelect,
-        isSelected = isSelected,
-        onSelectToggle = onSelectFinal
-    )
-}
-
-/**
- * 会话内搜索条：输入框 + 清除 + 关闭。
- * 由顶栏搜索图标展开，点关闭或系统返回键收起。
- */
-@Composable
-private fun ChatSearchBar(
-    query: String,
-    onQueryChange: (String) -> Unit,
-    onClose: () -> Unit
-) {
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 6.dp)
-            .clip(RoundedCornerShape(12.dp)),
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        tonalElevation = 0.dp
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Icon(
-                imageVector = Icons.Filled.Search,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(20.dp)
-            )
-            Box(modifier = Modifier.weight(1f)) {
-                if (query.isEmpty()) {
-                    Text(
-                        text = "搜索本会话消息",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                    )
-                }
-                BasicTextField(
-                    value = query,
-                    onValueChange = onQueryChange,
-                    textStyle = MaterialTheme.typography.bodyMedium.copy(
-                        color = MaterialTheme.colorScheme.onSurface
-                    ),
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-            if (query.isNotEmpty()) {
-                Icon(
-                    imageVector = Icons.Filled.Clear,
-                    contentDescription = "清除",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier
-                        .size(20.dp)
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                            onClick = { onQueryChange("") }
-                        )
-                )
-            }
-            Icon(
-                imageVector = Icons.Filled.Close,
-                contentDescription = "关闭搜索",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier
-                    .size(20.dp)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = onClose
-                    )
-            )
-        }
-    }
-}
-
-/** 会话内搜索结果行：角色 + 内容摘录 + 时间；点击后定位到该消息。 */
-@Composable
-private fun ChatSearchResultRow(
-    message: Message,
-    query: String,
-    onClick: () -> Unit
-) {
-    val roleLabel = if (message.role == Role.USER) "我" else "AI"
-    val colorScheme = MaterialTheme.colorScheme
-    val excerpt = remember(message.content, query) {
-        ChatRecordSearch.buildExcerpt(message.content, query)
-    }
-    val displayText = remember(excerpt, message.content, roleLabel, colorScheme) {
-        val fallback = message.content.replace("\n", " ").trim()
-            .let { if (it.length > 80) it.take(80) + "…" else it }
-        val prefix = "$roleLabel："
-        buildAnnotatedString {
-            append(prefix)
-            append(excerpt?.text ?: fallback)
-            if (excerpt != null) {
-                excerpt.highlights.forEach { range ->
-                    addStyle(
-                        SpanStyle(
-                            background = colorScheme.primary.copy(alpha = 0.15f),
-                            fontWeight = FontWeight.SemiBold
-                        ),
-                        start = prefix.length + range.first,
-                        end = prefix.length + range.last + 1
-                    )
-                }
-            }
-        }
-    }
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick
-            ),
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        tonalElevation = 0.dp
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(
-                text = displayText,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
-            )
-            Spacer(modifier = Modifier.size(8.dp))
-            Text(
-                text = DateUtils.formatSearchTime(message.timestamp),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-            )
-        }
-    }
-}
