@@ -14,7 +14,7 @@ internal object ChatToolRoundTrimmer {
         val roundStarts = messages.indices.filter { messages[it].tool_calls?.isNotEmpty() == true }
         if (roundStarts.size <= keepRounds) return messages
         val keepFrom = roundStarts[roundStarts.size - keepRounds]
-        return messages.subList(0, keepFrom) + messages.subList(keepFrom, messages.size)
+        return messages.subList(keepFrom, messages.size)
     }
 
     /**
@@ -24,6 +24,6 @@ internal object ChatToolRoundTrimmer {
         val roundStarts = input.indices.filter { input[it].type == "function_call" }
         if (roundStarts.size <= keepRounds) return input
         val keepFrom = roundStarts[roundStarts.size - keepRounds]
-        return input.subList(0, keepFrom) + input.subList(keepFrom, input.size)
+        return input.subList(keepFrom, input.size)
     }
 }

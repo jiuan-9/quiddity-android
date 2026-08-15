@@ -35,23 +35,33 @@ class ChatToolRoundTrimmerTest {
     }
 
     @Test
-    fun `trimToolRounds keeps full list when exceeding keep limit (current behavior)`() {
+    fun `trimToolRounds keeps only the last N tool rounds`() {
         val messages = listOf(
             plain("user", "u1"), toolCall("t1"), plain("tool", "r1"),
             plain("user", "u2"), toolCall("t2"), plain("tool", "r2"),
             plain("user", "u3"), toolCall("t3"), plain("tool", "r3")
         )
-        assertEquals(messages, ChatToolRoundTrimmer.trimToolRounds(messages, 2))
+        val result = ChatToolRoundTrimmer.trimToolRounds(messages, 2)
+        assertEquals(
+            listOf(
+                toolCall("t2"), plain("tool", "r2"),
+                plain("user", "u3"), toolCall("t3"), plain("tool", "r3")
+            ),
+            result
+        )
     }
 
     @Test
-    fun `trimResponsesToolRounds keeps full list when exceeding keep limit (current behavior)`() {
+    fun `trimResponsesToolRounds keeps only the last N function call rounds`() {
         val input = listOf(
             responsesPlain("u1"), responsesCall("t1"),
             responsesPlain("u2"), responsesCall("t2"),
             responsesPlain("u3"), responsesCall("t3")
         )
-        assertEquals(input, ChatToolRoundTrimmer.trimResponsesToolRounds(input, 1))
+        assertEquals(
+            listOf(responsesCall("t3")),
+            ChatToolRoundTrimmer.trimResponsesToolRounds(input, 1)
+        )
     }
 
     @Test
