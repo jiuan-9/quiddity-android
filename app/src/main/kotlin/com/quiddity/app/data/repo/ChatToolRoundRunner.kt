@@ -23,7 +23,8 @@ import com.quiddity.app.domain.agent.AgentWorkflowController
 import com.quiddity.app.util.IdGenerator
 import com.quiddity.app.util.QuiddityConstants
 
-private const val MAX_TOOL_ROUNDS = 16
+private const val TOOL_ROUND_LIMIT_NUDGE =
+    "?????????????????????????????????????????????????????????????????"
 
 /** ??????????????? */
 internal sealed interface NoToolRoundResult {
@@ -311,10 +312,10 @@ internal class ToolRoundRunner(
         val memory = PromptBuilder.buildMemoryDrawerContent(conv)
         var currentRequest = request
         var reasoningText = ""
-        var rounds = 0
+        val budget = ToolRoundBudget()
         var lastResolved: List<Pair<ChatStreamParser.AggregatedToolCall, String>> = emptyList()
 
-        while (rounds < MAX_TOOL_ROUNDS) {
+        while (!budget.reachedLimit) {
             var round = singleStreamRunner.runSingleStream(
                 api, apiUrl, apiKey, currentRequest, coordinator, onEvent, contentTransform, thinkingActive,
                 onFailure = recordFailure
@@ -322,7 +323,7 @@ internal class ToolRoundRunner(
             if (round == null) {
                 val recovered = handleToolRoundFailure(
                     api, apiUrl, apiKey, currentRequest, coordinator, conv, onEvent, contentTransform,
-                    thinkingActive, rounds, lastResolved, lastError, recordFailure
+                    thinkingActive, budget.totalRounds, lastResolved, lastError, recordFailure
                 )
                 if (!recovered) return false
                 break
@@ -333,7 +334,7 @@ internal class ToolRoundRunner(
                 // ===== 无工具调用收尾：截断自动续写 / 空回复（AI 撤回）自动兜底重试 =====
                 val recovered = recoverNoToolRound(
                     api, apiUrl, apiKey, currentRequest, coordinator, conv, onEvent, contentTransform,
-                    thinkingActive, rounds, lastResolved, lastError, recordFailure, round
+                    thinkingActive, budget.totalRounds, lastResolved, lastError, recordFailure, round
                 )
                 when (recovered) {
                     is NoToolRoundResult.Completed -> break
@@ -346,15 +347,10 @@ internal class ToolRoundRunner(
                 }
             }
             if (round.truncated && calls.isNotEmpty()) {
-                // 工具调用被截断（参数不完整）：不执行，提示模型重新发起完整调用
-                rounds++
-                if (rounds >= MAX_TOOL_ROUNDS) {
-                    singleStreamRunner.appendFailureMessage(
-                        conv, coordinator, onEvent,
-                        "工具调用多次因长度限制被截断，无法继续执行，请重试。"
-                    )
-                    return false
-                }
+                // ????????????????????????????????
+                // ???????????????????????
+                budget.consume(emptyList())
+                if (budget.reachedLimit) break
                 currentRequest = buildContinueRequest(currentRequest, null, TOOL_CALL_TRUNCATED_NUDGE)
                 coordinator.setMergeWithPrevious(true)
                 continue
@@ -374,8 +370,8 @@ internal class ToolRoundRunner(
             resolved.forEach { (call, content) ->
                 onEvent(ChatRepository.Event.ToolResult(call.name, toolResultBuilder.isToolResultSuccess(content), content.take(500)))
             }
-            rounds++
-            val keepTools = rounds < MAX_TOOL_ROUNDS
+            budget.consume(resolved.map { it.first.name })
+            val keepTools = budget.keepTools()
             currentRequest = try {
                 toolResultBuilder.buildNextRoundRequest(currentRequest, resolved, reasoningText, onEvent, keepTools)
             } catch (c: kotlinx.coroutines.CancellationException) {
@@ -392,7 +388,8 @@ internal class ToolRoundRunner(
             coordinator.setMergeWithPrevious(true)
         }
 
-        if (rounds >= MAX_TOOL_ROUNDS) {
+        if (budget.reachedLimit) {
+            currentRequest = buildContinueRequest(currentRequest, null, TOOL_ROUND_LIMIT_NUDGE)
             var finalRound = singleStreamRunner.runSingleStream(
                 api, apiUrl, apiKey, currentRequest, coordinator, onEvent, contentTransform, thinkingActive,
                 onFailure = recordFailure
@@ -400,7 +397,7 @@ internal class ToolRoundRunner(
             if (finalRound == null) {
                 val recovered = handleToolRoundFailure(
                     api, apiUrl, apiKey, currentRequest, coordinator, conv, onEvent, contentTransform,
-                    thinkingActive, rounds, lastResolved, lastError, recordFailure
+                    thinkingActive, budget.totalRounds, lastResolved, lastError, recordFailure
                 )
                 if (!recovered) return false
             } else {
@@ -445,8 +442,8 @@ internal class ToolRoundRunner(
                 if (!finalRound.hasContent || finalRound.truncated) {
                     // 上限轮后的最终回复为空 / 被截断：同样走自动续写与空回复兜底
                     val recovered = recoverNoToolRound(
-                        api, apiUrl, apiKey, currentRequest, coordinator, conv, onEvent, contentTransform,
-                        thinkingActive, rounds, lastResolved, lastError, recordFailure, finalRound
+                    api, apiUrl, apiKey, currentRequest, coordinator, conv, onEvent, contentTransform,
+                    thinkingActive, budget.totalRounds, lastResolved, lastError, recordFailure, finalRound
                     )
                     when (recovered) {
                         is NoToolRoundResult.Completed -> Unit

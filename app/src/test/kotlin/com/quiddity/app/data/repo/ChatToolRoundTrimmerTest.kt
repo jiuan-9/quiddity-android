@@ -37,6 +37,7 @@ class ChatToolRoundTrimmerTest {
     @Test
     fun `trimToolRounds keeps only the last N tool rounds`() {
         val messages = listOf(
+            plain("user", "u0"), toolCall("t0"), plain("tool", "r0"),
             plain("user", "u1"), toolCall("t1"), plain("tool", "r1"),
             plain("user", "u2"), toolCall("t2"), plain("tool", "r2"),
             plain("user", "u3"), toolCall("t3"), plain("tool", "r3")
@@ -44,6 +45,8 @@ class ChatToolRoundTrimmerTest {
         val result = ChatToolRoundTrimmer.trimToolRounds(messages, 2)
         assertEquals(
             listOf(
+                toolCall("t1"), plain("tool", "r1"),
+                plain("user", "u2"),
                 toolCall("t2"), plain("tool", "r2"),
                 plain("user", "u3"), toolCall("t3"), plain("tool", "r3")
             ),
@@ -52,16 +55,61 @@ class ChatToolRoundTrimmerTest {
     }
 
     @Test
-    fun `trimResponsesToolRounds keeps only the last N function call rounds`() {
-        val input = listOf(
-            responsesPlain("u1"), responsesCall("t1"),
-            responsesPlain("u2"), responsesCall("t2"),
-            responsesPlain("u3"), responsesCall("t3")
+    fun `trimToolRounds keeps all tool rounds inside the current task`() {
+        // 最后一条 user 消息之后有 3 轮工具调用，即使超过 keepRounds 也全部保留。
+        val messages = listOf(
+            plain("user", "u0"), toolCall("t0"), plain("tool", "r0"),
+            plain("user", "u1"),
+            toolCall("t1"), plain("tool", "r1"),
+            toolCall("t2"), plain("tool", "r2"),
+            toolCall("t3"), plain("tool", "r3")
         )
+        val result = ChatToolRoundTrimmer.trimToolRounds(messages, 1)
         assertEquals(
-            listOf(responsesCall("t3")),
-            ChatToolRoundTrimmer.trimResponsesToolRounds(input, 1)
+            listOf(
+                toolCall("t0"), plain("tool", "r0"),
+                plain("user", "u1"),
+                toolCall("t1"), plain("tool", "r1"),
+                toolCall("t2"), plain("tool", "r2"),
+                toolCall("t3"), plain("tool", "r3")
+            ),
+            result
         )
+    }
+
+    @Test
+    fun `trimResponsesToolRounds keeps all function call rounds inside the current task`() {
+        val input = listOf(
+            responsesPlain("u0"), responsesCall("t0"),
+            responsesPlain("u1"), responsesCall("t1"),
+            responsesCall("t2"), responsesCall("t3")
+        )
+        val result = ChatToolRoundTrimmer.trimResponsesToolRounds(input, 1)
+        assertEquals(
+            listOf(responsesCall("t0"), responsesPlain("u1"), responsesCall("t1"), responsesCall("t2"), responsesCall("t3")),
+            result
+        )
+    }
+
+    @Test
+    fun `trimResponsesToolRounds trims history but keeps the current task`() {
+        val input = listOf(
+            responsesPlain("u0"), responsesCall("t0"),
+            responsesPlain("u1"), responsesCall("t1"),
+            responsesPlain("u2"), responsesCall("t2")
+        )
+        val result = ChatToolRoundTrimmer.trimResponsesToolRounds(input, 1)
+        assertEquals(
+            listOf(responsesCall("t1"), responsesPlain("u2"), responsesCall("t2")),
+            result
+        )
+    }
+
+    @Test
+    fun `trimToolRounds falls back to last N rounds when no user message`() {
+        val messages = listOf(toolCall("t1"), plain("tool", "r1"), toolCall("t2"), plain("tool", "r2"))
+        val result = ChatToolRoundTrimmer.trimToolRounds(messages, 1)
+        assertEquals(listOf(toolCall("t2"), plain("tool", "r2")), result)
     }
 
     @Test
