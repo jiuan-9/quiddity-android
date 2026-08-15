@@ -108,8 +108,8 @@ fun SpyPressable(
 
 @Composable
 fun SpyEntrance(
-    index: Int = 0,
     modifier: Modifier = Modifier,
+    index: Int = 0,
     distance: Float = 14f,
     content: @Composable () -> Unit
 ) {

@@ -94,7 +94,7 @@ internal fun SpyResultScreen(
                 contentAlignment = Alignment.Center
             ) {
                 SpySparkleBurst(Modifier.fillMaxSize())
-                SpyEntrance(0) {
+                SpyEntrance(index = 0) {
                     Icon(
                         imageVector = if (civilianWin) Icons.Rounded.EmojiEvents else Icons.Rounded.Visibility,
                         contentDescription = null,
@@ -103,7 +103,7 @@ internal fun SpyResultScreen(
                     )
                 }
             }
-            SpyEntrance(1) {
+            SpyEntrance(index = 1) {
                 Text(
                     text = winText,
                     style = MaterialTheme.typography.headlineLarge,
@@ -111,7 +111,7 @@ internal fun SpyResultScreen(
                     color = winColor
                 )
             }
-            SpyEntrance(2) {
+            SpyEntrance(index = 2) {
                 Text(
                     text = "共 ${game.round} 轮 · ${game.players.size} 名玩家",
                     style = MaterialTheme.typography.bodyMedium,
@@ -119,7 +119,7 @@ internal fun SpyResultScreen(
                 )
             }
             Spacer(Modifier.size(14.dp))
-            SpyEntrance(3) {
+            SpyEntrance(index = 3) {
                 Surface(
                     shape = RoundedCornerShape(20.dp),
                     color = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -154,13 +154,13 @@ internal fun SpyResultScreen(
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 game.players.forEachIndexed { i, p ->
-                    SpyEntrance(4 + i) {
+                    SpyEntrance(index = 4 + i) {
                         ResultPlayerRow(player = p)
                     }
                 }
             }
         }
-        SpyEntrance(10) {
+        SpyEntrance(index = 10) {
             QuiddityPrimaryButton(
                 text = "再来一局",
                 onClick = onRematch,
@@ -168,7 +168,7 @@ internal fun SpyResultScreen(
             )
         }
         Spacer(Modifier.size(8.dp))
-        SpyEntrance(11) {
+        SpyEntrance(index = 11) {
             QuidditySecondaryButton(
                 text = "返回",
                 onClick = onBack,

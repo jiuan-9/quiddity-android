@@ -57,9 +57,9 @@ import kotlin.math.roundToInt
 @Composable
 fun TemperatureSlider(
     value: Double,
+    modifier: Modifier = Modifier,
     enabled: Boolean = true,
     onValueChangeFinished: (Double) -> Unit,
-    modifier: Modifier = Modifier
 ) {
     var sliderValue by remember(value) { mutableFloatStateOf(value.toFloat()) }
     val display = String.format(Locale.US, "%.1f", sliderValue.toDouble())

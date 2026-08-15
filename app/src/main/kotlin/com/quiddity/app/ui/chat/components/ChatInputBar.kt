@@ -101,10 +101,10 @@ private val MentionPattern = Regex("@[^\\s@]+")
 fun ChatInputBar(
     enterToSend: Boolean,
     isGenerating: Boolean,
+    modifier: Modifier = Modifier,
     allowSendWhileGenerating: Boolean = false,
     onSend: (String) -> Unit,
     onStop: () -> Unit,
-    modifier: Modifier = Modifier,
     enabled: Boolean = true,
     transparent: Boolean = false,
     onTextChange: ((String) -> Unit)? = null,

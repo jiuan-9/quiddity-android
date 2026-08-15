@@ -73,6 +73,7 @@ object ActiveMessageSystem {
      * 跳转到电池优化白名单设置：优先打开针对本应用的"不限制"授权页
      * （部分 ROM 直接提供开关），失败时回退到系统电池优化列表。
      */
+    @android.annotation.SuppressLint("BatteryLife")
     fun openBatteryOptimizationSettings(context: Context) {
         runCatching {
             val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)

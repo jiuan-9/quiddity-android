@@ -92,9 +92,9 @@ internal fun SpySetupScreen(
                 }
             }
         )
-        SpyEntrance(0) { SpyHeroHeader() }
+        SpyEntrance(index = 0) { SpyHeroHeader() }
         Spacer(Modifier.size(14.dp))
-        SpyEntrance(1) {
+        SpyEntrance(index = 1) {
             SpySetupSeatRow(
                 userAvatarUri = userAvatarUri,
                 llmCharacters = setup.llmCharacters,
@@ -102,11 +102,11 @@ internal fun SpySetupScreen(
             )
         }
         Spacer(Modifier.size(14.dp))
-        SpyEntrance(2) {
+        SpyEntrance(index = 2) {
             SpyCategoryRow(selected = setup.category, onSelect = onCategorySelect)
         }
         Spacer(Modifier.size(10.dp))
-        SpyEntrance(3) {
+        SpyEntrance(index = 3) {
             SpyModeRow(selected = setup.mode, onSelect = onModeSelect)
         }
         Spacer(Modifier.size(10.dp))
@@ -122,7 +122,7 @@ internal fun SpySetupScreen(
             }
             if (characters.isEmpty()) {
                 item {
-                    SpyEntrance(3) {
+                    SpyEntrance(index = 3) {
                         EmptyCharactersCard()
                     }
                 }
@@ -130,7 +130,7 @@ internal fun SpySetupScreen(
                 itemsIndexed(characters, key = { _, c -> c.id }) { index, character ->
                     val name = character.persona.name.ifBlank { "未命名角色" }
                     val selected = setup.llmCharacters.any { it.id == character.id }
-                    SpyEntrance(index + 3) {
+                    SpyEntrance(index = index + 3) {
                         SpySelectCard(
                             title = name,
                             subtitle = character.persona.character.ifBlank { "点击加入牌局" },
@@ -145,14 +145,14 @@ internal fun SpySetupScreen(
                 }
             }
             item {
-                SpyEntrance(9) {
+                SpyEntrance(index = 9) {
                     Local("开局会随机挑一名角色，用它的 API 生成本局词库；连不上就自动用内置词库。")
                 }
             }
             item { Spacer(Modifier.size(12.dp)) }
         }
 
-        SpyEntrance(10) {
+        SpyEntrance(index = 10) {
             Button(
                 onClick = onStart,
                 enabled = setup.llmCharacters.size == MAX_LLM && !checking,

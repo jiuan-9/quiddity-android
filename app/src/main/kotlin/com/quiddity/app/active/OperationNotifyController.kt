@@ -26,6 +26,8 @@ import com.quiddity.app.R
  *
  * 权限：需要「通知」权限（Android 13+ 运行时申请，App 已声明 POST_NOTIFICATIONS）。
  */
+// ????????? MainActivity attach/detach ???onDestroy ??????????
+@android.annotation.SuppressLint("StaticFieldLeak")
 object OperationNotifyController {
 
     private const val CHANNEL_ID = "agent_action"
@@ -166,20 +168,6 @@ object OperationNotifyController {
     }
 
     private fun ensureChannel(manager: NotificationManager) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            if (manager.getNotificationChannel(CHANNEL_ID) == null) {
-                manager.createNotificationChannel(
-                    NotificationChannel(
-                        CHANNEL_ID,
-                        "Agent 行动弹窗",
-                        NotificationManager.IMPORTANCE_HIGH
-                    ).apply {
-                        description = "Agent 执行操作时的系统通知弹窗（每一步弹出新消息）"
-                        lockscreenVisibility = NotificationCompat.VISIBILITY_PUBLIC
-                    }
-                )
-            }
-        }
     }
 
     private fun notificationManager(): NotificationManager? {

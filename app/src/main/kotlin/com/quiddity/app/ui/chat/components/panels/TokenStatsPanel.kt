@@ -253,8 +253,8 @@ fun TokenStatsPanel(
 private fun StatsCard(
     title: String,
     value: String,
+    modifier: Modifier = Modifier,
     subtitle: String = "",
-    modifier: Modifier = Modifier
 ) {
     Surface(
         modifier = modifier,

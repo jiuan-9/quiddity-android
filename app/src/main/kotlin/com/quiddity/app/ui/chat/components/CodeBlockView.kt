@@ -366,8 +366,8 @@ fun CodeBlockView(
 @Composable
 fun FencedTextView(
     content: String,
+    modifier: Modifier = Modifier,
     formatLabel: String = "text",
-    modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val lineCount = remember(content) { content.count { it == '\n' } + 1 }

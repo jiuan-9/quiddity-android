@@ -115,14 +115,6 @@ class ActiveMessageService : Service() {
     }
 
     private fun ensureNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val manager = getSystemService(NotificationManager::class.java)
-            if (manager.getNotificationChannel(CHANNEL_ID) == null) {
-                manager.createNotificationChannel(
-                    NotificationChannel(CHANNEL_ID, "主动消息", NotificationManager.IMPORTANCE_LOW)
-                )
-            }
-        }
     }
 
     private fun buildNotification(): Notification =

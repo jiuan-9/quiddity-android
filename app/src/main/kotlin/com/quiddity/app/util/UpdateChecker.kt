@@ -783,6 +783,8 @@ object UpdateChecker {
     /**
      * Android 8+ 安装未知来源应用前需用户授权；返回是否已授权。
      */
+    // JVM ???? SDK_INT=0???????????????Android ????
+    @android.annotation.SuppressLint("ObsoleteSdkInt")
     fun canRequestPackageInstalls(context: Context): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return true
         return context.packageManager.canRequestPackageInstalls()
@@ -791,6 +793,8 @@ object UpdateChecker {
     /**
      * 跳转"安装未知应用"授权页（仅 Android 8+ 需要）。
      */
+    // JVM ???? SDK_INT=0??????????????????
+    @android.annotation.SuppressLint("ObsoleteSdkInt")
     fun openInstallUnknownAppsSettings(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         runCatching {

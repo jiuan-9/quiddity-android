@@ -64,6 +64,7 @@ class ScreenReaderService : AccessibilityService() {
             // 避免主线程全量遍历节点树导致滚动/动画间歇掉帧
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> collectScreenText()
             AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED -> captureToast(event)
+            else -> Unit
         }
     }
 
@@ -121,6 +122,10 @@ class ScreenReaderService : AccessibilityService() {
     }
 
     companion object {
+        /** ???????API 28 ???????? getMainExecutor??? null ???????? */
+        private fun serviceExecutor(service: ScreenReaderService): java.util.concurrent.Executor? =
+            if (Build.VERSION.SDK_INT >= 28) service.mainExecutor else null
+
         private const val MAX_TEXT_NODES = 200
         private const val MAX_SCREEN_CHARS = 8000
         private const val LONG_PRESS_DURATION_MS = 800L
@@ -149,7 +154,7 @@ class ScreenReaderService : AccessibilityService() {
          */
         suspend fun refreshAndReadScreenText(timeoutMs: Long = 800): String {
             val service = instance ?: return AgentSensorState.screenText
-            val executor = runCatching { service.mainExecutor }.getOrNull()
+            val executor = runCatching { serviceExecutor(service) }.getOrNull()
                 ?: return AgentSensorState.screenText
             return kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
                 suspendCancellableCoroutine { cont ->
@@ -169,6 +174,7 @@ class ScreenReaderService : AccessibilityService() {
          * 截取当前屏幕并保存 PNG 到应用私有目录，返回保存路径文本；
          * 失败时返回以「截图」开头的中文错误描述。
          */
+        @android.annotation.SuppressLint("NewApi")
         suspend fun captureScreenshot(context: Context): String {
             if (Build.VERSION.SDK_INT < 30) return "截图需要 Android 11 及以上系统"
             val service = instance ?: return "截图需要先开启无障碍服务（屏幕读取权限）"
@@ -240,7 +246,7 @@ class ScreenReaderService : AccessibilityService() {
         /** 点击屏幕上包含指定文字的控件。 */
         suspend fun performClickByText(text: String): String {
             val service = instance ?: return "模拟点击需要先开启无障碍服务"
-            val executor = runCatching { service.mainExecutor }.getOrNull()
+            val executor = runCatching { serviceExecutor(service) }.getOrNull()
                 ?: return "模拟点击服务未就绪"
             return kotlinx.coroutines.withTimeoutOrNull(GESTURE_TIMEOUT_MS) {
                 suspendCancellableCoroutine { cont ->
@@ -271,7 +277,7 @@ class ScreenReaderService : AccessibilityService() {
         /** 向当前聚焦的输入框写入文本。 */
         suspend fun performInputText(text: String): String {
             val service = instance ?: return "输入文本需要先开启无障碍服务"
-            val executor = runCatching { service.mainExecutor }.getOrNull()
+            val executor = runCatching { serviceExecutor(service) }.getOrNull()
                 ?: return "输入文本服务未就绪"
             return kotlinx.coroutines.withTimeoutOrNull(GESTURE_TIMEOUT_MS) {
                 suspendCancellableCoroutine { cont ->
@@ -303,7 +309,7 @@ class ScreenReaderService : AccessibilityService() {
         /** 按 resource-id 或 contentDescription 点击控件。 */
         suspend fun performClickBy(id: String?, desc: String?): String {
             val service = instance ?: return "模拟点击需要先开启无障碍服务"
-            val executor = runCatching { service.mainExecutor }.getOrNull()
+            val executor = runCatching { serviceExecutor(service) }.getOrNull()
                 ?: return "模拟点击服务未就绪"
             return kotlinx.coroutines.withTimeoutOrNull(GESTURE_TIMEOUT_MS) {
                 suspendCancellableCoroutine { cont ->
@@ -393,7 +399,11 @@ class ScreenReaderService : AccessibilityService() {
                 "recents" -> AccessibilityService.GLOBAL_ACTION_RECENTS
                 "notifications" -> AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS
                 "quick_settings" -> AccessibilityService.GLOBAL_ACTION_QUICK_SETTINGS
-                "lock" -> AccessibilityService.GLOBAL_ACTION_LOCK_SCREEN
+                "lock" -> if (Build.VERSION.SDK_INT >= 28) {
+                    AccessibilityService.GLOBAL_ACTION_LOCK_SCREEN
+                } else {
+                    return "??? Android 9 ?????"
+                }
                 else -> null
             } ?: return "不支持的系统动作：$action"
             return if (runCatching { service.performGlobalAction(code) }.getOrDefault(false)) {
@@ -437,7 +447,7 @@ class ScreenReaderService : AccessibilityService() {
             gesture: GestureDescription,
             label: String
         ): String {
-            val executor = runCatching { service.mainExecutor }.getOrNull()
+            val executor = runCatching { serviceExecutor(service) }.getOrNull()
                 ?: return "模拟${label}服务未就绪"
             return kotlinx.coroutines.withTimeoutOrNull(GESTURE_TIMEOUT_MS) {
                 suspendCancellableCoroutine { cont ->

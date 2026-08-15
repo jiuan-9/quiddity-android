@@ -435,13 +435,6 @@ class TimeLibraryRepository(
         try {
             val channelId = "active_message_sent"
             val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                if (manager.getNotificationChannel(channelId) == null) {
-                    manager.createNotificationChannel(
-                        NotificationChannel(channelId, "主动消息", NotificationManager.IMPORTANCE_DEFAULT)
-                    )
-                }
-            }
             val aiName = conv.persona.name.ifBlank { conv.title }
             val intent = com.quiddity.app.MainActivity.conversationIntent(context, conv.id, conv.type)
             val pending = PendingIntent.getActivity(

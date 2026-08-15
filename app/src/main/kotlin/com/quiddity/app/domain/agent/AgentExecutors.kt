@@ -529,13 +529,6 @@ class AgentExecutors(
         runCatching {
             val channelId = "agent_notify"
             val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                if (manager.getNotificationChannel(channelId) == null) {
-                    manager.createNotificationChannel(
-                        NotificationChannel(channelId, "Agent 提醒", NotificationManager.IMPORTANCE_DEFAULT)
-                    )
-                }
-            }
             val intent = Intent(context, MainActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
             }
@@ -799,7 +792,11 @@ class AgentExecutors(
     fun clearClipboard(): String =
         runCatching {
             val manager = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            manager.clearPrimaryClip()
+            if (Build.VERSION.SDK_INT >= 28) {
+                manager.clearPrimaryClip()
+            } else {
+                manager.setPrimaryClip(ClipData.newPlainText("", ""))
+            }
             "已清空剪贴板"
         }.getOrElse { "清空剪贴板失败：${it.message ?: "未知错误"}" }
 
@@ -834,6 +831,7 @@ class AgentExecutors(
             "已设置 $seconds 秒后的提醒"
         }.getOrElse { "设置提醒失败：${it.message ?: "未知错误"}" }
 
+    @android.annotation.SuppressLint("WrongConstant")
     private fun packageInfo(pkg: String, flags: Int): android.content.pm.PackageInfo? =
         runCatching {
             if (Build.VERSION.SDK_INT >= 33) {

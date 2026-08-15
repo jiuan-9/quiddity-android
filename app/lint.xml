@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!-- 启动图标为既有方形 PNG 资产，未按自适应图标规范留白；重绘需设计资源，暂以现状为准。 -->
+    <issue id="IconLauncherShape" severity="ignore" />
+    <!-- dataExtractionRules 仅在 Android 12+ 被读取，低版本系统自动忽略，属性声明无害。 -->
+    <issue id="DataExtractionRules" severity="ignore" />
+</lint>

@@ -39,6 +39,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -315,7 +316,7 @@ internal fun ButtonModuleView(
 ) {
     val haptics = LocalHapticFeedback.current
     var pressing by remember { mutableStateOf(false) }
-    var pressStart by remember { mutableStateOf(0L) }
+    var pressStart by remember { mutableLongStateOf(0L) }
     val holdProgress by animateFloatAsState(
         targetValue = if (pressing) 1f else 0f,
         animationSpec = tween(1000, easing = Motion.EasingStandard),

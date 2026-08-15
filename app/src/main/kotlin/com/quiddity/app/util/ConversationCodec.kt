@@ -105,9 +105,11 @@ object ConversationCodec {
     /** 消息分隔线（纯文本）。 */
     private const val TXT_SEPARATOR = "\n\n----------------------------------------\n\n"
 
+    @android.annotation.SuppressLint("ConstantLocale")
     private val isoFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).apply {
         timeZone = TimeZone.getDefault()
     }
+    @android.annotation.SuppressLint("ConstantLocale")
     private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).apply {
         timeZone = TimeZone.getDefault()
     }

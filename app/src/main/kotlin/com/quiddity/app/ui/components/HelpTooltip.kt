@@ -19,6 +19,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -102,7 +103,7 @@ fun HelpTooltip(
     val screenHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
 
     // 图标在窗口中的中心 Y 坐标，用于判断气泡应向上还是向下展开
-    var iconCenterY by remember { mutableStateOf(0f) }
+    var iconCenterY by remember { mutableFloatStateOf(0f) }
     val verticalGap = with(density) { 6.dp.toPx() }
     val horizontalPx = with(density) { horizontalOffset.roundToPx() }
     val iconSizePx = with(density) { iconSize.dp.toPx() }

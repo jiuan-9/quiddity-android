@@ -60,9 +60,9 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun ExpandableText(
     text: String,
+    modifier: Modifier = Modifier,
     style: TextStyle = MaterialTheme.typography.bodySmall,
     maxCollapsedLines: Int = 2,
-    modifier: Modifier = Modifier
 ) {
     var expanded by remember { mutableStateOf(false) }
     var canExpand by remember { mutableStateOf(false) }

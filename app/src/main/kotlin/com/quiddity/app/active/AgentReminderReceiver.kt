@@ -26,13 +26,6 @@ class AgentReminderReceiver : BroadcastReceiver() {
     private fun postNotification(context: Context, title: String, text: String) {
         runCatching {
             val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                if (manager.getNotificationChannel(CHANNEL_ID) == null) {
-                    manager.createNotificationChannel(
-                        NotificationChannel(CHANNEL_ID, "Agent 提醒", NotificationManager.IMPORTANCE_DEFAULT)
-                    )
-                }
-            }
             val pending = PendingIntent.getActivity(
                 context,
                 0,

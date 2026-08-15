@@ -73,6 +73,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -345,10 +346,10 @@ fun HomeScreen(
     val density = LocalDensity.current
     val maxPullDp = 150f
     val thresholdDp = 108f
-    var pullDp by remember { mutableStateOf(0f) }
+    var pullDp by remember { mutableFloatStateOf(0f) }
     var pullTriggered by remember { mutableStateOf(false) }
     // 时间闸：一次下拉手势只推一次小应用中心，防止手指未抬起时跨阈值重复 navigate
-    var lastOpenTriggerMs by remember { mutableStateOf(0L) }
+    var lastOpenTriggerMs by remember { mutableLongStateOf(0L) }
     val agentListState = rememberLazyListState()
     val soloListState = rememberLazyListState()
     val groupListState = rememberLazyListState()

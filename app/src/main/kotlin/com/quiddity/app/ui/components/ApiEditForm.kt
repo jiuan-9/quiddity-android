@@ -103,13 +103,13 @@ import kotlinx.coroutines.launch
 fun ApiEditForm(
     initial: ApiCatalogEditFormState?,
     catalogManager: ApiCatalogManager,
+    modifier: Modifier = Modifier,
     providers: List<ApiCatalogManager.Provider> = catalogManager.providers,
     testConnection: suspend (apiUrl: String, apiKey: String, model: String) -> Result<String>,
     testVision: (suspend (apiUrl: String, apiKey: String, model: String) -> Result<String>)? = null,
     hasStoredKey: Boolean = false,
     onDismiss: () -> Unit,
     onSave: (ApiCatalogEditFormState) -> Unit,
-    modifier: Modifier = Modifier
 ) {
     val initialProvider = providers.firstOrNull { it.id == initial?.providerId }
         ?: catalogManager.customProvider

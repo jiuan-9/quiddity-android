@@ -111,7 +111,7 @@ internal fun SpyDealScreen(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         SpyTopBar(title = "发牌", onBack = onBack)
-        SpyEntrance(1) {
+        SpyEntrance(index = 1) {
             Text(
                 text = "悄悄记住你的词，别让同桌看出破绽",
                 style = MaterialTheme.typography.bodyMedium,
@@ -154,12 +154,12 @@ internal fun SpyDealScreen(
                 }
             }
         }
-        SpyEntrance(3) {
+        SpyEntrance(index = 3) {
             PlayerStrip(players = game.players)
         }
         if (!notice.isNullOrBlank()) {
             Spacer(Modifier.size(10.dp))
-            SpyEntrance(4) {
+            SpyEntrance(index = 4) {
                 Surface(
                     shape = RoundedCornerShape(12.dp),
                     color = MaterialTheme.colorScheme.error.copy(alpha = 0.08f)
