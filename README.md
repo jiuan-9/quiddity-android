@@ -4,7 +4,7 @@
 >
 > 知所不尽，往复不止 — Know no bounds, repeat no end.
 
-[![Release](https://img.shields.io/badge/release-v1.3.0-blue)](#下载)
+[![Release](https://img.shields.io/badge/release-v1.6.0-blue)](#下载)
 [![Android](https://img.shields.io/badge/Android-8.0%2B-green)](#系统要求)
 [![License](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.0.21-purple)](#技术栈)
@@ -29,9 +29,9 @@ Quiddity Android 是 Quiddity 移动端的独立产品（与 Quiddity-Chat、Qui
 
 ## 下载
 
-前往官网 [https://quiddity-3by.pages.dev/](https://quiddity-3by.pages.dev/) 下载最新版本（v1.3.0，约 2.85 MB）。
+前往官网 [https://quiddity-3by.pages.dev/](https://quiddity-3by.pages.dev/) 下载最新版本。
 
-或直接下载：[`quiddity-1.3.0.apk`](https://github.com/jiuan-9/Quiddity-website/releases/download/v1.3.0/quiddity-1.3.0.apk)
+或直接下载：[`quiddity-1.5.2.apk`](https://github.com/jiuan-9/Quiddity-website/releases/download/v1.5.2/quiddity-1.5.2.apk)
 
 ## 系统要求
 
@@ -45,11 +45,11 @@ Quiddity Android 是 Quiddity 移动端的独立产品（与 Quiddity-Chat、Qui
 
 - **语言**：Kotlin 2.0.21
 - **UI**：Jetpack Compose（BOM 2024.10.00，Material 3）
-- **架构**：MVVM + Repository + Hilt 依赖注入
+- **架构**：MVVM + Repository + ServiceLocator 手动依赖注入
 - **数据持久化**：
   - DataStore Preferences（设置项）
   - EncryptedFile（API Key、敏感数据）
-  - Room / 自有 JSON 持久化（对话与消息）
+  - 自有 JSON 持久化（对话与消息；不依赖 Room）
 - **网络**：OkHttp 4.12 + okhttp-sse（流式响应）
 - **图片加载**：Coil 2.7
 - **协程**：kotlinx-coroutines 1.9
@@ -73,7 +73,7 @@ Quiddity-android/
 │       │   │   │   ├── model/           # 数据模型（Conversation、Message…）
 │       │   │   │   ├── remote/          # 网络层（API、SSE）
 │       │   │   │   └── repo/            # 仓储层（ChatRepository 等）
-│       │   │   ├── di/                  # Hilt 依赖注入模块
+│       │   │   ├── di/                  # ServiceLocator 手动依赖注入
 │       │   │   ├── domain/              # 业务逻辑（ApiCatalogManager 等）
 │       │   │   ├── ui/                  # UI 层
 │       │   │   │   ├── chat/            # 对话页（核心）
@@ -82,8 +82,11 @@ Quiddity-android/
 │       │   │   │   ├── home/            # 首页
 │       │   │   │   ├── navigation/      # 导航图
 │       │   │   │   ├── settings/        # 设置页
+│       │   │   │   ├── agent/           # Agent 模式（工具执行、角色选择）
+│       │   │   │   ├── miniapps/        # 小应用（间谍游戏 / 拆弹 / 棋盘等）
 │       │   │   │   ├── start/           # 启动页
 │       │   │   │   └── theme/           # 主题
+│       │   │   ├── active/              # 无障碍读屏 / 主动消息 / 通知桥
 │       │   │   └── util/                # 工具类（QuiddityConstants 等）
 │       │   └── res/                     # 资源文件
 │       │       ├── drawable/            # 矢量图
@@ -99,8 +102,6 @@ Quiddity-android/
 │   └── wrapper/                         # Gradle wrapper
 ├── gradlew / gradlew.bat                # Gradle wrapper 脚本
 ├── keystore.properties.example          # 签名配置模板（不含密码）
-├── docs/                                # 进阶文档
-│   └── 压缩会话流程说明.md              # 进阶级模型压缩流程详解
 └── README.md                            # 本文件
 ```
 
@@ -194,16 +195,14 @@ keyPassword=xxx
 
 ### 2. 会话压缩（记忆库）
 
-详见 [`docs/压缩会话流程说明.md`](docs/压缩会话流程说明.md)
-
 - **进阶级（ADVANCED）**：默认 20 轮触发一次
 - **完整级（FULL）**：默认 40 轮触发一次
 - **基础级（BASIC）**：默认 6 轮触发一次
-- **触发条件**：用户发送消息后，由 `ChatViewModel.checkMemoryBankCompression()` 检测
+- **触发条件**：由 [`CompressionStateMachine`](app/src/main/kotlin/com/quiddity/app/domain/CompressionStateMachine.kt) 判定（启用记忆库且距上次压缩达到阈值），流结束后在 `ChatViewModel` 流式管线中触发
 
 ### 3. 上下文裁剪
 
-[`ChatRepository.takeLastRounds()`](app/src/main/kotlin/com/quiddity/app/data/repo/ChatRepository.kt) 与 `takeFromRound()` 实现了**按"轮"（以 USER 消息为锚点）裁剪**的算法，正确处理"继续说"与"延迟发送"导致的单轮多消息情况。
+[`ChatContextTrimmer`](app/src/main/kotlin/com/quiddity/app/domain/ChatContextTrimmer.kt) 实现了**按"轮"（以 USER 消息为锚点）裁剪**的算法（`takeLastRounds` / `takeFromRound`），正确处理"继续说"与"延迟发送"导致的单轮多消息情况；工具轮回传截断由 [`ChatToolRoundTrimmer`](app/src/main/kotlin/com/quiddity/app/data/repo/ChatToolRoundTrimmer.kt) 承担。
 
 ### 4. 模型分配方案
 
@@ -227,6 +226,14 @@ keyPassword=xxx
 ```
 
 脚手架会生成可编译占位实现并自动注册到 `MiniAppRegistry`，随后把占位页替换成真实业务即可；复杂小应用参考棋盘小应用分层（`domain/` 纯逻辑 + `ViewModel` 状态机 + `MiniAppInviteManager` 复用邀请流程）。详见 [`new-miniapp.ps1`](new-miniapp.ps1)。
+
+### 6. Agent 模式
+
+Agent 会话支持工具调用闭环：`AgentToolRegistry` 注册 56 个工具（应用/文件/系统/交互四类），`AgentExecutors` 提供读取类执行器（Shizuku 写入类需授权），`AgentWorkflowController` 负责多轮任务编排与重试；`AgentChatScreen` 提供独立聊天界面（工具痕迹穿插正文、角色库选择、危险操作确认与撤回）。
+
+### 7. 无障碍读屏与主动消息
+
+`active/` 模块承载：`ScreenReaderService`（无障碍读屏，供 Agent 感知屏幕与模拟操作）、`ActiveMessageService` / `TimeLibraryRepository`（按时间库定时主动发消息）、`OperationNotifyController` 与 `NotificationBridge`（行动通知弹窗与通知回复）。
 
 ## 数据存储
 
@@ -263,7 +270,11 @@ keyPassword=xxx
 - [x] 1.1.1：修复部分手机检测更新失败 / 启动下载失败，版本号递增（versionCode 5 → 6），UpdateChecker 多源 fallback + installApk 改用 FileProvider + downloadApk 路径修正
 - [x] 1.2.0：主动消息（时间库），AI 每天定时主动发消息，版本号递增（versionCode 7 → 8）
 - [x] 1.3.0：数据导出 schema v2 接口预留（角色库 / 群聊接口 / 记忆调用式字段与提示词），版本号递增（versionCode 8 → 9）
-- [ ] 1.4.0：插件系统
+- [x] 1.4.0：小应用框架上线（骰子 / 间谍游戏 / 拆弹 / 棋盘），版本号递增（versionCode 11 → 12）
+- [x] 1.5.0：会话多选 / 导出长图 / 发送延迟 / 群聊点名回复与记忆压缩，版本号递增（versionCode 12 → 13）
+- [x] 1.5.x：联网搜索细化与稳定性修复（versionCode 13 → 14）
+- [x] 1.6.0：Agent 模式（工具调用 / 无障碍读屏 / 主动消息），版本号递增（versionCode 14 → 15）
+- [ ] 1.7.0：插件系统
 - [ ] 2.0.0：端侧模型（llama.cpp / MediaPipe）
 
 ## 相关仓库
