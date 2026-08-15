@@ -54,7 +54,6 @@ class ChatViewModel(
         visionOcrService = visionOcrService,
         viewModelScope = viewModelScope,
         conversationId = conversationId,
-        group = groupController,
         persona = personaController,
         settingsController = settingsController,
         onIdle = onIdle
@@ -78,6 +77,7 @@ class ChatViewModel(
             conversationId = conversationId,
             stream = streamController
         )
+        streamController.attachGroup(groupController)
         // 消息流生命周期管理：用单一 launch + collect 自动跟随 viewModelScope 生命周期，
         // suspend observeMessages 在协程内调用，IO 自动调度。
         viewModelScope.launch {

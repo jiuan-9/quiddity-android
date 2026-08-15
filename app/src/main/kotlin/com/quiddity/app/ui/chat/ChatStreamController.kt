@@ -37,11 +37,11 @@ internal class StreamController(
     private val visionOcrService: VisionOcrService,
     private val viewModelScope: CoroutineScope,
     private val conversationId: String,
-    private val group: GroupController,
     private val persona: PersonaController,
     private val settingsController: SettingsController,
     private val onIdle: ((String) -> Unit)? = null
 ) {
+    internal lateinit var group: GroupController
     private val _messages get() = state._messages
     private val _pendingImageUri get() = state._pendingImageUri
     private val _ocrState get() = state._ocrState
@@ -66,16 +66,21 @@ internal class StreamController(
     private var sendDelayJob get() = state.sendDelayJob; set(value) { state.sendDelayJob = value }
     private var lastInputEditAt get() = state.lastInputEditAt; set(value) { state.lastInputEditAt = value }
     private val groupQueueEngine get() = state.groupQueueEngine
-    private val eventProcessor = StreamEventProcessor(
-        state = state,
-        conversationRepository = conversationRepository,
-        settingsRepository = settingsRepository,
-        chatRepository = chatRepository,
-        conversationId = conversationId,
-        viewModelScope = viewModelScope,
-        group = group,
-        settingsController = settingsController
-    )
+    private lateinit var eventProcessor: StreamEventProcessor
+
+    fun attachGroup(controller: GroupController) {
+        group = controller
+        eventProcessor = StreamEventProcessor(
+            state = state,
+            conversationRepository = conversationRepository,
+            settingsRepository = settingsRepository,
+            chatRepository = chatRepository,
+            conversationId = conversationId,
+            viewModelScope = viewModelScope,
+            group = group,
+            settingsController = settingsController
+        )
+    }
 
     fun sendMessage(
         text: String,
