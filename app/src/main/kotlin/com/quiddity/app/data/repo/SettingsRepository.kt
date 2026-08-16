@@ -133,6 +133,8 @@ class SettingsRepository(private val store: SettingsStore) {
 
     suspend fun setDarkMode(enabled: Boolean) = update { it.copy(darkMode = enabled) }
     suspend fun setUserAvatar(uri: String?) = update { it.copy(userAvatarUri = uri) }
+    suspend fun setOverlayEnabled(enabled: Boolean) = update { it.copy(overlayEnabled = enabled) }
+    suspend fun setOverlayAvatarUri(uri: String?) = update { it.copy(overlayAvatarUri = uri) }
     suspend fun setMultilineSplit(enabled: Boolean) = update { it.copy(multilineAutoSplit = enabled) }
     suspend fun setEnterToSend(enabled: Boolean) = update { it.copy(enterToSend = enabled) }
     suspend fun setMaxTokens(value: Int) = update { it.copy(globalMaxTokens = value) }

@@ -33,6 +33,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -73,15 +74,20 @@ import kotlinx.coroutines.withContext
 
 
 /**
- * 圆形头像选择器（96dp）。
+ * 圆形头像选择器。
  *
  * 点击触发 PickVisualMedia（仅图片）。选定后先进入标准化裁剪界面，
  * 裁剪完成的 Uri 通过 [onPicked] 回调返回。
+ *
+ * @param size 显示尺寸（默认 96dp）
+ * @param imageNamePrefix 裁剪产物文件名前缀（不同用途头像互不覆盖）
  */
 @Composable
 fun AvatarPicker(
     avatarUri: String?,
-    onPicked: (String) -> Unit
+    onPicked: (String) -> Unit,
+    size: Dp = 96.dp,
+    imageNamePrefix: String = "user_avatar"
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -91,7 +97,7 @@ fun AvatarPicker(
     var copyError by remember { mutableStateOf<String?>(null) }
     // 裁剪界面绑定的 URI（已复制到内部存储的 file:// URI）
     var croppingUri by remember { mutableStateOf<Uri?>(null) }
-    var cropOutputName by remember { mutableStateOf("user_avatar") }
+    var cropOutputName by remember { mutableStateOf(imageNamePrefix) }
 
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
@@ -106,7 +112,7 @@ fun AvatarPicker(
                     }
                 }
                 result.onSuccess { internalUri ->
-                    cropOutputName = "user_avatar_${System.currentTimeMillis()}"
+                    cropOutputName = "${imageNamePrefix}_${System.currentTimeMillis()}"
                     croppingUri = internalUri
                 }.onFailure { err ->
                     CrashLogger.logException(
@@ -152,7 +158,7 @@ fun AvatarPicker(
 
     Box(
         modifier = Modifier
-            .size(96.dp)
+            .size(size)
             .clip(CircleShape)
             .background(com.quiddity.app.ui.components.glassCardColor())
             .clickable(
@@ -179,7 +185,7 @@ fun AvatarPicker(
                     model = avatarUri,
                     contentDescription = "头像",
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier.size(96.dp).clip(CircleShape)
+                    modifier = Modifier.size(size).clip(CircleShape)
                 )
             }
             else -> {

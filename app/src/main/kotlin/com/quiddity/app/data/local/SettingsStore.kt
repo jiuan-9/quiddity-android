@@ -113,6 +113,8 @@ class SettingsStore(private val context: Context) {
         val GROUP_TUTORIAL_SEEN = booleanPreferencesKey("group_tutorial_seen")
         val SOLO_CHAT_COUNTER = intPreferencesKey("solo_chat_counter")
         val GROUP_CHAT_COUNTER = intPreferencesKey("group_chat_counter")
+        val OVERLAY_ENABLED = booleanPreferencesKey("overlay_enabled")
+        val OVERLAY_AVATAR_URI = stringPreferencesKey("overlay_avatar_uri")
     }
 
     /** 从 Preferences 还原 [AppSettings]，缺省值统一来自 [AppSettings.Default]。 */
@@ -149,7 +151,9 @@ class SettingsStore(private val context: Context) {
                     this[Keys.PROACTIVE_MESSAGE_LAST_RESET_DATE] ?: d.proactiveMessageLastResetDate,
                 groupTutorialSeen = this[Keys.GROUP_TUTORIAL_SEEN] ?: d.groupTutorialSeen,
                 soloChatCounter = this[Keys.SOLO_CHAT_COUNTER] ?: d.soloChatCounter,
-                groupChatCounter = this[Keys.GROUP_CHAT_COUNTER] ?: d.groupChatCounter
+                groupChatCounter = this[Keys.GROUP_CHAT_COUNTER] ?: d.groupChatCounter,
+                overlayEnabled = this[Keys.OVERLAY_ENABLED] ?: d.overlayEnabled,
+                overlayAvatarUri = this[Keys.OVERLAY_AVATAR_URI] ?: d.overlayAvatarUri
             )
         } catch (t: Throwable) {
             android.util.Log.e("SettingsStore", "解析设置失败，回退默认值", t)
@@ -213,6 +217,9 @@ class SettingsStore(private val context: Context) {
                 prefs[Keys.GROUP_TUTORIAL_SEEN] = next.groupTutorialSeen
                 prefs[Keys.SOLO_CHAT_COUNTER] = next.soloChatCounter
                 prefs[Keys.GROUP_CHAT_COUNTER] = next.groupChatCounter
+                prefs[Keys.OVERLAY_ENABLED] = next.overlayEnabled
+                next.overlayAvatarUri?.let { prefs[Keys.OVERLAY_AVATAR_URI] = it }
+                    ?: prefs.remove(Keys.OVERLAY_AVATAR_URI)
                 prefs[Keys.CATALOG_JSON] = catalogJson
             }
             true

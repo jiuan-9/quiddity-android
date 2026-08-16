@@ -603,7 +603,17 @@ data class AppSettings(
     /**
      * 群聊默认名计数器：新群聊 1、2、3…，删除不补号（方案二.4）。
      */
-    val groupChatCounter: Int = 0
+    val groupChatCounter: Int = 0,
+    /**
+     * 回复悬浮窗总开关（需系统悬浮窗权限）。
+     * - true = 应用不可见且 AI 回复时显示悬浮窗头像/气泡
+     * - false = 关闭（默认）
+     */
+    val overlayEnabled: Boolean = false,
+    /**
+     * 悬浮窗头像 URI（null = 默认应用图标）。
+     */
+    val overlayAvatarUri: String? = null
 ) {
     companion object {
         val Default = AppSettings()

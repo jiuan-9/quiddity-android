@@ -88,6 +88,16 @@ internal class StreamEventProcessor(
                 if (!conversationRepository.updateMessage(target)) raiseStorageError()
                 // AI 消息完成时累加 token 用量
                 settingsController.accumulateTokenUsage(target.tokenCount)
+                // 悬浮窗：回复完成 → 入队展示气泡（应用不可见时由控制器弹出）
+                val bubbleText = target.content.trim().takeIf { it.isNotBlank() }
+                if (bubbleText != null && !target.isNotice && !target.isThinking) {
+                    com.quiddity.app.active.ReplyOverlayController.enqueueBubble(
+                        text = bubbleText.take(MAX_BUBBLE_CHARS),
+                        conversationId = conversationId,
+                        conversationType = conversation.value?.type
+                            ?: com.quiddity.app.data.model.ConversationType.SOLO
+                    )
+                }
             }
             is ChatRepository.Event.ToolUse -> {
                 _toolTraces.value = _toolTraces.value + ToolTrace(event.toolName, "running", null)
@@ -161,6 +171,7 @@ internal class StreamEventProcessor(
                 _pendingToolConfirm.value = null
                 // 任务结束兜底清理行动通知弹窗（正常流程每一步的完成弹窗会自动消失）
                 com.quiddity.app.active.OperationNotifyController.dismiss()
+                com.quiddity.app.active.ReplyOverlayController.endReply(conversationId)
             }
             is ChatRepository.Event.Truncated -> {
                 // 回复被截断：不静默吞掉——群聊插入可见提示气泡，私聊弹提示
@@ -193,10 +204,15 @@ internal class StreamEventProcessor(
                 _toolTraces.value = emptyList()
                 _pendingToolConfirm.value = null
                 com.quiddity.app.active.OperationNotifyController.dismiss()
+                com.quiddity.app.active.ReplyOverlayController.endReply(conversationId)
                 _errorEvent.value = event.throwable.message ?: "未知错误"
                 _chatError.value = chatRepository.classify(event.throwable)
             }
         }
+    }
+
+    private companion object {
+        const val MAX_BUBBLE_CHARS = 80
     }
     fun stripThinkingEcho(msg: Message): Message {
         if (msg.isThinking || msg.isNotice || msg.content.isBlank()) return msg

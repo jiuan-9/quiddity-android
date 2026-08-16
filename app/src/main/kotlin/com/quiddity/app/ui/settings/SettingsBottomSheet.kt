@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -104,6 +105,7 @@ import androidx.compose.ui.unit.dp
 import com.quiddity.app.util.QuiddityConstants
 import kotlin.math.roundToInt
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.quiddity.app.di.ServiceLocator
 import com.quiddity.app.data.model.ImportMode
 import com.quiddity.app.data.model.ImportPlan
@@ -197,9 +199,19 @@ fun SettingsBottomSheet(
     var showDelayEditor by rememberSaveable { mutableStateOf(false) }
     var showListWallpaper by rememberSaveable { mutableStateOf(false) }
     var showLegalDocs by rememberSaveable { mutableStateOf(false) }
+    var requestedOverlayPermission by rememberSaveable { mutableStateOf(false) }
     var toastMsg by remember { mutableStateOf<String?>(null) }
     // 主动消息总开关：开启后先弹"已了解该功能"提示，确认后才持久化
     var showProactiveDialog by remember { mutableStateOf(false) }
+
+    // 悬浮窗授权返回后自动开启：授权页跳转前标记，返回前台时若权限已授予则保存开关
+    LifecycleResumeEffect(Unit) {
+        if (requestedOverlayPermission && Settings.canDrawOverlays(context)) {
+            requestedOverlayPermission = false
+            viewModel.setOverlayEnabled(true)
+        }
+        onPauseOrDispose { }
+    }
     // 导入抉择：已有数据时暂存解析计划（payload + 跳过清单），弹窗让用户选择替换/合并/取消
     var pendingImportPlan by remember {
         mutableStateOf<ImportPlan?>(null)
@@ -485,36 +497,6 @@ fun SettingsBottomSheet(
                                 else "未设置",
                                 onClick = { showListWallpaper = true }
                             )
-                            ToggleRow(
-                                icon = Icons.Filled.Notifications,
-                                title = "主动消息",
-                                subtitle = if (settings.proactiveMessageEnabled) "已开启（全局总开关，会话内可单独启用）"
-                                else "关闭后所有会话的主动消息停止",
-                                checked = settings.proactiveMessageEnabled,
-                                onCheckedChange = { enabled ->
-                                    if (enabled) {
-                                        // Android 13+ 需要通知权限：开启时一并请求，保证到点能弹通知
-                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                                            ContextCompat.checkSelfPermission(
-                                                context,
-                                                Manifest.permission.POST_NOTIFICATIONS
-                                            ) != PackageManager.PERMISSION_GRANTED
-                                        ) {
-                                            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                                        }
-                                        // 仅表知晓：先弹提示，确认后才保存总开关状态
-                                        showProactiveDialog = true
-                                    } else {
-                                        viewModel.setProactiveMessageEnabled(false)
-                                    }
-                                }
-                            )
-                        // 系统条件引导：总开关开启后展示精确闹钟 / 电池优化状态与一键跳转
-                        if (settings.proactiveMessageEnabled) {
-                                ActiveMessagePermissionCard(
-                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 3.dp)
-                                )
-                        }
 
                             }
                         }
@@ -679,6 +661,93 @@ fun SettingsBottomSheet(
                                 )
                         }
 
+                            }
+                        }
+                        // ===== Section: 通知与提醒 =====
+                        item(key = "section_notify", contentType = { "section" }) {
+                            SettingsSectionCard(title = "通知与提醒") {
+                            ToggleRow(
+                                icon = Icons.Filled.Notifications,
+                                title = "主动消息",
+                                subtitle = if (settings.proactiveMessageEnabled) "已开启（全局总开关，会话内可单独启用）"
+                                else "关闭后所有会话的主动消息停止",
+                                checked = settings.proactiveMessageEnabled,
+                                onCheckedChange = { enabled ->
+                                    if (enabled) {
+                                        // Android 13+ 需要通知权限：开启时一并请求，保证到点能弹通知
+                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                                            ContextCompat.checkSelfPermission(
+                                                context,
+                                                Manifest.permission.POST_NOTIFICATIONS
+                                            ) != PackageManager.PERMISSION_GRANTED
+                                        ) {
+                                            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                        }
+                                        // 仅表知晓：先弹提示，确认后才保存总开关状态
+                                        showProactiveDialog = true
+                                    } else {
+                                        viewModel.setProactiveMessageEnabled(false)
+                                    }
+                                }
+                            )
+                        // 系统条件引导：总开关开启后展示精确闹钟 / 电池优化状态与一键跳转
+                        if (settings.proactiveMessageEnabled) {
+                                ActiveMessagePermissionCard(
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 3.dp)
+                                )
+                        }
+                            ToggleRow(
+                                icon = Icons.Filled.Notifications,
+                                title = "回复悬浮窗",
+                                subtitle = if (settings.overlayEnabled) "已开启：离开应用时展示 AI 回复状态"
+                                else "关闭：AI 回复时不显示悬浮窗",
+                                checked = settings.overlayEnabled,
+                                onCheckedChange = { enabled ->
+                                    if (enabled) {
+                                        if (!Settings.canDrawOverlays(context)) {
+                                            // 未授权：跳系统悬浮窗设置页，返回后自动开启
+                                            requestedOverlayPermission = true
+                                            runCatching {
+                                                context.startActivity(
+                                                    Intent(
+                                                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                                        Uri.parse("package:${context.packageName}")
+                                                    )
+                                                )
+                                            }
+                                        } else {
+                                            viewModel.setOverlayEnabled(true)
+                                        }
+                                    } else {
+                                        viewModel.setOverlayEnabled(false)
+                                    }
+                                }
+                            )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                AvatarPicker(
+                                    avatarUri = settings.overlayAvatarUri,
+                                    onPicked = { viewModel.setOverlayAvatarUri(it) },
+                                    size = 56.dp,
+                                    imageNamePrefix = "overlay_avatar"
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column {
+                                    Text(
+                                        text = "悬浮窗头像",
+                                        style = MaterialTheme.typography.bodyLarge
+                                    )
+                                    Text(
+                                        text = "点击更换（默认应用图标）",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
                             }
                         }
                         // ===== Section 5: 数据 =====

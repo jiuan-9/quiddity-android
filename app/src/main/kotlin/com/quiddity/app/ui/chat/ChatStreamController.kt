@@ -82,6 +82,18 @@ internal class StreamController(
         )
     }
 
+    /** 悬浮窗：标记本会话回复开始（应用不可见时由控制器决定是否显示窗口）。 */
+    internal fun markReplyStarted() {
+        val conv = conversation.value ?: return
+        com.quiddity.app.active.ReplyOverlayController.startReply(conv.id, conv.type)
+    }
+
+    /** 悬浮窗：标记本会话回复结束。 */
+    internal fun markReplyEnded() {
+        val conv = conversation.value ?: return
+        com.quiddity.app.active.ReplyOverlayController.endReply(conv.id)
+    }
+
     fun sendMessage(
         text: String,
         ocrText: String? = null,
@@ -231,6 +243,7 @@ internal class StreamController(
             val selfJob = kotlin.coroutines.coroutineContext[kotlinx.coroutines.Job]
             eventProcessor.cleanupStaleStreamingMessages()
             _isGenerating.value = true
+            markReplyStarted()
             _toolTraces.value = emptyList()
             _pendingToolConfirm.value = null
             // Agent 模式：回复期间启动前台任务服务，用户切后台时进程不被回收，
@@ -274,6 +287,7 @@ internal class StreamController(
             } finally {
                 if (streamJob === selfJob) {
                     _isGenerating.value = false
+                    markReplyEnded()
                     _toolTraces.value = emptyList()
                     _pendingToolConfirm.value = null
                 }
@@ -419,6 +433,7 @@ internal class StreamController(
         groupStreamJob = viewModelScope.launch {
             val selfJob = kotlin.coroutines.coroutineContext[kotlinx.coroutines.Job]
             _isGenerating.value = true
+            markReplyStarted()
             try {
                 conversationRepository.replaceMessages(conversationId, newHistory)
                 chatRepository.streamGroupMemberReply(
@@ -438,6 +453,7 @@ internal class StreamController(
             } finally {
                 if (groupStreamJob === selfJob) {
                     _isGenerating.value = false
+                    markReplyEnded()
                 }
                 eventProcessor.settleInterruptedStreams()
                 notifyIdleIfNoWork()
@@ -449,6 +465,7 @@ internal class StreamController(
         // 取消上一轮（如果仍在进行）
         streamJob?.cancel()
         _isGenerating.value = true
+        markReplyStarted()
         replyRunStart = System.currentTimeMillis()
         replyRunChars = 0
         streamJob = viewModelScope.launch {
@@ -476,6 +493,7 @@ internal class StreamController(
             } finally {
                 if (streamJob === selfJob) {
                     _isGenerating.value = false
+                    markReplyEnded()
                     _toolTraces.value = emptyList()
                     _pendingToolConfirm.value = null
                 }
@@ -506,6 +524,7 @@ internal class StreamController(
             }
             group.syncGroupQueue()
             _isGenerating.value = false
+            markReplyEnded()
             eventProcessor.settleInterruptedStreams()
             notifyIdleIfNoWork()
             return
@@ -517,6 +536,7 @@ internal class StreamController(
         _pendingToolConfirm.value = null
         com.quiddity.app.active.OperationNotifyController.dismiss()
         _isGenerating.value = false
+        markReplyEnded()
         eventProcessor.settleInterruptedStreams()
         notifyIdleIfNoWork()
     }

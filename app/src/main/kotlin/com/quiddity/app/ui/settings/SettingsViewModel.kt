@@ -212,6 +212,17 @@ class SettingsViewModel(
         settingsRepository.setUserAvatar(uri)
     }
 
+    // ===== 回复悬浮窗 =====
+    fun setOverlayEnabled(enabled: Boolean) = viewModelScope.launch {
+        settingsRepository.setOverlayEnabled(enabled)
+        com.quiddity.app.active.ReplyOverlayController.updateEnabled(enabled)
+    }
+
+    fun setOverlayAvatarUri(uri: String?) = viewModelScope.launch {
+        settingsRepository.setOverlayAvatarUri(uri)
+        com.quiddity.app.active.ReplyOverlayController.updateAvatarUri(uri)
+    }
+
     // ===== 模型配置 =====
 
     /**

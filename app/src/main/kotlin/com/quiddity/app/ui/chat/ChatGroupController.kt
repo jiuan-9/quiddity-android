@@ -89,6 +89,7 @@ internal class GroupController(
         groupStreamJob = viewModelScope.launch {
             val selfJob = kotlin.coroutines.coroutineContext[kotlinx.coroutines.Job]
             _isGenerating.value = true
+            stream.markReplyStarted()
             try {
                 while (groupQueueEngine.isNotEmpty) {
                     val item = groupQueueEngine.snapshot().firstOrNull()
@@ -114,6 +115,7 @@ internal class GroupController(
                 // 避免被 stop/重说取消的旧处理器在新建 job 启动后把它误置 false
                 if (groupStreamJob === selfJob) {
                     _isGenerating.value = false
+                    stream.markReplyEnded()
                 }
                 stream.settleInterruptedStreams()
                 stream.notifyIdleIfNoWork()

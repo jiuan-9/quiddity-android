@@ -359,6 +359,13 @@ object AgentSecurity {
                 conversationId,
                 conversationType
             )
+            // 悬浮窗：气泡实时展示 Agent 正在执行的动作（滑动/点击/跳转等）
+            if (conversationId != null) {
+                com.quiddity.app.active.ReplyOverlayController.showToolAction(
+                    conversationId,
+                    agentActionFor(tool.name)
+                )
+            }
         }
         val result = runCatching {
             tool.execute(ctx, effectiveArgs)
@@ -387,6 +394,10 @@ object AgentSecurity {
                     conversationId,
                     conversationType
                 )
+            }
+            // 悬浮窗：动作结束，恢复回复状态（气泡队列优先展示）
+            if (conversationId != null) {
+                com.quiddity.app.active.ReplyOverlayController.clearToolAction(conversationId)
             }
         }
         return result

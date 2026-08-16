@@ -205,6 +205,14 @@ object ServiceLocator {
                 conversationRepository.migrateDeduplicateMessageIds()
                 // 主动消息：每日首次启动重置 done → pending，并重注册闹钟
                 timeLibraryRepository.onAppStart()
+                // 回复悬浮窗：启动时应用设置开关与头像（权限由系统设置页授权）
+                val overlaySettings = settingsRepository.currentSnapshot()
+                com.quiddity.app.active.ReplyOverlayController.updateEnabled(
+                    overlaySettings.overlayEnabled
+                )
+                com.quiddity.app.active.ReplyOverlayController.updateAvatarUri(
+                    overlaySettings.overlayAvatarUri
+                )
             }.onFailure {
                 android.util.Log.e("ServiceLocator", "启动加载数据失败", it)
             }
