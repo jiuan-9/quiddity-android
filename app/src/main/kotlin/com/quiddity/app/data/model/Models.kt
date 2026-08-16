@@ -495,7 +495,7 @@ data class AppSettings(
      * - true = AI 输出按句末标点 / 括号切成多条消息（像人一样分多条发送）
      * - false = 整条回复作为单条消息
      */
-    val multilineAutoSplit: Boolean = true,
+    val multilineAutoSplit: Boolean = false,
     val enterToSend: Boolean = true,
     val activeCatalogId: String? = null,
     val catalog: List<ApiCatalogEntry> = emptyList(),

@@ -59,6 +59,12 @@ import kotlinx.serialization.json.JsonPrimitive
  */
 object PromptBuilder {
 
+    /**
+     * 外部压缩占位符（`<<ccr:...>>`）：真实内容已不存在，发给模型只会污染上下文。
+     * 组装 API 历史时剥离该标记；整条消息只剩占位符时整条跳过。
+     */
+    private val CCR_REFERENCE_REGEX = Regex("""<<ccr:[^>]*>>""")
+
     // ===== 三条开发规范（位于文件中间位置） =====
     // 1. 问题修复规范：所有代码问题修复必须采用系统性解决方案，严禁使用临时性补丁或 hack 手段。
     //    修复内容需完全融入现有代码架构，确保代码逻辑的连贯性、可维护性和可扩展性。
@@ -598,7 +604,11 @@ object PromptBuilder {
                 ?.takeIf { it.isNotBlank() }
                 ?.let { "\n[图片 OCR 识别结果]\n${it.trim()}" }
                 .orEmpty()
-            result.add(ChatMessage(role = role, content = baseContent + marker.orEmpty() + ocrAppendix))
+            val cleaned = (baseContent + marker.orEmpty() + ocrAppendix)
+                .replace(CCR_REFERENCE_REGEX, "")
+                .trim()
+            if (cleaned.isBlank()) return@forEach
+            result.add(ChatMessage(role = role, content = cleaned))
         }
         return result
     }

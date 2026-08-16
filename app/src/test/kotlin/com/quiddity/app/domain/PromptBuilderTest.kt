@@ -206,6 +206,19 @@ class PromptBuilderTest {
     }
 
     @Test
+    fun `toApiMessages drops ccr placeholder content`() {
+        val history = listOf(
+            msg("m1", Role.USER, "<<ccr:97f81194c97d,string,725B>>"),
+            msg("m2", Role.ASSISTANT, "前面的回复内容是<<ccr:abc123,string,100B>>，这部分保留"),
+            msg("m3", Role.USER, "正常消息")
+        )
+        val plain = PromptBuilder.toApiMessages("", history)
+        assertEquals(2, plain.size, "整条占位符消息应被跳过")
+        assertEquals("前面的回复内容是，这部分保留", plain[0].content, "正文中的占位符应被剥离")
+        assertEquals("正常消息", plain[1].content)
+    }
+
+    @Test
     fun `toResponsesInput keeps game log system records as user input`() {
         val apiMessages = listOf(
             com.quiddity.app.data.remote.ChatMessage(role = "system", content = "人设提示词"),
