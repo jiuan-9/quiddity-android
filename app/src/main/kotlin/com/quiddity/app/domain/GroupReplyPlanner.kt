@@ -107,9 +107,15 @@ object GroupReplyPlanner {
         val apiMessages = PromptBuilder.toApiMessages(systemPrompt, transcript, senderNames, userName)
         val maxTokens = member.maxTokens ?: settings.globalMaxTokens
         val singleMsgTokens = member.singleMessageTokens ?: settings.globalSingleMessageTokens
-        // 按成员所用模型支持的最高温度钳制：部分模型仅支持 0～1.0
+        // 按成员所用模型支持的最高温度钳制：部分模型仅支持 0～1.0。
+        // 重说场景小幅提高温度，配合提示词要求换一种表达，降低与上一版雷同的概率。
+        val baseTemperature = member.temperature ?: settings.globalTemperature
         val temperature = com.quiddity.app.util.QuiddityConstants.clampTemperature(
-            member.temperature ?: settings.globalTemperature,
+            if (regeneratePreviousReply != null) {
+                baseTemperature + com.quiddity.app.data.repo.ToolRoundRunner.REGENERATE_TEMPERATURE_BOOST
+            } else {
+                baseTemperature
+            },
             access.maxTemperature
         )
         // 方案六.3：基础级只带最近 N 条；进阶级/完整级可自行用工具检索完整群聊消息。

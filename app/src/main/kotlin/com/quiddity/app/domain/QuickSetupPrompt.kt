@@ -34,7 +34,7 @@ import com.quiddity.app.data.model.UserPersona
  *
  * 输出格式（分节符不计入字数，仅计填空项内容）：
  * 【AI人设】
- * [名字]…
+ * [AI名字]…
  * [身份背景]…
  * [性格]…
  * [外观]…
@@ -42,11 +42,11 @@ import com.quiddity.app.data.model.UserPersona
  * [期望特质]…
  *
  * 【用户人设】
- * [名字]…
- * [身份]…
- * [性别]…
- * [年龄]…
- * [外观]…
+ * [用户名字]…
+ * [用户身份]…
+ * [用户性别]…
+ * [用户年龄]…
+ * [用户外观]…
  *
  * 【场景设置】
  * [当前场景]…
@@ -57,6 +57,14 @@ import com.quiddity.app.data.model.UserPersona
  * 粗略档省略 [外观][世界背景][期望特质] 与整个【记忆设置】节；【场景设置】所有档位均生成。
  */
 object QuickSetupPrompt {
+
+    /** 全部已知字段标签（AI / 用户 / 场景 / 记忆），解析切分点只认这些标签。 */
+    private val allFieldLabels = buildSet {
+        AiPersonaField.entries.forEach { add(it.label) }
+        UserPersonaField.entries.forEach { add(it.label) }
+        add("[当前场景]")
+        add("[需要记住的事]")
+    }
 
     // ===== 三条开发规范（位于文件中间位置） =====
     // 1. 问题修复规范：所有代码问题修复必须采用系统性解决方案，严禁使用临时性补丁或 hack 手段。
@@ -69,24 +77,24 @@ object QuickSetupPrompt {
     internal val QUICK_SETUP_SYSTEM_PROMPT = """
 你是一个"人设剖析师"。用户会给你一段人设描述——可能很长、很乱、很口语化。你的任务不是扩写、拉长或美化它，而是**剖析**：拆解用户原话里的设定信息，归位到对应的字段里，让下游 AI 能直接使用这份结构化的角色卡。
 
-【输出格式】严格按以下章节输出，每段文字独占一段。分节符不计入字数，仅填空项内容计入字数上限：
-【AI人设】
-[名字]……
-[身份背景]……
-[性格]……
-[外观]……
-[世界背景]……
-[期望特质]……
-【用户人设】
-[名字]……
-[身份]……
-[性别]……
-[年龄]……
-[外观]……
-【场景设置】
-[当前场景]……
-【记忆设置】
-[需要记住的事]……
+ 【输出格式】严格按以下章节输出，每段文字独占一段。分节符不计入字数，仅填空项内容计入字数上限：
+ 【AI人设】
+ [AI名字]……
+ [身份背景]……
+ [性格]……
+ [外观]……
+ [世界背景]……
+ [期望特质]……
+ 【用户人设】
+ [用户名字]……
+ [用户身份]……
+ [用户性别]……
+ [用户年龄]……
+ [用户外观]……
+ 【场景设置】
+ [当前场景]……
+ 【记忆设置】
+ [需要记住的事]……
 
 剖析原则（按优先级执行）：
 1. 剖析优先——先通读用户描述，识别其中隐含的结构：这个人是谁（身份背景/性格/外观/世界背景）、用户希望 AI 怎样（期望特质）、用户自己是谁（用户人设）、此刻身处何处（场景）、有什么要记住的（记忆）。把用户**亲口说出的设定**逐字归位到对应字段，关键用词原样保留，不替他改写。
@@ -94,11 +102,13 @@ object QuickSetupPrompt {
 3. 克制推断——只有用户完全没提、但字段又必须存在的项目才做最小推断：[名字]取一个贴合用户原意的普通常见名（2～4 个字的正常人名，禁止"小X"式昵称、网名、ID 或描述性长句）；[世界背景]在用户未提及时按[身份背景]的自然归属给出 4 字世界类型；[当前场景]只写一句、30 字以内（时间 / 地点 / 氛围即可）。其余字段一律以用户原话为准，绝不自行添加用户没说的设定。
 4. 具体胜于抽象——若用户原话本身就具体（口头禅、习惯、喜好），原样保留这些细节；若用户只给了抽象词（如"温柔"），可以做克制的展开说明其含义，但展开必须源于原词本义，不编造新设定。
 5. 不落俗套——不要套用模板句式和流行词；剖析的产出应保持用户自己的语气与风格。
-6. 视角规则（最高优先级）——所有字段必须以第三人称客观视角书写，禁止出现「你」「我」这类直接称呼；AI 角色用 [名字] 或"她/他"指代，用户用【用户人设】的[名字]指代。描写的是"这个角色是什么样"，而不是"你要怎么做"。
-7. 性别规则——【用户人设】的[性别]仅在用户描述中明确出现时填写；未明确时一律填"暂不设置"，绝不根据名字或语气猜测。
-8. 格式严格——只输出上述章节与字段；不得新增任何章节或字段，缺失字段视为剖析失败。
+ 6. 视角规则（最高优先级）——所有字段必须以第三人称客观视角书写，禁止出现「你」「我」这类直接称呼；AI 角色用 [AI名字] 或"她/他"指代，用户用【用户人设】的[用户名字]指代。描写的是"这个角色是什么样"，而不是"你要怎么做"。
+ 7. 性别规则——【用户人设】的[性别]仅在用户描述中明确出现时填写；未明确时一律填"暂不设置"，绝不根据名字或语气猜测。
+ 8. 字段唯一——AI 字段一律用 [AI名字] 等带「AI」前缀的标签，用户字段一律用 [用户名字] 等带「用户」前缀的标签；禁止在 AI 章节输出 [用户xxx] 字段，禁止在用户章节输出 [AIxxx] 字段。
+ 9. 期望特质与记忆分离——[期望特质] 只放用户对 AI 行为、性格、说话方式、互动风格的核心期望（如"对我温柔耐心""说话带语气词"）；[需要记住的事] 只放用户明确要求 AI 记住的事实、约定、偏好、背景信息（如"小明喜欢喝拿铁"）。用户描述"我希望/想要 AI 怎样"归期望特质，"记住/别忘/以后都要"归记忆；两者内容不得互换或混填。
+ 10. 格式严格——只输出上述章节与字段；不得新增任何章节或字段，缺失字段视为剖析失败。
 
-现在等待用户的人设描述。
+ 现在等待用户的人设描述。
 """.trim()
 
     /**
@@ -120,7 +130,7 @@ object QuickSetupPrompt {
         sb.append("AI 人设：")
         sb.append(tier.aiPersonaFields().joinToString("、") { it.label })
         sb.append("\n")
-        sb.append("用户人设：[名字]、[身份]、[性别]、[年龄]、[外观]\n")
+        sb.append("用户人设：[用户名字]、[用户身份]、[用户性别]、[用户年龄]、[用户外观]\n")
         sb.append("场景设置：[当前场景]\n")
         if (tier.includesMemory) {
             sb.append("记忆设置：[需要记住的事]\n")
@@ -172,14 +182,20 @@ object QuickSetupPrompt {
 
         val scene = extractField(sceneSection, "[当前场景]").trim()
 
-        val memory = if (tier.includesMemory) {
+        val rawMemory = if (tier.includesMemory) {
             extractField(memorySection, "[需要记住的事]").trim()
         } else ""
+        // 纠偏：模型偶发把「期望特质」与「记忆」内容填错位，解析后按句式自动归位
+        val (finalDesired, finalMemory) = reclassifyMisplacedFields(
+            desired = desired,
+            memory = rawMemory,
+            tier = tier
+        )
 
         return QuickSetupResult(
             persona = Persona(
                 name = name,
-                desired = desired,
+                desired = finalDesired,
                 persona = persona,
                 character = character,
                 appearance = appearance,
@@ -195,16 +211,83 @@ object QuickSetupPrompt {
                 appearance = userAppearance
             ),
             scene = scene,
-            memory = memory
+            memory = finalMemory
         )
     }
 
+    /**
+     * 期望特质 / 记忆错位纠偏：按句式把误填的内容归位。
+     *
+     * - 「我希望/想要/要对我/说话要…」这类期望表达误填进记忆 → 移回 [期望特质]；
+     * - 「记住/别忘了/以后都要/喜欢喝…」这类记忆事实误填进期望特质 → 移回 [需要记住的事]。
+     * 长句先按句末标点 / 逗号 / 顿号切成子句再逐句判定；同时含两类句式的子句
+     * 归属记忆（「记住」是更强的指令），不强行拆分。
+     */
+    private fun reclassifyMisplacedFields(
+        desired: String,
+        memory: String,
+        tier: QuickSetupTier
+    ): Pair<String, String> {
+        if (!tier.includesMemory) return desired to ""
+        var desiredOut = desired
+        var memoryOut = memory
+        val memorySentences = splitSentences(memoryOut)
+        if (memorySentences.isNotEmpty()) {
+            val (keep, move) = memorySentences.partition { !isDesiredStyleSentence(it) }
+            if (move.isNotEmpty()) {
+                memoryOut = keep.joinToString("\n")
+                desiredOut = joinFields(desiredOut, move)
+            }
+        }
+        val desiredSentences = splitSentences(desiredOut)
+        if (desiredSentences.isNotEmpty()) {
+            val (keep, move) = desiredSentences.partition { !isMemoryStyleSentence(it) }
+            if (move.isNotEmpty()) {
+                desiredOut = keep.joinToString("\n")
+                memoryOut = joinFields(memoryOut, move)
+            }
+        }
+        return desiredOut to memoryOut
+    }
+
+    private fun splitSentences(text: String): List<String> =
+        text.split(Regex("(?<=[。！？；;，、])\\s*|\\n+"))
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+
+    private fun joinFields(original: String, extra: List<String>): String =
+        listOf(original, extra.joinToString("\n"))
+            .filter { it.isNotBlank() }
+            .joinToString("\n")
+
+    private fun isDesiredStyleSentence(sentence: String): Boolean {
+        val hasDesired = DESIRED_STYLE_MARKERS.any { sentence.contains(it) }
+        val hasMemory = MEMORY_STYLE_MARKERS.any { sentence.contains(it) }
+        return hasDesired && !hasMemory
+    }
+
+    private fun isMemoryStyleSentence(sentence: String): Boolean {
+        val hasDesired = DESIRED_STYLE_MARKERS.any { sentence.contains(it) }
+        val hasMemory = MEMORY_STYLE_MARKERS.any { sentence.contains(it) }
+        return hasMemory && !hasDesired
+    }
+
+    private val DESIRED_STYLE_MARKERS = listOf(
+        "希望", "想要", "想让你", "要对我", "请对我", "对我", "多陪", "多关心", "多宠",
+        "多夸", "哄我", "说话方式", "语气词", "称呼我", "叫我", "别凶", "不要凶", "请温柔"
+    )
+
+    private val MEMORY_STYLE_MARKERS = listOf(
+        "记住", "别忘", "别忘了", "不要忘", "以后都要", "以后都", "习惯", "生日",
+        "名字叫", "喜欢喝", "喜欢吃", "最爱", "讨厌", "每周", "每天", "提醒我", "要记得"
+    )
+
     private fun extractSection(text: String, startMarker: String, endMarker: String?): String {
-        val startIdx = text.indexOf(startMarker)
+        val startIdx = findSectionIndex(text, startMarker)
         if (startIdx < 0) return ""
         val contentStart = startIdx + startMarker.length
         val endIdx = if (endMarker != null) {
-            text.indexOf(endMarker, contentStart)
+            findSectionIndex(text, endMarker, contentStart)
         } else {
             -1
         }
@@ -229,10 +312,33 @@ object QuickSetupPrompt {
     }
 
     private fun findNextLabel(section: String, from: Int): Int {
-        val pattern = Regex("\\[[^\\]]+\\]")
-        val match = pattern.find(section, from)
-        return match?.range?.first ?: -1
+        // 只识别已知字段标签：正文内容里的「[xx]」不再是误切分点，
+        // 修复模型在字段内容里写方括号导致内容被截断/错位的问题
+        return allFieldLabels
+            .mapNotNull { label -> section.indexOf(label, from).takeIf { it >= 0 } }
+            .minOrNull()
+            ?: -1
     }
+
+    /**
+     * 容错定位分节符：允许章节名内部出现空格（如「【AI 人设】」），
+     * 也允许旧模型把分节符写成「【AI人设】」。按「去掉空白后相等」匹配。
+     */
+    private fun findSectionIndex(text: String, marker: String, from: Int = 0): Int {
+        val normalizedMarker = marker.filterNot { it.isWhitespace() }
+        var idx = from
+        while (idx < text.length) {
+            val next = text.indexOf('【', idx)
+            if (next < 0) return -1
+            val end = text.indexOf('】', next)
+            if (end < 0) return -1
+            val section = text.substring(next, end + 1).filterNot { it.isWhitespace() }
+            if (section == normalizedMarker) return next
+            idx = end + 1
+        }
+        return -1
+    }
+
 }
 
 /**

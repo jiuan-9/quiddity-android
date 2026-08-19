@@ -73,14 +73,138 @@ internal sealed interface ChatRoundRequest {
 /**
  * 兜底截断判定：内容非空且以"明显还要继续说"的字符结尾时视为截断。
  * 仅用于网关未返回 finish_reason / response.incomplete 的场景。
+ *
+ * 只把「未闭合的括号/引号」视为明显没说完；冒号、逗号是中文回复的常见自然结尾
+ * （例如「先打开微信:」），不能据此判定截断——否则会触发自动续写，造成
+ * 「说完一段又重新加载、模型重复输出相似内容」的循环。
  */
 internal fun looksTruncated(content: String): Boolean {
     val trimmed = content.trim()
     if (trimmed.isEmpty()) return false
     val last = trimmed.last()
-    return last == '：' || last == ':' || last == '，' || last == ',' ||
-        last == '（' || last == '(' || last == '“' || last == '「' || last == '『'
+    return last == '（' || last == '(' || last == '“' || last == '「' || last == '『'
 }
+
+/**
+ * 判定回复是否「只有动作描写、没有任何实际台词」。
+ *
+ * 正文中除成对括号内的动作、空白与标点外没有任何字词时视为仅动作。
+ * 仅动作回复对用户不可读（问题 10）：视同不完整回复，触发带引导的续写，
+ * 而不是作为完整回复收尾。
+ */
+internal fun isActionOnlyReply(content: String): Boolean {
+    val text = content.trim()
+    if (text.isEmpty()) return false
+    if (text.none { isOpenBracket(it) }) return false
+    val stack = ArrayDeque<Char>()
+    var meaningfulChars = 0
+    var i = 0
+    while (i < text.length) {
+        val ch = text[i]
+        when {
+            isOpenBracket(ch) -> stack.addLast(ch)
+            isCloseBracket(ch) -> {
+                if (stack.isNotEmpty() && bracketMatches(stack.last(), ch)) stack.removeLast()
+            }
+            ch.isWhitespace() || ch in ACTION_ONLY_PUNCTUATION -> Unit
+            else -> if (stack.isEmpty()) meaningfulChars++
+        }
+        i++
+    }
+    return meaningfulChars == 0 && stack.isEmpty()
+}
+
+private fun isOpenBracket(ch: Char): Boolean = when (ch) {
+    '(', '（', '[', '【', '{', '<' -> true
+    else -> false
+}
+
+private fun isCloseBracket(ch: Char): Boolean = when (ch) {
+    ')', '）', ']', '】', '}', '>' -> true
+    else -> false
+}
+
+private fun bracketMatches(open: Char, close: Char): Boolean = when (open) {
+    '(' -> close == ')'
+    '（' -> close == '）'
+    '[' -> close == ']'
+    '【' -> close == '】'
+    '{' -> close == '}'
+    '<' -> close == '>'
+    else -> false
+}
+
+private const val ACTION_ONLY_PUNCTUATION = "，。！？、；：,.;:!?…~-—·"
+
+/**
+ * 连续消息近重复判定（协调器与事件层共用）：
+ * 去掉成对括号内动作、标点与空白后，两条消息核心内容相同，且任一条含动作括号
+ * （如「（动作）台词」与「台词」）时视为模型复述，丢弃后一条。
+ * 不带动作括号的完全相同分片（如硬上限强制切分）不判定，避免误删合法分片。
+ */
+internal fun isNearDuplicateContent(previous: String, candidate: String): Boolean {
+    val lastCore = stripBracketsAndPunctuation(previous)
+    val candidateCore = stripBracketsAndPunctuation(candidate)
+    if (lastCore.isEmpty() || candidateCore.isEmpty()) return false
+    if (lastCore != candidateCore) return false
+    return previous.any { isOpenBracketChar(it) } || candidate.any { isOpenBracketChar(it) }
+}
+
+/**
+ * 两段文本的相似度（0f～1f）：去掉动作括号、标点与空白后，按相邻字符对（bigram）的
+ * Jaccard 相似度计算。用于「重说」场景的确定性去同：新回复与上一版核心内容高度
+ * 相似（同一批字词、同一种句式）时，由应用层自动触发一次换表达重写，而不是把
+ * 「别写得太像」完全交给模型自觉。
+ *
+ * @return 0f 表示完全不同；1f 表示字词序列完全一致。
+ */
+internal fun replySimilarityRatio(previous: String, candidate: String): Float {
+    val prevCore = stripBracketsAndPunctuation(previous)
+    val candCore = stripBracketsAndPunctuation(candidate)
+    if (prevCore.isEmpty() || candCore.isEmpty()) return 0f
+    val prevBigrams = buildBigramSet(prevCore)
+    val candBigrams = buildBigramSet(candCore)
+    if (prevBigrams.isEmpty() || candBigrams.isEmpty()) return 0f
+    val intersection = prevBigrams.intersect(candBigrams).size
+    val union = prevBigrams.union(candBigrams).size
+    return intersection.toFloat() / union.coerceAtLeast(1)
+}
+
+/** 「重说」去同阈值：核心字词相似度 ≥ 0.72 视为高度相似，需要自动换表达重写。 */
+internal const val REGENERATE_SIMILARITY_THRESHOLD = 0.72f
+
+private fun buildBigramSet(text: String): Set<String> {
+    if (text.length < 2) return setOf(text)
+    return (0 until text.length - 1).mapTo(LinkedHashSet()) { i -> text.substring(i, i + 2) }
+}
+
+internal fun stripBracketsAndPunctuation(text: String): String {
+    val sb = StringBuilder()
+    var depth = 0
+    for (ch in text) {
+        when {
+            isOpenBracketChar(ch) -> depth++
+            isCloseBracketChar(ch) -> depth = (depth - 1).coerceAtLeast(0)
+            depth > 0 -> Unit
+            ch.isWhitespace() || ch in DUPLICATE_IGNORED_PUNCTUATION -> Unit
+            else -> sb.append(ch)
+        }
+    }
+    return sb.toString()
+}
+
+private fun isOpenBracketChar(ch: Char): Boolean = when (ch) {
+    '(', '（', '[', '【', '{', '<' -> true
+    else -> false
+}
+
+private fun isCloseBracketChar(ch: Char): Boolean = when (ch) {
+    ')', '）', ']', '】', '}', '>' -> true
+    else -> false
+}
+
+private const val DUPLICATE_IGNORED_PUNCTUATION =
+    "，。！？、；：,.;:!?…~-—·“”‘’「」『』《》〈〉\"'"
 
 /**
  * 构造聊天请求：启用 DeepSeek 官方联网搜索时走 Responses API（服务端 web_search），

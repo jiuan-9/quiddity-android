@@ -234,6 +234,10 @@ class ConversationRepository(
         return store.updateConversation(resolved.copy(updatedAt = System.currentTimeMillis()))
     }
 
+    /** 删除单条消息（重复消息去重用）。 */
+    suspend fun deleteMessage(convId: String, messageId: String): Boolean =
+        store.deleteMessage(convId, messageId)
+
     /** @return 是否写盘成功 */
     suspend fun deleteConversation(convId: String): Boolean {
         val deleted = store.conversations.value.filter { it.id == convId }

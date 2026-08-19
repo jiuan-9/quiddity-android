@@ -164,6 +164,7 @@ fun HomeScreen(
     val conversations by viewModel.conversations.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
+    val newConversationId by viewModel.newConversationId.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var showAgentSettings by rememberSaveable { mutableStateOf(false) }
@@ -643,7 +644,8 @@ fun HomeScreen(
                                         toggleSelection = ::toggleSelection,
                                         syncMultiSelect = ::syncMultiSelect,
                                         onOpenConversation = onOpenConversation,
-                                        hasListWallpaper = hasListWallpaper
+                                        hasListWallpaper = hasListWallpaper,
+                                        newConversationId = newConversationId
                                     )
                                 } else if (page == 1) {
                                     ChatListPage(
@@ -657,7 +659,8 @@ fun HomeScreen(
                                         toggleSelection = ::toggleSelection,
                                         syncMultiSelect = ::syncMultiSelect,
                                         onOpenConversation = onOpenConversation,
-                                        hasListWallpaper = hasListWallpaper
+                                        hasListWallpaper = hasListWallpaper,
+                                        newConversationId = newConversationId
                                     )
                                 } else {
                                     ChatListPage(
@@ -671,7 +674,8 @@ fun HomeScreen(
                                         toggleSelection = ::toggleSelection,
                                         syncMultiSelect = ::syncMultiSelect,
                                         onOpenConversation = onOpenConversation,
-                                        hasListWallpaper = hasListWallpaper
+                                        hasListWallpaper = hasListWallpaper,
+                                        newConversationId = newConversationId
                                     )
                                 }
                             }
@@ -859,4 +863,3 @@ fun HomeScreen(
         )
     }
 }
-

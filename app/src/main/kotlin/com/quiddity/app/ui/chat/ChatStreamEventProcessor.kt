@@ -55,6 +55,12 @@ internal class StreamEventProcessor(
                 }
             }
             is ChatRepository.Event.CompleteMessage -> {
+                // 协调器近重复去重：跨多分片流式到达的重复台词在收尾时派发
+                // 「空内容 Complete」删除标记，这里直接移除该消息，不落盘、不入队气泡
+                if (event.message.content.isBlank() && !event.message.isNotice && !event.message.isThinking) {
+                    conversationRepository.deleteMessage(conversationId, event.message.id)
+                    return
+                }
                 // 模型偶发在正式回答开头复述思考内容/系统指令：剥离重复前缀，
                 // 避免「思考一条 + 回答一条」两条消息内容雷同（防御性去重）
                 val target = stripThinkingEcho(event.message)
@@ -90,7 +96,10 @@ internal class StreamEventProcessor(
                 settingsController.accumulateTokenUsage(target.tokenCount)
                 // 悬浮窗：回复完成 → 入队展示气泡（应用不可见时由控制器弹出）
                 val bubbleText = target.content.trim().takeIf { it.isNotBlank() }
-                if (bubbleText != null && !target.isNotice && !target.isThinking) {
+                // 仅动作/神态描写（无实际台词）的消息对悬浮窗不可读，不展示为气泡
+                if (bubbleText != null && !target.isNotice && !target.isThinking &&
+                    !com.quiddity.app.data.repo.isActionOnlyReply(bubbleText)
+                ) {
                     com.quiddity.app.active.ReplyOverlayController.enqueueBubble(
                         text = bubbleText.take(MAX_BUBBLE_CHARS),
                         conversationId = conversationId,

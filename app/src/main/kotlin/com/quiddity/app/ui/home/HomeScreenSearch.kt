@@ -20,6 +20,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material3.Icon
@@ -27,7 +29,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -353,7 +357,8 @@ internal fun ChatListPage(
     toggleSelection: (String) -> Unit,
     syncMultiSelect: (Boolean, Set<String>) -> Unit,
     onOpenConversation: (String) -> Unit,
-    hasListWallpaper: Boolean
+    hasListWallpaper: Boolean,
+    newConversationId: String? = null
 ) {
     if (conversations.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -373,33 +378,60 @@ internal fun ChatListPage(
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         items(conversations, key = { it.id }, contentType = { if (isGroup) "group" else "conversation" }) { conv ->
-            // 性能：去掉 per-item 动画修饰（animateItem），滚动/增删零动画开销
+            // 新建会话「从上到下淡入」：仅对本次新建的卡片播放一次，
+            // 其余卡片零动画开销（graphicsLayer 驱动，不触发重组）
+            val isNew = conv.id == newConversationId
+            var entered by remember(conv.id) { mutableStateOf(!isNew) }
+            LaunchedEffect(conv.id, isNew) {
+                if (isNew) {
+                    entered = false
+                    kotlinx.coroutines.delay(30)
+                    entered = true
+                }
+            }
+            val enterAlpha by animateFloatAsState(
+                targetValue = if (entered) 1f else 0f,
+                animationSpec = tween(360),
+                label = "new_conv_alpha"
+            )
+            val enterOffsetY by animateFloatAsState(
+                targetValue = if (entered) 0f else -24f,
+                animationSpec = tween(360),
+                label = "new_conv_offset"
+            )
             val onTap = {
                 if (isMultiSelect) toggleSelection(conv.id) else onOpenConversation(conv.id)
             }
             val onLongClick = {
                 if (!isMultiSelect) syncMultiSelect(true, setOf(conv.id)) else toggleSelection(conv.id)
             }
-            if (isGroup) {
-                GroupConversationCard(
-                    conversation = conv,
-                    isMultiSelect = isMultiSelect,
-                    isSelected = conv.id in selectedIds,
-                    userAvatarUri = userAvatarUri,
-                    memberResolver = memberResolver,
-                    onTap = onTap,
-                    onLongClick = onLongClick,
-                    hasListWallpaper = hasListWallpaper
-                )
-            } else {
-                ConversationCard(
-                    conversation = conv,
-                    isMultiSelect = isMultiSelect,
-                    isSelected = conv.id in selectedIds,
-                    onTap = onTap,
-                    onLongClick = onLongClick,
-                    hasListWallpaper = hasListWallpaper
-                )
+            Box(
+                modifier = Modifier.graphicsLayer {
+                    alpha = enterAlpha
+                    translationY = enterOffsetY
+                }
+            ) {
+                if (isGroup) {
+                    GroupConversationCard(
+                        conversation = conv,
+                        isMultiSelect = isMultiSelect,
+                        isSelected = conv.id in selectedIds,
+                        userAvatarUri = userAvatarUri,
+                        memberResolver = memberResolver,
+                        onTap = onTap,
+                        onLongClick = onLongClick,
+                        hasListWallpaper = hasListWallpaper
+                    )
+                } else {
+                    ConversationCard(
+                        conversation = conv,
+                        isMultiSelect = isMultiSelect,
+                        isSelected = conv.id in selectedIds,
+                        onTap = onTap,
+                        onLongClick = onLongClick,
+                        hasListWallpaper = hasListWallpaper
+                    )
+                }
             }
         }
     }

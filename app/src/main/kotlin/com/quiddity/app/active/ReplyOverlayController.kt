@@ -19,8 +19,12 @@ import com.quiddity.app.util.CrashLogger
  * 4) 决定何时启动 / 停止 [ReplyOverlayService]，并把聚合状态渲染到窗口。
  *
  * 显示规则：
- * - 仅在 设置开启 && 应用不可见 && 有可见内容 时显示窗口；
- * - 气泡展示期间不消费（头部仍保留），工具动作可临时覆盖；动作结束或展示超时后再消费。
+ * - 仅当 设置开启 && 应用不可见 && 有可见内容（进行中回复 / 工具动作 / 待展示气泡）时
+ *   显示窗口；没有进行中会话时**不显示**悬浮窗，避免常驻头像打扰；
+ * - 气泡只保留最新一条：新气泡替换旧气泡，展示超过 4s / 点击回复后消费且不再重播；
+ * - 点击气泡直接进入输入模式（弹出输入气泡 + 自动滑出输入法键盘），
+ *   发送后由 [OverlayReplyBridge] 在后台追加用户消息并触发 AI 回复；
+ * - Agent 工具动作以气泡样式实时展示。
  */
 object ReplyOverlayController {
 
@@ -44,7 +48,19 @@ object ReplyOverlayController {
     @Volatile
     private var showingBubble = false
 
+    /** 悬浮窗是否处于输入模式（输入气泡打开，渲染层不得覆盖输入框）。 */
+    @Volatile
+    private var inputModeActive = false
+
     private var lastBubbleConversation: Pair<String, ConversationType>? = null
+
+    /** 当前展示气泡的文本（用于新气泡到达时立即替换旧气泡）。 */
+    @Volatile
+    private var lastBubbleText: String? = null
+
+    /** 输入模式对应的会话（点击气泡时记录，发送时使用）。 */
+    @Volatile
+    private var inputConversation: Pair<String, ConversationType>? = null
 
     /** QuiddityApp 在 ActivityLifecycleCallbacks 中驱动。 */
     fun setAppVisible(visible: Boolean) {
@@ -60,6 +76,7 @@ object ReplyOverlayController {
         if (!value) {
             machine.clearAll()
             showingBubble = false
+            inputModeActive = false
             dismissWindow()
         } else {
             refreshWindow()
@@ -109,6 +126,12 @@ object ReplyOverlayController {
 
     fun onServiceStopped(instance: ReplyOverlayService) {
         if (service === instance) service = null
+        inputModeActive = false
+        // 窗口停止时消费当前气泡并清空展示记录，避免同一消息下次离屏时重播
+        showingBubble = false
+        lastBubbleText = null
+        lastBubbleConversation = null
+        machine.consumeBubble()
     }
 
     fun dismissWindow() {
@@ -119,7 +142,13 @@ object ReplyOverlayController {
 
     private fun refreshWindow() {
         mainHandler.post {
-            if (!enabled || appVisible || !machine.hasVisibleContent) {
+            if (!ReplyOverlayStateMachine.shouldKeepWindow(
+                    enabled = enabled,
+                    appVisible = appVisible,
+                    hasVisibleContent = machine.hasVisibleContent,
+                    inputModeActive = inputModeActive
+                )
+            ) {
                 service?.stopSelf()
                 return@post
             }
@@ -138,19 +167,28 @@ object ReplyOverlayController {
 
     private fun render() {
         val svc = service ?: return
+        // 输入模式打开期间不渲染气泡/状态，避免覆盖输入框
+        if (inputModeActive) return
         val tool = machine.currentToolAction()
         val count = machine.activeCount
         val status = machine.aggregateStatusText()
         val bubble = machine.nextBubble()
         if (tool != null) {
-            // 工具动作优先级最高：临时覆盖气泡展示
+            // 工具动作优先级最高：以气泡样式展示，动作结束（clearToolAction）后恢复
             showingBubble = false
-            svc.render(count, tool, status, null)
+            // 清空上次气泡记录：工具动作结束后下一轮渲染会重新展示回复气泡并重启 4s 计时
+            lastBubbleText = null
+            lastBubbleConversation = null
+            svc.showToolBubble(tool)
             return
         }
         if (bubble != null) {
-            if (!showingBubble) {
+            val bubbleChanged = !showingBubble ||
+                bubble.text != lastBubbleText ||
+                bubble.conversationId != lastBubbleConversation?.first
+            if (bubbleChanged) {
                 showingBubble = true
+                lastBubbleText = bubble.text
                 lastBubbleConversation = bubble.conversationId to bubble.conversationType
                 svc.render(count, null, status, bubble)
                 svc.showBubble(
@@ -162,8 +200,9 @@ object ReplyOverlayController {
             }
             return
         }
-        // 仅活跃回复状态（无气泡可展示）
+        // 无气泡可展示：仅头像 + 状态文本（无会话进行时保持空状态）
         showingBubble = false
+        lastBubbleText = null
         svc.render(count, null, status, null)
     }
 
@@ -186,7 +225,50 @@ object ReplyOverlayController {
         )
     }
 
-    /** 点击气泡 → 打开最近一次展示气泡所属会话。 */
+    /** 点击气泡 → 消费该消息并进入输入模式（有会话上下文时）。 */
+    fun onBubbleClicked() {
+        mainHandler.post {
+            showingBubble = false
+            val pair = lastBubbleConversation
+            // 点击即消费：该消息不再重播
+            machine.consumeBubble()
+            if (pair == null) {
+                openApp()
+                return@post
+            }
+            inputConversation = pair
+            inputModeActive = true
+            service?.startInputMode()
+            refreshWindow()
+        }
+    }
+
+    /** 输入模式关闭（发送完成 / 取消 / 服务回收）。 */
+    fun onInputModeClosed() {
+        mainHandler.post {
+            inputModeActive = false
+            service?.closeInputMode()
+            refreshWindow()
+        }
+    }
+
+    /** 悬浮窗输入框发送：交给 [OverlayReplyBridge] 追加消息并触发 AI 回复。 */
+    fun onOverlayInputSent(text: String) {
+        val pair = inputConversation ?: return
+        inputConversation = null
+        inputModeActive = false
+        mainHandler.post {
+            service?.closeInputMode()
+            OverlayReplyBridge.send(pair.first, pair.second, text)
+        }
+    }
+
+    /** 供 Service 在输入模式关闭后强制重渲染（服务线程即主线程）。 */
+    fun renderNow() {
+        mainHandler.post { render() }
+    }
+
+    /** 点击头像 → 打开应用（头像点击原行为）。 */
     fun openLastConversation() {
         val pair = lastBubbleConversation
         val context = ServiceLocator.applicationContext
@@ -199,4 +281,12 @@ object ReplyOverlayController {
 
     /** 仅供测试读取聚合状态。 */
     fun snapshotForTest(): ReplyOverlayStateMachine = machine
+
+    /** 悬浮窗是否应当保持显示（设置开启 && 应用不可见）。Service 自启/重建时调用。 */
+    fun keepWindowVisible(): Boolean = ReplyOverlayStateMachine.shouldKeepWindow(
+        enabled = enabled,
+        appVisible = appVisible,
+        hasVisibleContent = machine.hasVisibleContent,
+        inputModeActive = inputModeActive
+    )
 }

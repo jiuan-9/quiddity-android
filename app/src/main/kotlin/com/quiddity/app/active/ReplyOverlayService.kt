@@ -6,6 +6,7 @@ import android.graphics.PixelFormat
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.view.inputmethod.InputMethodManager
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
@@ -14,8 +15,11 @@ import com.quiddity.app.util.CrashLogger
 /**
  * 回复悬浮窗服务：承载 [ReplyOverlayView] 系统窗口。
  *
- * 普通 started service（不占前台通知）；窗口仅在「设置开启 + 应用不可见 + 有可见内容」
- * 时由 [ReplyOverlayController] 启动。进程存活期间由控制器驱动渲染与回收。
+ * 普通 started service（不占前台通知）；设置开启 + 应用不可见时**始终显示**，
+ * 由 [ReplyOverlayController] 驱动渲染与回收。
+ * - 无交互 2s 后自动淡化窗口（alpha → 0.35），任意交互恢复全透明；
+ * - 点击气泡进入输入模式（输入气泡 + 自动滑出输入法键盘）；
+ * - 消息气泡展示 4s 后自动消费（仅保留最新一条）。
  */
 class ReplyOverlayService : Service(), ReplyOverlayView.Listener {
 
@@ -32,6 +36,12 @@ class ReplyOverlayService : Service(), ReplyOverlayView.Listener {
 
     private var bubbleDismissRunnable: Runnable? = null
 
+    /** 空闲淡化定时器：无交互 2s 后淡化为半透明，交互后恢复全透明。 */
+    private var idleFadeRunnable: Runnable? = null
+
+    /** 输入模式是否激活（窗口可聚焦以弹出输入法）。 */
+    private var inputModeActive = false
+
     /** 当前吸附边（true = 屏幕左侧），窗口伸缩时以头像为锚点保持不动。 */
     private var snappedLeft = true
 
@@ -47,7 +57,13 @@ class ReplyOverlayService : Service(), ReplyOverlayView.Listener {
         ensureWindowAdded()
         snapToEdge()
         ReplyOverlayController.onServiceStarted(this)
-        return START_NOT_STICKY
+        // 进程被系统回收后由 START_STICKY 重建窗口；应用可见 / 开关关闭时立即自停
+        if (!ReplyOverlayController.keepWindowVisible()) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        resetIdleFade()
+        return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -60,6 +76,7 @@ class ReplyOverlayService : Service(), ReplyOverlayView.Listener {
         bubble: ReplyOverlayStateMachine.ReplyBubble?
     ) {
         if (!windowAdded) ensureWindowAdded()
+        if (inputModeActive) return
         overlayView.setBadgeCount(count)
         when {
             toolAction != null -> {
@@ -76,6 +93,7 @@ class ReplyOverlayService : Service(), ReplyOverlayView.Listener {
                 layoutWindow()
             }
         }
+        resetIdleFade()
     }
 
     /** 展示回复气泡并启动自动回收计时（4 秒）。 */
@@ -88,12 +106,76 @@ class ReplyOverlayService : Service(), ReplyOverlayView.Listener {
             bubbleDismissRunnable = null
             onDismissed()
         }.also { mainHandler.postDelayed(it, BUBBLE_DISPLAY_MS) }
+        resetIdleFade()
+    }
+
+    /** Agent 工具动作：以气泡样式实时展示（动作结束由 clearToolAction 恢复）。 */
+    fun showToolBubble(text: String) {
+        if (!windowAdded) ensureWindowAdded()
+        if (inputModeActive) return
+        cancelBubbleTimer()
+        overlayView.showReplyBubble(text)
+        layoutWindow()
+        resetIdleFade()
     }
 
     /** 工具动作覆盖时取消气泡计时，避免气泡被误消费。 */
     fun cancelBubbleTimer() {
         bubbleDismissRunnable?.let { mainHandler.removeCallbacks(it) }
         bubbleDismissRunnable = null
+    }
+
+    /** 打开输入模式：显示输入气泡、窗口可聚焦、自动弹出输入法键盘。 */
+    fun startInputMode() {
+        if (inputModeActive) return
+        inputModeActive = true
+        if (!windowAdded) ensureWindowAdded()
+        overlayView.startInputMode()
+        updateFocusFlags(focusable = true)
+        layoutWindow()
+        mainHandler.postDelayed({
+            overlayView.requestInputFocus()
+            val imm = getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager
+            imm?.showSoftInput(overlayView.inputEditText(), InputMethodManager.SHOW_IMPLICIT)
+        }, 120L)
+        resetIdleFade()
+    }
+
+    /** 关闭输入模式：恢复窗口不可聚焦，回到气泡/状态渲染。 */
+    fun closeInputMode() {
+        if (!inputModeActive) return
+        inputModeActive = false
+        overlayView.closeInputMode()
+        updateFocusFlags(focusable = false)
+        layoutWindow()
+        ReplyOverlayController.renderNow()
+        resetIdleFade()
+    }
+
+    private fun updateFocusFlags(focusable: Boolean) {
+        val layoutParams = params ?: return
+        if (focusable) {
+            layoutParams.flags = layoutParams.flags and
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
+            layoutParams.softInputMode =
+                WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE
+        } else {
+            layoutParams.flags = layoutParams.flags or
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+            layoutParams.softInputMode =
+                WindowManager.LayoutParams.SOFT_INPUT_STATE_UNSPECIFIED
+        }
+        runCatching { windowManager.updateViewLayout(overlayView, layoutParams) }
+    }
+
+    /** 空闲淡化：无交互 2s 后把窗口淡化，任何交互/展示恢复全透明。 */
+    private fun resetIdleFade() {
+        idleFadeRunnable?.let { mainHandler.removeCallbacks(it) }
+        overlayView.setWindowAlpha(1f)
+        idleFadeRunnable = Runnable {
+            idleFadeRunnable = null
+            if (!inputModeActive) overlayView.setWindowAlpha(IDLE_ALPHA)
+        }.also { mainHandler.postDelayed(it, IDLE_FADE_MS) }
     }
 
     fun applyAvatar(uri: String?) {
@@ -122,15 +204,33 @@ class ReplyOverlayService : Service(), ReplyOverlayView.Listener {
 
     override fun onBubbleClicked() {
         cancelBubbleTimer()
-        ReplyOverlayController.openLastConversation()
+        ReplyOverlayController.onBubbleClicked()
     }
 
     override fun onBubbleDismissed() {
         ReplyOverlayController.onBubbleDismissed()
     }
 
+    override fun onUserInteraction() {
+        resetIdleFade()
+    }
+
+    override fun onInputSubmit(text: String) {
+        ReplyOverlayController.onOverlayInputSent(text)
+    }
+
+    override fun onInputCancel() {
+        ReplyOverlayController.onInputModeClosed()
+    }
+
+    override fun onInputModeChanged(active: Boolean) {
+        if (!active) ReplyOverlayController.onInputModeClosed()
+    }
+
     override fun onDestroy() {
         cancelBubbleTimer()
+        idleFadeRunnable?.let { mainHandler.removeCallbacks(it) }
+        idleFadeRunnable = null
         ReplyOverlayController.onServiceStopped(this)
         if (windowAdded) {
             runCatching { windowManager.removeView(overlayView) }
@@ -203,10 +303,16 @@ class ReplyOverlayService : Service(), ReplyOverlayView.Listener {
         )
         val width = overlayView.measuredWidth.takeIf { it > 0 } ?: dp(48)
         val height = overlayView.measuredHeight.takeIf { it > 0 } ?: dp(48)
-        layoutParams.width = width
+        // 输入模式下气泡较宽：限制在屏幕内（头像 + 输入框都可见），避免被屏幕边缘裁切
+        val effectiveWidth = if (inputModeActive) {
+            width.coerceAtMost(screenWidth() - dp(72))
+        } else {
+            width
+        }
+        layoutParams.width = effectiveWidth
         layoutParams.height = height
         // 头像锚定：贴左 → 头像左缘在 dp(8)；贴右 → 头像右缘距屏幕右缘 dp(8)
-        layoutParams.x = if (snappedLeft) dp(8) else screenWidth() - width - dp(8)
+        layoutParams.x = if (snappedLeft) dp(8) else screenWidth() - effectiveWidth - dp(8)
         layoutParams.y = posY.coerceIn(0, (screenHeight() - height - dp(8)).coerceAtLeast(0))
         posX = layoutParams.x
         posY = layoutParams.y
@@ -221,5 +327,7 @@ class ReplyOverlayService : Service(), ReplyOverlayView.Listener {
 
     private companion object {
         const val BUBBLE_DISPLAY_MS = 4_000L
+        const val IDLE_FADE_MS = 2_000L
+        const val IDLE_ALPHA = 0.35f
     }
 }

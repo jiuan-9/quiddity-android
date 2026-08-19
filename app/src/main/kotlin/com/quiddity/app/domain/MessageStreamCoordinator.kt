@@ -290,10 +290,23 @@ class MessageStreamCoordinator(
                         pendingBrackets += currentIndex to seg.text
                         currentIndex++
                     } else {
-                        flushPendingBrackets(signals)
-                        emitCompleted(signals, seg.text)
+                        // 连续近重复消息去重：模型偶发把同一句台词输出两遍
+                        // （如「（动作）台词。台词」），第二条直接消费不发，避免两条同时加载
+                        if (!isDuplicateOfLast(seg.text)) {
+                            if (pendingBrackets.isNotEmpty() && !mergeWithPrevious) {
+                                // 动作括号 + 紧随其后的台词合并为一条消息：
+                                // 根因修复「（动作）台词」被拆成两条同时弹出 / 只弹动作的体验问题
+                                emitBracketMergedContent(signals, seg.text)
+                            } else {
+                                flushPendingBrackets(signals)
+                                emitCompleted(signals, seg.text)
+                            }
+                        }
                     }
                 }
+                // 每次调用最多完成一条消息：剩余内容留到下一个 delta / finalize，
+                // 避免「第一句。第二句。」在同一个网络分片里两条消息同时加载
+                if (signals.any { it is StreamCoordinator.Signal.Complete }) break
                 continue
             }
             // 无完整切分点：硬上限保护，强制切分防 OOM
@@ -303,6 +316,7 @@ class MessageStreamCoordinator(
                 if (forced.isNotEmpty()) {
                     flushPendingBrackets(signals)
                     emitCompleted(signals, forced)
+                    if (signals.any { it is StreamCoordinator.Signal.Complete }) break
                 }
                 continue
             }
@@ -310,7 +324,10 @@ class MessageStreamCoordinator(
         }
 
         // 单条更新（当前 buffer 内容）：buffer 为空白时不发出（避免空消息/纯空白气泡）
-        if (buffer.isNotBlank()) {
+        // 本批已发出完成消息时不再发流式 New：下一批内容或 finalize 再补，防止两条同框出现
+        if (buffer.isNotBlank() && signals.none { it is StreamCoordinator.Signal.Complete } &&
+            !(!mergeWithPrevious && isDuplicateOfLast(buffer.toString()))
+        ) {
             val current = if (mergeWithPrevious && completed.isNotEmpty()) {
                 // 合并模式：已发段落（completed 内容）+ 当前 buffer 拼装为流式内容。
                 // 关键：只发 Update 信号、不写回 completed——写回会导致后续 delta
@@ -334,6 +351,32 @@ class MessageStreamCoordinator(
         }
 
         return signals
+    }
+
+    /**
+     * 把延迟的括号段与紧随其后的正文合并为一条消息发出。
+     *
+     * 使用首个括号段的预占索引：若半截括号已以流式消息发出（knownIds 已登记），
+     * 此处走 Update 补全，不会残留半截消息；否则 New + Complete 一次成型。
+     */
+    private fun emitBracketMergedContent(
+        signals: MutableList<StreamCoordinator.Signal>,
+        content: String
+    ) {
+        val firstReservedIndex = pendingBrackets.first().first
+        val trailing = pendingBrackets.joinToString("") { it.second }
+        pendingBrackets.clear()
+        val mergedText = trailing + content
+        if (isDuplicateOfLast(mergedText)) return
+        val finalMsg = buildMessageFromContentAt(firstReservedIndex, mergedText, streaming = false)
+        if (knownIds.add(finalMsg.id)) {
+            signals += StreamCoordinator.Signal.New(finalMsg)
+        } else {
+            signals += StreamCoordinator.Signal.Update(finalMsg)
+        }
+        signals += StreamCoordinator.Signal.Complete(finalMsg)
+        completed += finalMsg
+        currentStartTs = System.currentTimeMillis()
     }
 
     /**
@@ -441,7 +484,28 @@ class MessageStreamCoordinator(
         buffer.append(cleaned)
         if (buffer.isBlank()) return signals
         val finalMsg = buildMessage(streaming = false)
-        if (mergeWithPrevious && completed.isNotEmpty()) {
+        // 收尾残留若与最后一条已发消息近重复（模型复述）：
+        // - 尚未以流式消息发出（id 未登记）→ 直接丢弃，不产生任何消息；
+        // - 已以流式消息发出（跨多分片才拼成完整重复）→ 派发「空内容 Update +
+        //   Complete」删除标记，由事件层把该条流式消息移除，避免留下永远
+        //   streaming 的半截消息，也不保留重复正文
+        if (isDuplicateOfLast(cleaned)) {
+            android.util.Log.i(
+                "QuiddityDedup",
+                "finalize duplicate cleaned=$cleaned known=${finalMsg.id in knownIds} last=${completed.lastOrNull()?.content}"
+            )
+            if (finalMsg.id !in knownIds) {
+                buffer.clear()
+                return signals
+            }
+            val blank = finalMsg.copy(content = "")
+            signals += StreamCoordinator.Signal.Update(blank)
+            signals += StreamCoordinator.Signal.Complete(blank)
+            buffer.clear()
+            return signals
+        }
+        val merged = mergeWithPrevious && completed.isNotEmpty()
+        if (merged) {
             // 合并模式：收尾正文追加到上一条已发消息
             val lastIdx = completed.lastIndex
             val mergedContent = completed[lastIdx].content + finalMsg.content
@@ -453,11 +517,13 @@ class MessageStreamCoordinator(
             signals += StreamCoordinator.Signal.Update(completed[lastIdx])
         } else if (finalMsg.id in knownIds) {
             signals += StreamCoordinator.Signal.Complete(finalMsg)
+            // 快照登记：合并模式下没有可合并的上一条消息（如工具轮无正文）时，
+            // 最终消息同样必须进入 completed——否则快照为空、完整正文被误判为空回复
+            completed += finalMsg
+            currentIndex++
         } else {
             signals += StreamCoordinator.Signal.New(finalMsg)
             signals += StreamCoordinator.Signal.Complete(finalMsg)
-        }
-        if (!mergeWithPrevious) {
             completed += finalMsg
             currentIndex++
         }
@@ -526,6 +592,7 @@ class MessageStreamCoordinator(
      * 用当前索引发出完成消息并推进索引。
      */
     private fun emitCompleted(signals: MutableList<StreamCoordinator.Signal>, text: String) {
+        if (!mergeWithPrevious && isDuplicateOfLast(text)) return
         if (mergeWithPrevious && completed.isNotEmpty()) {
             // 合并模式：追加到上一条已发消息（工具轮之间正文单条化，原地 Update）
             val lastIdx = completed.lastIndex
@@ -810,6 +877,16 @@ class MessageStreamCoordinator(
     }
 
     // ==================== 内部 ====================
+
+    /**
+     * 连续消息近重复判定：上一条已发消息与待发内容去掉括号/标点/空白后相同，
+     * 或上一条整体等于「动作括号 + 待发内容」时视为模型复述，丢弃待发内容。
+     */
+    private fun isDuplicateOfLast(content: String): Boolean {
+        val last = completed.lastOrNull()?.content?.trim().orEmpty()
+        if (last.isEmpty()) return false
+        return com.quiddity.app.data.repo.isNearDuplicateContent(last, content)
+    }
 
     private fun hardCharLimit(): Long {
         return (singleMessageTokens.toLong() * HARD_LIMIT_MULTIPLIER * CHARS_PER_TOKEN)

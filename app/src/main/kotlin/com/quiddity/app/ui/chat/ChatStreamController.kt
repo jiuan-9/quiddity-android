@@ -335,6 +335,11 @@ internal class StreamController(
         // 可能直接调用本方法时遇到最后一条是 USER 的边界情况——此时无 AI 回复可重说。
         if (last.role != Role.ASSISTANT) return
         if (last.isStreaming) return  // 还在 streaming 中：忽略，等待完成
+        // 重说基准：最后一条非思考、非提示的实际 AI 内容（思考消息不参与去同判定）
+        val replyReference = current.lastOrNull {
+            it.role == Role.ASSISTANT && !it.isNotice && !it.isThinking &&
+                it.content.isNotBlank() && !it.isError
+        } ?: return
 
         // 定位最后一条 USER 消息：保留 0..lastUserIndex（含 USER），删除其后的所有 AI 消息。
         val lastUserIndex = current.indexOfLast { it.role == Role.USER }
@@ -348,42 +353,75 @@ internal class StreamController(
             .mapNotNull { it.content.takeIf { c -> c.isNotBlank() } }
             .joinToString("\n")
             .takeIf { it.isNotBlank() }
-        if (lastUserIndex >= 0) {
-            // 常规轮次：删除最后一条 USER 之后的所有 AI 消息，再重新生成整轮回复
-            val newHistory = current.subList(0, lastUserIndex + 1).toList()
-            runStream {
-                conversationRepository.replaceMessages(conversationId, newHistory)
-                chatRepository.streamAssistantReply(
-                    conv,
-                    newHistory,
-                    persona.effectiveMemoryStrategy(conv),
-                    previousReplies
-                ) { event ->
-                    eventProcessor.handle(event)
-                    if (event is ChatRepository.Event.CompleteMessage) {
-                        eventProcessor.markSceneInjectedIfUnchanged(sceneAtStart)
-                    }
-                }
-            }
+        // 去同基准：用户点「重说」的那条回复。新回复与它高度相似时由算法自动换表达重写，
+        // 不把「别写得太像」完全交给模型自觉。
+        val similarityReference = replyReference.content.trim().takeIf { it.isNotBlank() }
+        val newHistory = if (lastUserIndex >= 0) {
+            current.subList(0, lastUserIndex + 1).toList()
         } else {
-            // AI 开场轮（"让 AI 先说"，无 USER 消息）：整轮全部重说。
-            // 修复：旧实现只删最后一条并把 assistant 结尾历史直接续写，
-            // 导致只重生成最后一句、前面句子全部残留。
-            runStream {
-                conversationRepository.replaceMessages(conversationId, emptyList())
-                chatRepository.letAiStart(
-                    conv,
-                    persona.effectiveMemoryStrategy(conv),
-                    previousReplies
-                ) { event ->
-                    eventProcessor.handle(event)
-                    if (event is ChatRepository.Event.CompleteMessage) {
-                        eventProcessor.markSceneInjectedIfUnchanged(sceneAtStart)
+            emptyList()
+        }
+        val isOpeningRound = lastUserIndex < 0
+
+        runStream {
+            var attempt = 0
+            var hint = previousReplies
+            while (true) {
+                attempt++
+                // 常规轮次：删除最后一条 USER 之后的所有 AI 消息，再重新生成整轮回复；
+                // AI 开场轮（"让 AI 先说"，无 USER 消息）：整轮全部重说。
+                // 修复：旧实现只删最后一条并把 assistant 结尾历史直接续写，
+                // 导致只重生成最后一句、前面句子全部残留。
+                conversationRepository.replaceMessages(conversationId, newHistory)
+                if (isOpeningRound) {
+                    chatRepository.letAiStart(
+                        conv,
+                        persona.effectiveMemoryStrategy(conv),
+                        hint
+                    ) { event ->
+                        eventProcessor.handle(event)
+                        if (event is ChatRepository.Event.CompleteMessage) {
+                            eventProcessor.markSceneInjectedIfUnchanged(sceneAtStart)
+                        }
+                    }
+                } else {
+                    chatRepository.streamAssistantReply(
+                        conv,
+                        newHistory,
+                        persona.effectiveMemoryStrategy(conv),
+                        hint
+                    ) { event ->
+                        eventProcessor.handle(event)
+                        if (event is ChatRepository.Event.CompleteMessage) {
+                            eventProcessor.markSceneInjectedIfUnchanged(sceneAtStart)
+                        }
                     }
                 }
+                // 去同判定：新回复与上一版核心内容高度相似（bigram 相似度 ≥ 阈值）时，
+                // 擦掉本次结果并用更强约束重写一次；上限 REGENERATE_MAX_ATTEMPTS。
+                if (similarityReference == null || attempt >= REGENERATE_MAX_ATTEMPTS) break
+                val produced = _messages.value.lastOrNull {
+                    it.role == Role.ASSISTANT && !it.isNotice && !it.isThinking &&
+                        it.content.isNotBlank() && !it.isError
+                }?.content.orEmpty()
+                if (produced.isBlank()) break
+                if (com.quiddity.app.data.repo.replySimilarityRatio(
+                        similarityReference, produced
+                    ) < com.quiddity.app.data.repo.REGENERATE_SIMILARITY_THRESHOLD
+                ) {
+                    break
+                }
+                hint = buildRegenerateRetryHint(previousReplies ?: similarityReference)
             }
         }
     }
+
+    /** 重说去同重试：算法检测到与上一版高度相似后，用数据驱动的更强约束重写一次。 */
+    private fun buildRegenerateRetryHint(previous: String): String =
+        "（再次重说：刚才新生成的回复与上一版过于相似。请完全换一种开场、角度、句式和叙述顺序重新写，" +
+            "第一句不要沿用上一版的开头；保持同样的人设与语境，不要复述上一版原句。）\n" +
+            "上一版回复（仅作对照，禁止复述）：${previous.take(600)}"
+
     fun continueGeneration() {
         if (group.isGroup()) return
         if (_isGenerating.value) return
@@ -396,11 +434,31 @@ internal class StreamController(
         // 防御性：最后一条必须是非 streaming 的 AI 消息（已停止 / 错误 / 完成）
         if (last.role != Role.ASSISTANT) return
         if (last.isStreaming) return
+        // 继续说判定基准：最后一条非思考、非提示的实际 AI 内容
+        val replyReference = current.lastOrNull {
+            it.role == Role.ASSISTANT && !it.isNotice && !it.isThinking &&
+                it.content.isNotBlank()
+        }
 
         runStream {
-            // 不追加用户消息——直接用现有历史触发流式回复。
-            // 模型看到结尾是 assistant 的消息序列，自然生成新的 AI 回复。
-            val newHistory = _messages.value
+            // 不追加真实用户消息——直接用现有历史触发流式回复。
+            // 追加一条「继续说」引导（只进 API 请求、不进 UI 消息列表）：
+            // 算法按上一条回复的形态选择引导语——上一条只有动作时要求「补全台词」，
+            // 有内容时才走「接着上一句继续说」，让模型自然输出内容而不是复述或描写动作。
+            val guide = if (replyReference != null &&
+                com.quiddity.app.data.repo.isActionOnlyReply(replyReference.content)
+            ) {
+                "（继续说：请直接说出一句完整的台词继续对话，不要复述上一句。）"
+            } else {
+                "（继续说：请直接接着上一句继续输出后续内容，不要复述上一句。）"
+            }
+            val newHistory = _messages.value + Message(
+                id = IdGenerator.newId(IdGenerator.Prefix.USER_MESSAGE),
+                conversationId = conv.id,
+                role = Role.USER,
+                content = guide,
+                timestamp = System.currentTimeMillis()
+            )
             chatRepository.streamAssistantReply(
                 conv,
                 newHistory,
@@ -597,4 +655,9 @@ internal class StreamController(
     internal suspend fun handleStreamEvent(event: ChatRepository.Event) = eventProcessor.handle(event)
 
     internal suspend fun settleInterruptedStreams() = eventProcessor.settleInterruptedStreams()
+
+    private companion object {
+        /** 重说去同自动重试上限（首次 + 最多 1 次换表达重写）。 */
+        const val REGENERATE_MAX_ATTEMPTS = 2
+    }
 }

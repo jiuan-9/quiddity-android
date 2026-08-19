@@ -16,18 +16,18 @@ class QuickSetupPromptTest {
     fun `parse full comprehensive output extracts all fields`() {
         val raw = """
             【AI人设】
-            [名字]林夕
+            [AI名字]林夕
             [身份背景]温柔学姐，中文系大三
             [性格]说话轻声细语，喜欢用语气词
             [外观]长发，戴圆框眼镜
             [世界背景]都市世界，普通大学校园
             [期望特质]对用户永远温柔耐心
             【用户人设】
-            [名字]小明
-            [身份]大一新生
-            [性别]男
-            [年龄]18
-            [外观]运动装
+            [用户名字]小明
+            [用户身份]大一新生
+            [用户性别]男
+            [用户年龄]18
+            [用户外观]运动装
             【场景设置】
             [当前场景]黄昏时的图书馆，两人靠窗而坐
             【记忆设置】
@@ -45,11 +45,64 @@ class QuickSetupPromptTest {
 
     @Test
     fun `parse missing fields returns blanks and gender fallback`() {
-        val raw = "【AI人设】\n[名字]林夕\n【场景设置】\n[当前场景]图书馆"
+        val raw = "【AI人设】\n[AI名字]林夕\n【场景设置】\n[当前场景]图书馆"
         val result = QuickSetupPrompt.parseQuickSetupResult(raw, QuickSetupTier.COMPREHENSIVE)
         assertEquals("", result.persona.character)
         assertEquals("暂不设置", result.userPersona.gender)
         assertEquals("", result.memory)
+    }
+
+    @Test
+    fun `AI与用户字段标签区分 防止归位错乱`() {
+        val raw = """
+            【AI人设】
+            [AI名字]林夕
+            [身份背景]学姐
+            【用户人设】
+            [用户名字]小明
+            [用户身份]大一新生
+            [用户性别]男
+            [用户年龄]18
+            [用户外观]运动装
+            【场景设置】
+            [当前场景]图书馆
+        """.trimIndent()
+        val result = QuickSetupPrompt.parseQuickSetupResult(raw, QuickSetupTier.ROUGH)
+        assertEquals("林夕", result.persona.name, "AI 名字应从 [AI名字] 提取")
+        assertEquals("学姐", result.persona.persona)
+        assertEquals("小明", result.userPersona.name, "用户名字应从 [用户名字] 提取")
+        assertEquals("大一新生", result.userPersona.identity)
+        assertEquals("男", result.userPersona.gender)
+        assertEquals("18", result.userPersona.age)
+        assertEquals("运动装", result.userPersona.appearance)
+    }
+
+    @Test
+    fun `字段内容中的方括号不再成为切分点`() {
+        val raw = """
+            【AI人设】
+            [AI名字]林夕
+            [身份背景]喜欢[看书]和[写作]
+            【用户人设】
+            [用户名字]小明
+            [用户身份]学生
+            [用户性别]暂不设置
+            [用户年龄]18
+            [用户外观]无
+            【场景设置】
+            [当前场景]图书馆
+        """.trimIndent()
+        val result = QuickSetupPrompt.parseQuickSetupResult(raw, QuickSetupTier.ROUGH)
+        assertEquals("喜欢[看书]和[写作]", result.persona.persona, "正文中的方括号不应截断内容")
+    }
+
+    @Test
+    fun `分节符带空格也能解析`() {
+        val raw = "【AI 人设】\n[AI名字]林夕\n【用户 人设】\n[用户名字]小明\n【场景 设置】\n[当前场景]图书馆"
+        val result = QuickSetupPrompt.parseQuickSetupResult(raw, QuickSetupTier.ROUGH)
+        assertEquals("林夕", result.persona.name)
+        assertEquals("小明", result.userPersona.name)
+        assertEquals("图书馆", result.scene)
     }
 
     @Test
@@ -80,6 +133,15 @@ class QuickSetupPromptTest {
         assertTrue(sys.contains("30 字以内"), "场景必须限制字数")
         assertTrue(sys.contains("第三人称客观视角"), "必须第三人称客观视角")
         assertTrue(sys.contains("禁止出现「你」「我」"), "禁止你/我")
+    }
+
+    @Test
+    fun `system prompt separates desired traits from memory`() {
+        val sys = QuickSetupPrompt.QUICK_SETUP_SYSTEM_PROMPT
+        assertTrue(sys.contains("期望特质与记忆分离"), "必须明确区分期望特质与记忆")
+        assertTrue(sys.contains("[期望特质] 只放"), "期望特质只放 AI 行为/性格/说话方式期望")
+        assertTrue(sys.contains("[需要记住的事] 只放"), "记忆只放用户明确要求记住的事实")
+        assertFalse(sys.contains("合理发散"), "剖析模式不应鼓励发散补全")
     }
 
     @Test
@@ -137,5 +199,60 @@ class QuickSetupPromptTest {
             memory = "喜欢拿铁"
         )
         assertEquals(emptySet(), filled.missingRequiredFieldKeys(QuickSetupTier.COMPREHENSIVE))
+    }
+
+    @Test
+    fun `记忆中的期望表达自动归位到期望特质`() {
+        val raw = """
+            【AI人设】
+            [AI名字]林夕
+            [身份背景]温柔学姐
+            [性格]轻声细语
+            [外观]长发
+            [世界背景]都市世界
+            [期望特质]保持自然
+            【用户人设】
+            [用户名字]小明
+            [用户身份]大一新生
+            [用户性别]男
+            [用户年龄]18
+            [用户外观]运动装
+            【场景设置】
+            [当前场景]图书馆
+            【记忆设置】
+            [需要记住的事]小明喜欢喝拿铁。希望她对我温柔耐心，说话带语气词
+        """.trimIndent()
+        val result = QuickSetupPrompt.parseQuickSetupResult(raw, QuickSetupTier.COMPREHENSIVE)
+        assertTrue(result.persona.desired.contains("温柔耐心"), "记忆中的期望表达应移回期望特质")
+        assertTrue(result.persona.desired.contains("说话带语气词"), "说话方式期望应移回期望特质")
+        assertTrue(result.memory.contains("喜欢喝拿铁"), "记忆事实保留在记忆")
+        assertFalse(result.memory.contains("温柔耐心"), "期望表达不应残留在记忆")
+    }
+
+    @Test
+    fun `期望特质中的记忆事实自动归位到记忆`() {
+        val raw = """
+            【AI人设】
+            [AI名字]林夕
+            [身份背景]温柔学姐
+            [性格]轻声细语
+            [外观]长发
+            [世界背景]都市世界
+            [期望特质]说话带语气词。记住小明喜欢喝拿铁
+            【用户人设】
+            [用户名字]小明
+            [用户身份]大一新生
+            [用户性别]男
+            [用户年龄]18
+            [用户外观]运动装
+            【场景设置】
+            [当前场景]图书馆
+            【记忆设置】
+            [需要记住的事]小明是新生
+        """.trimIndent()
+        val result = QuickSetupPrompt.parseQuickSetupResult(raw, QuickSetupTier.COMPREHENSIVE)
+        assertTrue(result.persona.desired.contains("说话带语气词"), "期望表达保留在期望特质")
+        assertTrue(result.memory.contains("喜欢喝拿铁"), "期望特质中的记忆事实应移回记忆")
+        assertFalse(result.persona.desired.contains("喜欢喝拿铁"), "记忆事实不应残留在期望特质")
     }
 }

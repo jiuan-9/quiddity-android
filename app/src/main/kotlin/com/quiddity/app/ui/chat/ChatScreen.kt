@@ -111,6 +111,7 @@ import com.quiddity.app.data.model.ConversationType
 import com.quiddity.app.data.model.Message
 import com.quiddity.app.data.model.Role
 import com.quiddity.app.data.model.UserPersona
+import com.quiddity.app.data.model.hasPersonaContent
 import com.quiddity.app.di.ServiceLocator
 import com.quiddity.app.domain.ChatRecordSearch
 import com.quiddity.app.ui.chat.components.ChatInputBar
@@ -259,11 +260,15 @@ fun ChatScreen(
     }
 
     // ===== 私聊用户名强制（方案九.4/6：未设置用户名不能发送，进入会话先弹窗） =====
+    // 仅当会话已有角色卡内容（AI 人设 / 用户人设 / 场景 / 记忆任一非空）时弹窗；
+    // 无角色卡的新会话（没有任何设定）不弹窗，也不参与群聊 / Agent 角色检测。
     var showUserNameDialog by rememberSaveable { mutableStateOf(false) }
     var userNameInput by rememberSaveable { mutableStateOf("") }
     LaunchedEffect(conversation?.id) {
         val conv = conversation
-        if (conv != null && conv.type != ConversationType.GROUP && conv.userPersona.name.isBlank()) {
+        if (conv != null && conv.type != ConversationType.GROUP &&
+            conv.userPersona.name.isBlank() && conv.hasPersonaContent
+        ) {
             userNameInput = ""
             showUserNameDialog = true
         }
@@ -759,6 +764,7 @@ fun ChatScreen(
 
             ChatTopBarArea(
                 conversation = conversation,
+                messages = messages,
                 multiSelectMode = multiSelectMode,
                 selectedMessageIds = selectedMessageIds,
                 allSelectableIds = allSelectableIds,

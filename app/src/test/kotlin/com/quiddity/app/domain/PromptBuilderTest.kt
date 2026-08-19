@@ -479,7 +479,14 @@ class PromptBuilderTest {
         )
         val prompt = PromptBuilder.buildGroupSystemPrompt(member, PromptBuilder.GROUP_RULES)
         assertTrue(prompt.contains("【对话方式】"), "群聊提示词应包含对话方式节")
-        assertTrue(prompt.contains("动作/神态用括号括起，如（轻笑）。"), "括号动作规则应带示例：$prompt")
+        assertTrue(
+            prompt.contains("不要刻意添加动作或神态描写"),
+            "对话方式应引导自然输出而非强制动作描写：$prompt"
+        )
+        assertTrue(
+            prompt.contains("禁止整条回复只有动作没有台词"),
+            "对话方式应保留动作-only 安全兜底：$prompt"
+        )
         assertTrue(prompt.contains("不加「名字：」前缀或解释"), "前缀规则应在对话方式节：$prompt")
         assertTrue(prompt.contains("被用户「@」点名时优先回应"), "@点名规则应在对话方式节：$prompt")
         assertTrue(prompt.contains("不提及自己是 AI 或模型"), "AI 身份纪律应在对话方式节：$prompt")

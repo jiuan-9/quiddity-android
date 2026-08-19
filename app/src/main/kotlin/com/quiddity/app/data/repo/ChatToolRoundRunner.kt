@@ -24,7 +24,7 @@ import com.quiddity.app.util.IdGenerator
 import com.quiddity.app.util.QuiddityConstants
 
 private const val TOOL_ROUND_LIMIT_NUDGE =
-    "?????????????????????????????????????????????????????????????????"
+    "（工具轮次已达上限。请停止调用工具，直接基于已有结果给出最终回复，不要继续发起工具调用。）"
 
 /** ??????????????? */
 internal sealed interface NoToolRoundResult {
@@ -40,15 +40,18 @@ internal sealed interface NoToolRoundResult {
 }
 
 private const val TOOL_CALL_TRUNCATED_NUDGE =
-    "?????????????????????????????????????????"
+    "（你的工具调用因长度限制被截断，参数不完整。请重新发起一次完整、正确的工具调用。）"
 
 private const val MAX_FINAL_RECOVERY_ROUNDS = 3
 
 private const val TRUNCATE_CONTINUE_NUDGE =
-    "?????????????????????????????????????????????????"
+    "（你的回复因达到长度上限被截断。请直接从断点继续输出，不要重复已经输出的内容，直接给出后续正文。）"
 
 private const val EMPTY_REPLY_NUDGE =
-    "?????????????????????????????????????????????????"
+    "（你刚才没有输出有效回复。请基于已有信息直接给出完整回复；若任务尚未完成，请继续完成并说明结果。）"
+
+private const val ACTION_ONLY_REPLY_NUDGE =
+    "（你刚才只输出了动作/神态描写，没有说出任何实际台词。请直接说出完整台词，不要重复动作描写。）"
 
 internal class ToolRoundRunner(
     private val api: ChatApi,
@@ -114,9 +117,15 @@ internal class ToolRoundRunner(
 
         val maxTokens = conv.maxTokens ?: settings.globalMaxTokens
         val singleMsgTokens = conv.singleMessageTokens ?: settings.globalSingleMessageTokens
-        // 按模型支持的最高温度钳制：部分模型仅支持 0～1.0，超限请求会被服务端拒绝
+        // 按模型支持的最高温度钳制：部分模型仅支持 0～1.0，超限请求会被服务端拒绝。
+        // 重说场景小幅提高温度，配合提示词要求换一种表达，降低与上一版雷同的概率。
+        val baseTemperature = conv.temperature ?: settings.globalTemperature
         val temperature = QuiddityConstants.clampTemperature(
-            conv.temperature ?: settings.globalTemperature,
+            if (regeneratePreviousReply != null) {
+                baseTemperature + REGENERATE_TEMPERATURE_BOOST
+            } else {
+                baseTemperature
+            },
             access.maxTemperature
         )
         val toolStrategyActive = effectiveStrategy == QuiddityConstants.MEMORY_STRATEGY_TOOL &&
@@ -221,8 +230,13 @@ internal class ToolRoundRunner(
 
         val maxTokens = conv.maxTokens ?: settings.globalMaxTokens
         val singleMsgTokens = conv.singleMessageTokens ?: settings.globalSingleMessageTokens
+        val baseTemperature = conv.temperature ?: settings.globalTemperature
         val temperature = QuiddityConstants.clampTemperature(
-            conv.temperature ?: settings.globalTemperature,
+            if (regeneratePreviousReply != null) {
+                baseTemperature + REGENERATE_TEMPERATURE_BOOST
+            } else {
+                baseTemperature
+            },
             access.maxTemperature
         )
         val toolStrategyActive = effectiveStrategy == QuiddityConstants.MEMORY_STRATEGY_TOOL &&
@@ -331,10 +345,19 @@ internal class ToolRoundRunner(
             if (round.reasoningText.isNotBlank()) reasoningText = round.reasoningText
             var calls = round.toolCalls
             if (calls.isEmpty()) {
+                val snapshotText = coordinator.snapshot()
+                    .filterNot { it.isThinking || it.isNotice }
+                    .joinToString("") { it.content }
+                val actionOnly = isActionOnlyReply(snapshotText)
+                if (round.isCompleteReply && !actionOnly) {
+                    // 完整回复直接收尾，不触发兜底续写/重试
+                    break
+                }
                 // ===== 无工具调用收尾：截断自动续写 / 空回复（AI 撤回）自动兜底重试 =====
                 val recovered = recoverNoToolRound(
                     api, apiUrl, apiKey, currentRequest, coordinator, conv, onEvent, contentTransform,
-                    thinkingActive, budget.totalRounds, lastResolved, lastError, recordFailure, round
+                    thinkingActive, budget.totalRounds, lastResolved, lastError, recordFailure,
+                    round, actionOnly
                 )
                 when (recovered) {
                     is NoToolRoundResult.Completed -> break
@@ -439,11 +462,15 @@ internal class ToolRoundRunner(
                         return false
                     }
                 }
-                if (!finalRound.hasContent || finalRound.truncated) {
+                val snapshotText = coordinator.snapshot()
+                    .filterNot { it.isThinking || it.isNotice }
+                    .joinToString("") { it.content }
+                if (!finalRound.isCompleteReply || isActionOnlyReply(snapshotText)) {
                     // 上限轮后的最终回复为空 / 被截断：同样走自动续写与空回复兜底
                     val recovered = recoverNoToolRound(
                     api, apiUrl, apiKey, currentRequest, coordinator, conv, onEvent, contentTransform,
-                    thinkingActive, budget.totalRounds, lastResolved, lastError, recordFailure, finalRound
+                    thinkingActive, budget.totalRounds, lastResolved, lastError, recordFailure,
+                    finalRound, isActionOnlyReply(snapshotText)
                     )
                     when (recovered) {
                         is NoToolRoundResult.Completed -> Unit
@@ -542,9 +569,9 @@ internal class ToolRoundRunner(
     }
 
     /**
-     * DeepSeek 本身有概率不配合【思考】标记（业界广泛已知，非本客户端问题）：
-     * 用户开启思考但整轮未产出任何思考内容时，在首条正式回复上附报告，
-     * 保证开启思考后气泡内始终有可展开的内容，而不是静默空白。
+     * 无工具调用轮次的收尾兜底：仅处理截断续写与空回复重试两类不完整轮次。
+     * 已输出完整正文（[StreamRoundResult.isCompleteReply]）直接返回
+     * [NoToolRoundResult.Completed]，不产生任何额外请求——兜底不得干预正常回复。
      */
     suspend fun recoverNoToolRound(
         api: ChatApi,
@@ -560,21 +587,31 @@ internal class ToolRoundRunner(
         resolved: List<Pair<ChatStreamParser.AggregatedToolCall, String>>,
         lastError: Throwable?,
         recordFailure: suspend (Throwable) -> Unit,
-        initial: StreamRoundResult
+        initial: StreamRoundResult,
+        actionOnly: Boolean = false
     ): NoToolRoundResult {
+        if (initial.isCompleteReply && !actionOnly) return NoToolRoundResult.Completed
         var current = request
         var round = initial
         var attempt = 0
         while (attempt < MAX_FINAL_RECOVERY_ROUNDS) {
             attempt++
+            val currentText = coordinator.snapshot()
+                .filterNot { it.isThinking || it.isNotice }
+                .joinToString("") { it.content }
+            val onlyAction = actionOnly || isActionOnlyReply(currentText)
             val truncated = round.truncated
             val partial = coordinator.snapshot().lastOrNull {
                 it.role == Role.ASSISTANT && !it.isNotice && !it.isThinking && it.content.isNotBlank()
             }?.content.orEmpty()
             current = buildContinueRequest(
                 current,
-                if (truncated) partial else null,
-                if (truncated) TRUNCATE_CONTINUE_NUDGE else EMPTY_REPLY_NUDGE
+                if (truncated || onlyAction) partial else null,
+                when {
+                    onlyAction -> ACTION_ONLY_REPLY_NUDGE
+                    truncated -> TRUNCATE_CONTINUE_NUDGE
+                    else -> EMPTY_REPLY_NUDGE
+                }
             )
             coordinator.setMergeWithPrevious(true)
             val retried = singleStreamRunner.runSingleStream(
@@ -592,7 +629,8 @@ internal class ToolRoundRunner(
                 return NoToolRoundResult.WithToolCalls(retried, current)
             }
             round = retried
-            if (retried.hasContent && !retried.truncated) {
+            val retriedText = coordinator.snapshot().joinToString("") { it.content }
+            if (retried.hasContent && !retried.truncated && !isActionOnlyReply(retriedText)) {
                 return NoToolRoundResult.Completed
             }
             // 仍被截断 → 继续续写；仍为空 → 继续重试
@@ -612,4 +650,7 @@ internal class ToolRoundRunner(
      * [keepTools] 为 true 时保留 tools / tool_choice，允许模型继续调用工具；
      * 为 false 时关闭工具，强制模型输出最终答复。
      */
+    companion object {
+        const val REGENERATE_TEMPERATURE_BOOST = 0.3
+    }
 }

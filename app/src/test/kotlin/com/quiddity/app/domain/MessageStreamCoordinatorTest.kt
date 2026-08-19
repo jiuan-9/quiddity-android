@@ -59,30 +59,31 @@ class MessageStreamCoordinatorTest {
     // ============================================================
 
     @Test
-    fun `user example - bracket plus question plus ellipsis plus period`() {
+    fun `user example - bracket merged with speech plus ellipsis plus period`() {
         val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
         coord.accept("（伸手）你真的还好吗？要不歇歇...不要太累。")
+        coord.finalize()
         val snap = coord.snapshot()
         val contents = snap.map { it.content }
         assertEquals(
-            listOf("（伸手）", "你真的还好吗？", "要不歇歇...不要太累。"),
+            listOf("（伸手）你真的还好吗？", "要不歇歇...不要太累。"),
             contents,
-            "用户原例切分结果与预期不符：$contents"
+            "动作括号应与紧随台词合并为一条，剩余内容按切分继续：$contents"
         )
         val ids = snap.map { it.id }
         assertEquals(ids.size, ids.toSet().size, "消息 id 必须唯一：$ids")
     }
 
     @Test
-    fun `action bracket followed by speech keeps both messages`() {
+    fun `action bracket followed by speech merges into one message`() {
         val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
         coord.accept("（把脸埋在你胸口，声音闷闷的）")
         coord.accept("我真的好想你。")
         val contents = coord.snapshot().map { it.content }
         assertEquals(
-            listOf("（把脸埋在你胸口，声音闷闷的）", "我真的好想你。"),
+            listOf("（把脸埋在你胸口，声音闷闷的）我真的好想你。"),
             contents,
-            "动作+台词连续流不应丢字：$contents"
+            "动作括号应与紧随台词合并为一条消息，避免两条同时加载：$contents"
         )
     }
 
@@ -198,7 +199,7 @@ class MessageStreamCoordinatorTest {
     }
 
     @Test
-    fun `pending bracket visible in snapshot before following content`() {
+    fun `bracket pending before content then merged on arrival`() {
         // 括号已闭合但后续内容未到时，快照应包含该括号段（不丢字、不悬空）
         val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
         coord.accept("（点头）")
@@ -209,7 +210,7 @@ class MessageStreamCoordinatorTest {
         )
         coord.accept("你好。")
         assertEquals(
-            listOf("（点头）", "你好。"),
+            listOf("（点头）你好。"),
             coord.snapshot().map { it.content }
         )
     }
@@ -229,9 +230,9 @@ class MessageStreamCoordinatorTest {
         coord.accept("第一句。第二句！第三句？")
         val snap = coord.snapshot()
         assertEquals(
-            listOf("第一句。", "第二句！", "第三句？"),
+            listOf("第一句。", "第二句！第三句？"),
             snap.map { it.content },
-            "三句应以各自句末标点切分"
+            "同一网络分片只完成一条消息，其余内容留到后续批次，避免两条同时加载"
         )
     }
 
@@ -243,7 +244,7 @@ class MessageStreamCoordinatorTest {
         coord.finalize()
         val snap = coord.snapshot()
         assertEquals(
-            listOf("Hello!", "How are you?", "I am fine."),
+            listOf("Hello!", "How are you?I am fine."),
             snap.map { it.content }
         )
     }
@@ -258,9 +259,9 @@ class MessageStreamCoordinatorTest {
         coord.accept("真的吗？！不会吧！！真的。")
         val snap = coord.snapshot()
         assertEquals(
-            listOf("真的吗？！", "不会吧！！", "真的。"),
+            listOf("真的吗？！", "不会吧！！真的。"),
             snap.map { it.content },
-            "连续句末标点应合并到同一条消息"
+            "连续句末标点合并到同一条消息，同批完成的消息也只发一条"
         )
     }
 
@@ -320,14 +321,14 @@ class MessageStreamCoordinatorTest {
     // ============================================================
 
     @Test
-    fun `bracket content becomes its own message`() {
+    fun `bracket merges with following speech`() {
         val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
         coord.accept("（伸手）你真的还好吗？")
         val snap = coord.snapshot()
         assertEquals(
-            listOf("（伸手）", "你真的还好吗？"),
+            listOf("（伸手）你真的还好吗？"),
             snap.map { it.content },
-            "括号内容应作为独立消息"
+            "括号与紧随台词应合并为一条消息"
         )
     }
 
@@ -344,21 +345,21 @@ class MessageStreamCoordinatorTest {
     }
 
     @Test
-    fun `speaker label before bracket merges into bracket message`() {
+    fun `speaker label before bracket merges with following speech`() {
         // 群聊根因：模型输出「小A：（轻笑）你好呀。」时，
-        // 「小A：」不得被拆成独立消息（剥离前缀后会变成空白消息），应并入括号段
+        // 「小A：」不得被拆成独立消息（剥离前缀后会变成空白消息），应并入括号段与台词
         val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
         coord.accept("小A：（轻笑）你好呀。")
         val snap = coord.snapshot()
         assertEquals(
-            listOf("小A：（轻笑）", "你好呀。"),
+            listOf("小A：（轻笑）你好呀。"),
             snap.map { it.content },
-            "说话人标记应并入括号段，不得产生孤立前缀消息：${snap.map { it.content }}"
+            "说话人标记 + 括号 + 台词应合并为一条，不得产生孤立前缀消息：${snap.map { it.content }}"
         )
     }
 
     @Test
-    fun `streamed speaker label before bracket does not produce blank message`() {
+    fun `streamed speaker label before bracket merges with following speech`() {
         // 跨 delta：前缀先到、括号后到；半截前缀流式消息应被同索引 Update 补全，无空白残留
         val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
         coord.accept("小A：")
@@ -366,23 +367,23 @@ class MessageStreamCoordinatorTest {
         coord.finalize()
         val snap = coord.snapshot()
         assertEquals(
-            listOf("小A：（轻笑）", "你好呀。"),
+            listOf("小A：（轻笑）你好呀。"),
             snap.map { it.content },
-            "跨 delta 的说话人标记 + 括号应合并为一条，不得出现「小A：」空白消息"
+            "跨 delta 的说话人标记 + 括号 + 台词应合并为一条，不得出现「小A：」空白消息"
         )
         assertTrue(snap.all { it.content.isNotBlank() }, "任何消息内容都不得为空白")
     }
 
     @Test
-    fun `speaker label newline bracket merges into bracket message`() {
-        // 前缀与括号之间带换行（「小A：\n（轻笑）」）同样并入括号段
+    fun `speaker label newline bracket merges with following speech`() {
+        // 前缀与括号之间带换行（「小A：\n（轻笑）」）同样并入括号段与台词
         val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
         coord.accept("小A：\n（轻笑）你好。")
         val snap = coord.snapshot()
         assertEquals(
-            listOf("小A：（轻笑）", "你好。"),
+            listOf("小A：（轻笑）你好。"),
             snap.map { it.content },
-            "带换行的说话人标记也应并入括号段"
+            "带换行的说话人标记应并入括号段与台词"
         )
     }
 
@@ -410,39 +411,39 @@ class MessageStreamCoordinatorTest {
     }
 
     @Test
-    fun `multiple consecutive brackets each become separate messages`() {
+    fun `multiple consecutive brackets merge with following speech`() {
         val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
         coord.accept("（点头）（微笑）你好。")
         val snap = coord.snapshot()
         assertEquals(
-            listOf("（点头）", "（微笑）", "你好。"),
+            listOf("（点头）（微笑）你好。"),
             snap.map { it.content },
-            "连续多个括号应各自独立成条"
+            "连续多个动作括号与台词合并为一条消息"
         )
     }
 
     @Test
-    fun `all bracket types supported`() {
+    fun `all bracket types supported and merged with speech`() {
         val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
         coord.accept("(action)【动作】<动作>你好。")
         val snap = coord.snapshot()
         assertEquals(
-            listOf("(action)", "【动作】", "<动作>", "你好。"),
+            listOf("(action)【动作】<动作>你好。"),
             snap.map { it.content },
-            "应支持 () 【】 <> 等各类括号"
+            "应支持 () 【】 <> 等各类括号，并与台词合并为一条"
         )
     }
 
     @Test
-    fun `nested brackets match outer close`() {
+    fun `nested brackets match outer close and merge with speech`() {
         val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
         // 嵌套同类型括号：以匹配的外层闭括号为准
         coord.accept("（外层（内层））后续。")
         val snap = coord.snapshot()
         assertEquals(
-            listOf("（外层（内层））", "后续。"),
+            listOf("（外层（内层））后续。"),
             snap.map { it.content },
-            "嵌套括号应匹配最外层闭合"
+            "嵌套括号应匹配最外层闭合，并与后续台词合并"
         )
     }
 
@@ -460,7 +461,7 @@ class MessageStreamCoordinatorTest {
     }
 
     @Test
-    fun `unclosed bracket waits for more delta`() {
+    fun `unclosed bracket waits for more delta then merges with speech`() {
         val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
         // 第一段：括号未闭合，不应切出括号消息
         val first = coord.accept("（伸")
@@ -470,9 +471,9 @@ class MessageStreamCoordinatorTest {
         coord.accept("手）你好。")
         val snap = coord.snapshot()
         assertEquals(
-            listOf("（伸手）", "你好。"),
+            listOf("（伸手）你好。"),
             snap.map { it.content },
-            "跨 delta 的括号应在闭合后切分"
+            "跨 delta 的括号闭合后应与台词合并为一条"
         )
     }
 
@@ -508,6 +509,43 @@ class MessageStreamCoordinatorTest {
         assertEquals("片段一。片段二。", snap[0].content)
     }
 
+    @Test
+    fun `merge mode with empty history records finalized reply in snapshot`() {
+        // 回归保护：工具轮无正文时合并模式开启（setMergeWithPrevious=true），
+        // 但 completed 为空、没有可合并的上一条消息——finalize 派发新消息后
+        // 必须登记进 completed，否则快照为空、完整正文被误判为「空回复」，
+        // 触发兜底重试并在正常回复后追加错误消息。
+        val coord = MessageStreamCoordinator(
+            "conv1", "run1",
+            singleMessageTokens = 100,
+            splitEnabled = false
+        )
+        coord.setMergeWithPrevious(true)
+        coord.accept("工具已执行，结果如下。")
+        coord.finalize()
+        val snap = coord.snapshot()
+        assertEquals(1, snap.size, "合并模式下无上一条消息时，最终消息仍应登记进快照")
+        assertEquals("工具已执行，结果如下。", snap[0].content)
+    }
+
+    @Test
+    fun `merge mode with streamed deltas records finalized reply in snapshot`() {
+        // 同上，但正文跨多个 delta 流式到达：streaming 新消息已派发（id 进 knownIds），
+        // finalize 走 Complete 分支时同样必须登记进 completed。
+        val coord = MessageStreamCoordinator(
+            "conv1", "run1",
+            singleMessageTokens = 100,
+            splitEnabled = false
+        )
+        coord.setMergeWithPrevious(true)
+        coord.accept("第一段")
+        coord.accept("第二段。")
+        coord.finalize()
+        val snap = coord.snapshot()
+        assertEquals(1, snap.size, "跨 delta 流式的最终消息应登记进快照")
+        assertEquals("第一段第二段。", snap[0].content)
+    }
+
     // ============================================================
     // 六、流式信号契约（New / Update / Complete）
     // ============================================================
@@ -539,6 +577,104 @@ class MessageStreamCoordinatorTest {
         val signals = coord.accept("第一句！")
         val hasComplete = signals.any { it is StreamCoordinator.Signal.Complete }
         assertTrue(hasComplete, "句末标点切分时必须发出 Complete 信号")
+    }
+
+    @Test
+    fun `same delta completes at most one message to avoid two-at-once`() {
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        val signals = coord.accept("第一句。第二句！第三句？")
+        val completed = signals.filterIsInstance<StreamCoordinator.Signal.Complete>()
+        assertEquals(1, completed.size, "同一网络分片不得同时完成多条消息")
+        assertEquals("第一句。", completed[0].message.content)
+    }
+
+    @Test
+    fun `remaining sentences flush on finalize without losing content`() {
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("第一句。第二句！第三句？")
+        coord.finalize()
+        val snap = coord.snapshot()
+        assertEquals(
+            listOf("第一句。", "第二句！第三句？"),
+            snap.map { it.content },
+            "finalize 收尾不得丢字"
+        )
+    }
+
+    @Test
+    fun `consecutive duplicate speech is suppressed`() {
+        // 模型偶发复述：先输出「（动作）台词。」又单独输出一遍「台词」。
+        // 第二条与上一条核心内容相同，应被丢弃，避免两条几乎一样的消息同时加载。
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("（笑着摊手）行，这轮你换了词——hello收到。")
+        coord.accept("行，这轮你换了词——hello收到")
+        coord.finalize()
+        val snap = coord.snapshot()
+        assertEquals(
+            listOf("（笑着摊手）行，这轮你换了词——hello收到。"),
+            snap.map { it.content },
+            "重复台词应被去重：${snap.map { it.content }}"
+        )
+    }
+
+    @Test
+    fun `real observed duplicate reply is deduplicated`() {
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("（笑出声来，食指点了点额头）hello2，版本号都出来了。")
+        coord.accept("hello2，版本号都出来了")
+        coord.finalize()
+        assertEquals(
+            listOf("（笑出声来，食指点了点额头）hello2，版本号都出来了。"),
+            coord.snapshot().map { it.content }
+        )
+    }
+
+    @Test
+    fun `real observed duplicate with streamed bracket is deduplicated`() {
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("（笑")
+        coord.accept("出声来，食指点了点额头）hello2，版本号都出来了。")
+        coord.accept("hello2，版本号都出来了")
+        coord.finalize()
+        assertEquals(
+            listOf("（笑出声来，食指点了点额头）hello2，版本号都出来了。"),
+            coord.snapshot().map { it.content },
+            "跨分片括号合并 + 重复台词去重应只保留一条：${coord.snapshot().map { it.content }}"
+        )
+    }
+
+    @Test
+    fun `multi-delta duplicate emits blank delete markers`() {
+        // 重复台词跨多个 delta 流式到达（已发出流式消息）：
+        // 收尾时应派发「空内容 Update + Complete」删除标记，由事件层移除，
+        // 既不保留重复正文，也不留下永远 streaming 的半截消息
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("（笑着摊手）行，这轮你换了词——hello收到。")
+        coord.accept("行，这轮你换")
+        coord.accept("了词——hello收到")
+        val signals = coord.finalize()
+        val blankCompletes = signals
+            .filterIsInstance<StreamCoordinator.Signal.Complete>()
+            .filter { it.message.content.isBlank() }
+        assertEquals(1, blankCompletes.size, "已流式发出的重复消息应派发空内容删除标记")
+        assertEquals(
+            listOf("（笑着摊手）行，这轮你换了词——hello收到。"),
+            coord.snapshot().map { it.content },
+            "重复消息应从快照移除：${coord.snapshot().map { it.content }}"
+        )
+    }
+
+    @Test
+    fun `identical forced split chunks are preserved`() {
+        // 硬上限强制切分可能产生内容相同的分片（如重复字符文本），
+        // 去重只针对「动作括号 + 台词」近重复，不得吞掉这类合法分片
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1)
+        val longText = "x".repeat(50)
+        longText.chunked(5).forEach { coord.accept(it) }
+        coord.finalize()
+        val snap = coord.snapshot()
+        val reconstructed = snap.joinToString("") { it.content }
+        assertEquals(longText, reconstructed, "强制切分分片不得被去重吞掉")
     }
 
     // ============================================================
@@ -626,7 +762,7 @@ class MessageStreamCoordinatorTest {
     // ============================================================
 
     @Test
-    fun `streamed deltas across brackets and sentences reconstruct correctly`() {
+    fun `streamed deltas across brackets and sentences merge correctly`() {
         val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
         // 模拟真实流式：分多次 delta 到达
         coord.accept("（抬头")
@@ -636,9 +772,9 @@ class MessageStreamCoordinatorTest {
         coord.finalize()
         val snap = coord.snapshot()
         assertEquals(
-            listOf("（抬头）", "今天天气真好。", "要不要出去走走？"),
+            listOf("（抬头）今天天气真好。", "要不要出去走走？"),
             snap.map { it.content },
-            "跨 delta 流式切分应正确重组"
+            "跨 delta 流式括号应与台词合并，其余句子正常切分"
         )
     }
 
@@ -657,10 +793,11 @@ class MessageStreamCoordinatorTest {
     fun `completed messages are not marked streaming`() {
         val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
         coord.accept("第一句。第二句。")
+        coord.finalize()
         val snap = coord.snapshot()
         assertTrue(
             snap.all { !it.isStreaming },
-            "所有已完成切分的消息 isStreaming 必须为 false"
+            "finalize 后所有消息 isStreaming 必须为 false"
         )
     }
 
@@ -709,7 +846,9 @@ class MessageStreamCoordinatorTest {
         val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
         coord.accept("他说：\"你好。")
         val signals = coord.accept("\"然后走了。")
-        val completed = signals.filterIsInstance<StreamCoordinator.Signal.Complete>()
+        // 同一分片只完成一条消息：第二条留到 finalize 收尾（防两条同时加载）
+        val completed = (signals + coord.finalize())
+            .filterIsInstance<StreamCoordinator.Signal.Complete>()
         val contents = completed.map { it.message.content }
         assertEquals(
             listOf("他说：\"你好。\"", "然后走了。"),

@@ -46,7 +46,8 @@ fun AgentTab(
     toggleSelection: (String) -> Unit,
     syncMultiSelect: (Boolean, Set<String>) -> Unit,
     onOpenConversation: (String) -> Unit,
-    hasListWallpaper: Boolean
+    hasListWallpaper: Boolean,
+    newConversationId: String? = null
 ) {
     ChatListPage(
         conversations = conversations,
@@ -60,6 +61,7 @@ fun AgentTab(
         toggleSelection = toggleSelection,
         syncMultiSelect = syncMultiSelect,
         onOpenConversation = onOpenConversation,
-        hasListWallpaper = hasListWallpaper
+        hasListWallpaper = hasListWallpaper,
+        newConversationId = newConversationId
     )
 }

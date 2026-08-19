@@ -52,6 +52,10 @@ class HomeViewModel(
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
+    /** 最近一次新建会话 id（用于列表卡片「从上到下淡入」动画，短暂保留后清除）。 */
+    private val _newConversationId = MutableStateFlow<String?>(null)
+    val newConversationId: StateFlow<String?> = _newConversationId.asStateFlow()
+
     // ===== 三条开发规范（位于文件中间位置） =====
     // 1. 问题修复规范：所有代码问题修复必须采用系统性解决方案，严禁使用临时性补丁或 hack 手段。
     //    修复内容需完全融入现有代码架构，确保代码逻辑的连贯性、可维护性和可扩展性。
@@ -88,7 +92,8 @@ class HomeViewModel(
 
     fun createConversation() {
         viewModelScope.launch {
-            conversationRepository.createConversation()
+            val conv = conversationRepository.createConversation()
+            markNewConversation(conv.id)
         }
     }
 
@@ -98,14 +103,24 @@ class HomeViewModel(
      */
     fun createGroupConversation() {
         viewModelScope.launch {
-            conversationRepository.createGroupConversation(emptyList(), null)
+            val conv = conversationRepository.createGroupConversation(emptyList(), null)
+            markNewConversation(conv.id)
         }
     }
 
     /** 创建 Agent 会话（固定标题 Agent，不直接进入）。 */
     fun createAgentConversation() {
         viewModelScope.launch {
-            conversationRepository.createAgentConversation()
+            val conv = conversationRepository.createAgentConversation()
+            markNewConversation(conv.id)
+        }
+    }
+
+    private fun markNewConversation(id: String) {
+        _newConversationId.value = id
+        viewModelScope.launch {
+            kotlinx.coroutines.delay(2_000)
+            if (_newConversationId.value == id) _newConversationId.value = null
         }
     }
 

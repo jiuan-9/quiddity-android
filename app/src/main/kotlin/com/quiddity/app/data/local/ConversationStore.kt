@@ -353,6 +353,20 @@ class ConversationStore(private val context: Context) {
         true
     }
 
+    /** 删除单条消息（去重移除用）：锁内读缓存 → 过滤 → 单次写盘。 */
+    suspend fun deleteMessage(convId: String, messageId: String): Boolean = withContext(Dispatchers.IO) {
+        getMessageLock(convId).withLock {
+            val cache = messagesCache[convId] ?: return@withLock false
+            val idx = cache.indexOfFirst { it.id == messageId }
+            if (idx < 0) return@withLock false
+            cache.removeAt(idx)
+            val snapshot = cache.toList()
+            messagesFlows[convId]?.value = snapshot
+            if (!writeMessagesAtomic(convId, snapshot)) return@withLock false
+        }
+        true
+    }
+
     /** @return 是否写盘成功 */
     suspend fun replaceMessages(convId: String, messages: List<Message>): Boolean = withContext(Dispatchers.IO) {
         getMessageLock(convId).withLock {

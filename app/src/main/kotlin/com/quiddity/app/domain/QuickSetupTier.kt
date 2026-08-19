@@ -133,9 +133,14 @@ enum class QuickSetupTier(
     }
 }
 
-/** AI 人设字段标识（与 [Persona] 字段一一对应，用于提示词与解析）。 */
+/**
+ * AI 人设字段标识（与 [Persona] 字段一一对应，用于提示词与解析）。
+ *
+ * 标签带「AI」前缀与用户人设区分：旧版 AI/用户共用 [名字] 标签导致模型
+ * 归位错乱（用户信息被写进 AI 人设等）。当前标签对下游提示词与解析器唯一。
+ */
 enum class AiPersonaField(val label: String) {
-    NAME("[名字]"),
+    NAME("[AI名字]"),
     PERSONA("[身份背景]"),
     CHARACTER("[性格]"),
     APPEARANCE("[外观]"),
@@ -143,13 +148,13 @@ enum class AiPersonaField(val label: String) {
     DESIRED("[期望特质]")
 }
 
-/** 用户人设字段标识（与 [UserPersona] 字段一一对应）。 */
+/** 用户人设字段标识（与 [UserPersona] 字段一一对应，带「用户」前缀避免与 AI 字段混淆）。 */
 enum class UserPersonaField(val label: String) {
-    NAME("[名字]"),
-    IDENTITY("[身份]"),
-    GENDER("[性别]"),
-    AGE("[年龄]"),
-    APPEARANCE("[外观]")
+    NAME("[用户名字]"),
+    IDENTITY("[用户身份]"),
+    GENDER("[用户性别]"),
+    AGE("[用户年龄]"),
+    APPEARANCE("[用户外观]")
 }
 
 /**

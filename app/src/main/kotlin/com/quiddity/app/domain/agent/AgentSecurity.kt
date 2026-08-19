@@ -353,19 +353,20 @@ object AgentSecurity {
         val description = AgentToolRegistry.actionDescription(tool.name, effectiveArgs)
         val conversationId = ctx.conversation?.id
         val conversationType = ctx.conversation?.type
+        // 悬浮窗：所有工具调用（含只读/OCR）都以气泡样式实时展示「AI 正在干什么」，
+        // 不限于行动弹窗工具，避免用户看不到 Agent 的工具调用过程
+        if (conversationId != null) {
+            com.quiddity.app.active.ReplyOverlayController.showToolAction(
+                conversationId,
+                agentActionFor(tool.name)
+            )
+        }
         if (showPopup) {
             com.quiddity.app.active.OperationNotifyController.showActing(
                 description,
                 conversationId,
                 conversationType
             )
-            // 悬浮窗：气泡实时展示 Agent 正在执行的动作（滑动/点击/跳转等）
-            if (conversationId != null) {
-                com.quiddity.app.active.ReplyOverlayController.showToolAction(
-                    conversationId,
-                    agentActionFor(tool.name)
-                )
-            }
         }
         val result = runCatching {
             tool.execute(ctx, effectiveArgs)
@@ -395,10 +396,10 @@ object AgentSecurity {
                     conversationType
                 )
             }
-            // 悬浮窗：动作结束，恢复回复状态（气泡队列优先展示）
-            if (conversationId != null) {
-                com.quiddity.app.active.ReplyOverlayController.clearToolAction(conversationId)
-            }
+        }
+        // 悬浮窗：动作结束（无论成功/失败），恢复回复状态（气泡队列优先展示）
+        if (conversationId != null) {
+            com.quiddity.app.active.ReplyOverlayController.clearToolAction(conversationId)
         }
         return result
     }

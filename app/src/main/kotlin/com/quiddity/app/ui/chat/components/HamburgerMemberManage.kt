@@ -37,6 +37,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.quiddity.app.data.model.Conversation
 import com.quiddity.app.data.model.ConversationType
+import com.quiddity.app.data.model.hasPersonaContent
 import com.quiddity.app.di.ServiceLocator
 import com.quiddity.app.ui.chat.ChatViewModel
 import com.quiddity.app.ui.components.AiAvatar
@@ -87,9 +88,11 @@ internal fun GroupMemberManagePanel(
             conversationRepo.getConversation(id)
         }
     }
+    // 仅展示有角色卡内容的私聊：无任何设定的空会话不被群聊成员检测拾取
     val soloList = remember(settings.catalog) {
         conversationRepo.conversations.value
             .filter { it.type == ConversationType.SOLO }
+            .filter { it.hasPersonaContent }
     }
 
     /** 提交添加：通过的正常加入（显示头像），未通过的进入结果弹窗。 */

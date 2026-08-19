@@ -280,7 +280,7 @@ fun HamburgerMenu(
         onClearMessages = {
             viewModel.clearConversationMessages()
             pendingClearMessages = false
-            toastMsg = "???????"
+            toastMsg = "会话记录已清空"
         },
         onDeleteConversation = {
             pendingDeleteConversation = false
@@ -331,19 +331,19 @@ fun HamburgerMenu(
         onMerge = { p ->
             scope.launch {
                 settingsViewModel.importAllPayload(p, mode = ImportMode.MERGE)
-                toastMsg = "?????????"
+                toastMsg = "导入成功（已合并）"
             }
         },
         onCharactersOnly = { p ->
             scope.launch {
                 settingsViewModel.importAllPayload(p, mode = ImportMode.CHARACTERS_ONLY)
-                toastMsg = "??????"
+                toastMsg = "角色库已导入"
             }
         },
         onReplace = { p ->
             scope.launch {
                 settingsViewModel.importAllPayload(p, mode = ImportMode.REPLACE)
-                toastMsg = "?????????"
+                toastMsg = "导入成功（已替换）"
             }
         }
     )

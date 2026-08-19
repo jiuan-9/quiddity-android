@@ -37,6 +37,8 @@ import kotlin.test.assertTrue
  * 系统提示词体积回归测试：每轮对话都会把 system 提示词整份发给 LLM，
  * 固定模板开销过大会挤压上下文与输出预算。本测试锁定"空人设（仅名字）"下的
  * 模板固定开销，防止后续加规则时无节制膨胀。
+ * 1.6.x 起对话方式新增「动作描写克制 + 继续说直出台词 + 重说换表达」规则，
+ * 预算随规则同步上调（280 → 400 token），仍对后续膨胀保持红线。
  */
 class PromptBuilderBudgetTest {
 
@@ -55,12 +57,12 @@ class PromptBuilderBudgetTest {
         val privateStats = TokenEstimator.analyze(privatePrompt)
         val groupStats = TokenEstimator.analyze(groupPrompt)
         assertTrue(
-            privateStats.tokenEstimate <= 280,
-            "私聊 system 固定开销应 ≤280 token，当前 ${privateStats.tokenEstimate}"
+            privateStats.tokenEstimate <= 400,
+            "私聊 system 固定开销应 ≤400 token，当前 ${privateStats.tokenEstimate}"
         )
         assertTrue(
-            groupStats.tokenEstimate <= 470,
-            "群聊 system 固定开销应 ≤470 token，当前 ${groupStats.tokenEstimate}"
+            groupStats.tokenEstimate <= 560,
+            "群聊 system 固定开销应 ≤560 token，当前 ${groupStats.tokenEstimate}"
         )
         val rulesStats = TokenEstimator.analyze(PromptBuilder.GROUP_RULES)
         assertTrue(

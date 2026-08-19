@@ -10,6 +10,7 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -46,13 +47,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
@@ -95,6 +101,7 @@ internal fun ChatWallpaperLayer(wallpaperUri: String?, wallpaperScrim: Color) {
 @Composable
 internal fun ChatTopBarArea(
     conversation: Conversation?,
+    messages: List<Message>,
     multiSelectMode: Boolean,
     selectedMessageIds: Set<String>,
     allSelectableIds: Set<String>,
@@ -157,6 +164,13 @@ internal fun ChatTopBarArea(
                         modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
                         textAlign = TextAlign.Center
                     )
+                    // 上下文占用圆环：实时显示已用轮数 / 上下文记忆轮数
+                    val usedRounds = messages.count { it.role == Role.USER }
+                    ContextUsageRing(
+                        used = usedRounds,
+                        limit = conversation?.contextLimit ?: 0,
+                        modifier = Modifier.padding(end = 2.dp)
+                    )
                     // 头部不显示放大镜（私聊/群聊均无），查找聊天记录入口统一在会话设置内
                     Box(
                         modifier = Modifier
@@ -207,6 +221,62 @@ internal fun ChatTopBarArea(
                     )
                 }
             }
+}
+
+/**
+ * 上下文占用圆环：实时显示已用轮数占上下文记忆轮数的比例。
+ * 无限制（limit <= 0）时显示 ∞；≥70% 变色提醒，≥90% 红色告警。
+ */
+@Composable
+internal fun ContextUsageRing(
+    used: Int,
+    limit: Int,
+    modifier: Modifier = Modifier
+) {
+    val fraction = if (limit > 0) (used.toFloat() / limit).coerceIn(0f, 1f) else 0f
+    val color = when {
+        fraction >= 0.9f -> MaterialTheme.colorScheme.error
+        fraction >= 0.7f -> MaterialTheme.colorScheme.tertiary
+        else -> MaterialTheme.colorScheme.primary
+    }
+    Box(
+        modifier = modifier.size(28.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val strokeWidth = 3.dp.toPx()
+            val inset = strokeWidth / 2
+            val arcSize = Size(size.width - strokeWidth, size.height - strokeWidth)
+            drawArc(
+                color = color.copy(alpha = 0.18f),
+                startAngle = -90f,
+                sweepAngle = 360f,
+                useCenter = false,
+                topLeft = Offset(inset, inset),
+                size = arcSize,
+                style = Stroke(width = strokeWidth, cap = StrokeCap.Round)
+            )
+            if (fraction > 0f) {
+                drawArc(
+                    color = color,
+                    startAngle = -90f,
+                    sweepAngle = 360f * fraction,
+                    useCenter = false,
+                    topLeft = Offset(inset, inset),
+                    size = arcSize,
+                    style = Stroke(width = strokeWidth, cap = StrokeCap.Round)
+                )
+            }
+        }
+        Text(
+            text = if (limit > 0) "${(fraction * 100).toInt()}" else "∞",
+            style = MaterialTheme.typography.labelSmall,
+            fontSize = 8.sp,
+            fontWeight = FontWeight.Bold,
+            color = color,
+            maxLines = 1
+        )
+    }
 }
 
 @Composable

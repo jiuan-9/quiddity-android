@@ -30,14 +30,20 @@ class ReplyOverlayStateMachine {
     private val lock = Any()
     private val active = LinkedHashMap<String, ActiveReply>()
     private val toolActions = LinkedHashMap<String, String>()
-    private val bubbles = ArrayDeque<ReplyBubble>()
+    /**
+     * 当前唯一待展示的回复气泡。
+     *
+     * 悬浮窗只保留一条消息：新气泡到达时直接替换旧气泡（旧消息不再排队重播），
+     * 展示超过 4s 自动消费、点击回复立即消费，均不会再次出现。
+     */
+    private var bubble: ReplyBubble? = null
 
     val activeCount: Int
         get() = synchronized(lock) { active.size }
 
     val hasVisibleContent: Boolean
         get() = synchronized(lock) {
-            active.isNotEmpty() || toolActions.isNotEmpty() || bubbles.isNotEmpty()
+            active.isNotEmpty() || toolActions.isNotEmpty() || bubble != null
         }
 
     fun startReply(conversationId: String, type: ConversationType) {
@@ -73,16 +79,18 @@ class ReplyOverlayStateMachine {
         conversationType: ConversationType
     ) {
         synchronized(lock) {
-            bubbles.addLast(ReplyBubble(text, conversationId, conversationType))
+            bubble = ReplyBubble(text, conversationId, conversationType)
         }
     }
 
     fun consumeBubble(): ReplyBubble? = synchronized(lock) {
-        if (bubbles.isEmpty()) null else bubbles.removeFirst()
+        val current = bubble
+        bubble = null
+        current
     }
 
     fun nextBubble(): ReplyBubble? = synchronized(lock) {
-        bubbles.firstOrNull()
+        bubble
     }
 
     /** 当前需要展示的工具动作文案；多个会话同时操作时取最早开始者。 */
@@ -102,7 +110,22 @@ class ReplyOverlayStateMachine {
         synchronized(lock) {
             active.clear()
             toolActions.clear()
-            bubbles.clear()
+            bubble = null
         }
+    }
+
+    companion object {
+        /**
+         * 悬浮窗是否应保持显示：设置开启 && 应用不可见 &&（有可见内容 || 输入模式）。
+         *
+         * 输入模式即使没有待展示内容也必须保留窗口（用户正在输入），
+         * 否则关闭输入框会把正在输入的气泡一起带走。
+         */
+        fun shouldKeepWindow(
+            enabled: Boolean,
+            appVisible: Boolean,
+            hasVisibleContent: Boolean,
+            inputModeActive: Boolean
+        ): Boolean = enabled && !appVisible && (hasVisibleContent || inputModeActive)
     }
 }

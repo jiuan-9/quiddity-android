@@ -402,7 +402,7 @@ class ScreenReaderService : AccessibilityService() {
                 "lock" -> if (Build.VERSION.SDK_INT >= 28) {
                     AccessibilityService.GLOBAL_ACTION_LOCK_SCREEN
                 } else {
-                    return "??? Android 9 ?????"
+                    return "仅支持 Android 9 及以上"
                 }
                 else -> null
             } ?: return "不支持的系统动作：$action"

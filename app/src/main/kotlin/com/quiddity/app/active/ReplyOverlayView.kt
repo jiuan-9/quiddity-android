@@ -11,6 +11,8 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewOutlineProvider
 import android.view.animation.DecelerateInterpolator
+import android.view.inputmethod.EditorInfo
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -39,6 +41,14 @@ internal class ReplyOverlayView(
         fun onSnapped(left: Boolean, x: Int, y: Int)
         fun onAvatarClicked()
         fun onBubbleClicked()
+        /** 任意触摸交互（驱动 2s 空闲淡化复位）。 */
+        fun onUserInteraction()
+        /** 输入气泡发送。 */
+        fun onInputSubmit(text: String)
+        /** 输入气泡取消（返回键 / 点击外部）。 */
+        fun onInputCancel()
+        /** 输入模式状态变化（active=false 表示已关闭）。 */
+        fun onInputModeChanged(active: Boolean)
         /** 气泡展示完成（自动回收）。 */
         fun onBubbleDismissed()
     }
@@ -84,6 +94,46 @@ internal class ReplyOverlayView(
         alpha = 0f
     }
 
+    /** 输入气泡：EditText + 发送按钮（默认隐藏，点击消息气泡时弹出）。 */
+    private val inputView = LinearLayout(context).apply {
+        orientation = HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        background = GradientDrawable().apply {
+            cornerRadius = dp(16).toFloat()
+            setColor(0xE61A1A1A.toInt())
+        }
+        visibility = View.GONE
+    }
+
+    private val inputEditText = EditText(context).apply {
+        setTextColor(Color.WHITE)
+        setHintTextColor(
+            android.content.res.ColorStateList.valueOf(HINT_COLOR)
+        )
+        textSize = 12f
+        isSingleLine = true
+        imeOptions = EditorInfo.IME_ACTION_SEND
+        inputType = EditorInfo.TYPE_CLASS_TEXT
+        background = null
+        setPadding(dp(10), 0, dp(6), 0)
+        setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_SEND) {
+                submitInput()
+                true
+            } else {
+                false
+            }
+        }
+    }
+
+    private val sendButton = TextView(context).apply {
+        text = "发送"
+        setTextColor(0xFF80D8FF.toInt())
+        textSize = 12f
+        setPadding(dp(8), dp(8), dp(10), dp(8))
+        gravity = Gravity.CENTER
+    }
+
     private var snappedLeft = true
 
     private var downRawX = 0f
@@ -93,6 +143,7 @@ internal class ReplyOverlayView(
     private var dragging = false
 
     private var currentBubbleText: String? = null
+    private var inputModeActive = false
 
     /** 是否正在拖动（Service 据此跳过尺寸变化触发的自动吸附）。 */
     val isDragging: Boolean
@@ -129,9 +180,74 @@ internal class ReplyOverlayView(
         bubbleLayout.leftMargin = dp(8)
         addView(bubbleView, bubbleLayout)
 
+        inputEditText.layoutParams = LayoutParams(
+            LayoutParams.WRAP_CONTENT,
+            LayoutParams.WRAP_CONTENT
+        )
+        inputEditText.minWidth = dp(160)
+        inputEditText.maxWidth = dp(240)
+        inputView.addView(inputEditText)
+        inputView.addView(sendButton)
+        val inputLayout = LayoutParams(
+            LayoutParams.WRAP_CONTENT,
+            LayoutParams.WRAP_CONTENT
+        )
+        inputLayout.leftMargin = dp(8)
+        addView(inputView, inputLayout)
+
         setOnTouchListener { v, e -> handleTouch(v, e, onTap = { listener.onAvatarClicked() }) }
         avatarFrame.setOnTouchListener { v, e -> handleTouch(v, e, onTap = { listener.onAvatarClicked() }) }
         bubbleView.setOnTouchListener { v, e -> handleTouch(v, e, onTap = { listener.onBubbleClicked() }) }
+        sendButton.setOnClickListener { submitInput() }
+        inputView.setOnTouchListener { _, e ->
+            if (e.actionMasked == MotionEvent.ACTION_DOWN) listener.onUserInteraction()
+            false
+        }
+        inputEditText.setOnTouchListener { _, e ->
+            if (e.actionMasked == MotionEvent.ACTION_DOWN) listener.onUserInteraction()
+            false
+        }
+    }
+
+    /** 整窗透明度（空闲淡化用）。 */
+    fun setWindowAlpha(alpha: Float) {
+        this.alpha = alpha
+    }
+
+    /** 打开输入模式：显示输入气泡并请求焦点。 */
+    fun startInputMode() {
+        if (inputModeActive) return
+        inputModeActive = true
+        bubbleView.visibility = View.INVISIBLE
+        inputView.visibility = View.VISIBLE
+        inputEditText.setText("")
+        listener.onInputModeChanged(true)
+    }
+
+    /** 关闭输入模式：隐藏输入气泡，恢复消息气泡展示。 */
+    fun closeInputMode() {
+        if (!inputModeActive) return
+        inputModeActive = false
+        inputView.visibility = View.GONE
+        bubbleView.visibility = View.VISIBLE
+        inputEditText.clearFocus()
+        listener.onInputModeChanged(false)
+    }
+
+    /** 输入框获取焦点（配合输入法弹出）。 */
+    fun requestInputFocus() {
+        if (inputModeActive) {
+            inputEditText.requestFocus()
+        }
+    }
+
+    /** 输入框视图（Service 弹出输入法用）。 */
+    fun inputEditText(): EditText = inputEditText
+
+    private fun submitInput() {
+        val text = inputEditText.text?.toString()?.trim().orEmpty()
+        if (text.isBlank()) return
+        listener.onInputSubmit(text)
     }
 
     /** 更新头像（null = 默认应用图标）。 */
@@ -217,6 +333,7 @@ internal class ReplyOverlayView(
     ): Boolean {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                listener.onUserInteraction()
                 downRawX = event.rawX
                 downRawY = event.rawY
                 downX = (event.rawX - (v.parent as View).x).toInt()
@@ -250,4 +367,8 @@ internal class ReplyOverlayView(
     }
 
     private fun dp(value: Int): Int = (value * density).toInt()
+
+    private companion object {
+        const val HINT_COLOR = 0x80FFFFFF.toInt()
+    }
 }

@@ -23,21 +23,27 @@ import com.quiddity.app.util.IdGenerator
 internal data class StreamRoundResult(
     val toolCalls: List<ChatStreamParser.AggregatedToolCall>,
     val reasoningText: String,
-    /** ??????"???"???finish_reason=length / response.incomplete?? */
+    /** 本轮是否被截断（finish_reason=length / response.incomplete）。 */
     val truncated: Boolean = false,
-    /** ???????????????????? / AI ???????? */
+    /** 本轮是否输出了正文（区别于 AI 撤回 / 未输出）。 */
     val hasContent: Boolean = false
-)
+) {
+    /**
+     * 本轮是否已产出可交付的完整正文：有内容且未被截断。
+     * 工具轮收尾以此为准——完整回复直接收尾，不允许再触发兜底续写/重试。
+     */
+    val isCompleteReply: Boolean get() = hasContent && !truncated
+}
 
 private const val MAX_FINAL_RECOVERY_ROUNDS = 3
 
 private const val TRUNCATE_CONTINUE_NUDGE =
-    "?????????????????????????????????????????????????"
+    "（你的回复因达到长度上限被截断。请直接从断点继续输出，不要重复已经输出的内容，直接给出后续正文。）"
 
 private const val EMPTY_REPLY_NUDGE =
-    "?????????????????????????????????????????????????"
+    "（你刚才没有输出有效回复。请基于已有信息直接给出完整回复；若任务尚未完成，请继续完成并说明结果。）"
 
-private const val DEEPSEEK_THINKING_UNAVAILABLE_REPORT = "deepseek??????????????????"
+private const val DEEPSEEK_THINKING_UNAVAILABLE_REPORT = "deepseek本身模型有概率不配合，思考内容不返回"
 
 internal class SingleStreamRunner(
     private val api: ChatApi,
@@ -141,25 +147,9 @@ internal class SingleStreamRunner(
         onEvent(ChatRepository.Event.CompleteMessage(msg))
     }
 
-    /** 无工具调用轮次的兜底处理结果。 */
-    private sealed interface NoToolRoundResult {
-        /** 已获得有效正文，可正常收尾。 */
-        data object Completed : NoToolRoundResult
-        /** 重试后模型重新发起工具调用，需要外层循环继续执行。 */
-        data class WithToolCalls(
-            val round: StreamRoundResult,
-            val request: ChatRoundRequest
-        ) : NoToolRoundResult
-        /** 多次兜底仍失败，失败消息已派发。 */
-        data object Failed : NoToolRoundResult
-    }
-
     /**
-     * 最终回复兜底：
-     * - 截断（finish_reason=length / response.incomplete）：自动续写，直到得到完整正文；
-     * - 空回复（AI 撤回 / 未输出正文）：自动重试，直到得到正文或工具调用。
-     * 每次尝试把「部分正文 + 提示语」或仅「提示语」并入请求重新请求，
-     * 新正文通过 [StreamCoordinator.setMergeWithPrevious] 合并进上一条 AI 消息。
+     * DeepSeek 思考模式兜底：整轮未产出任何思考内容时，在首条正式回复上附报告，
+     * 保证开启思考后气泡内始终有可展开的内容，而不是静默空白。
      */
     suspend fun attachThinkingUnavailableReportIfNeeded(
         request: ChatRoundRequest,

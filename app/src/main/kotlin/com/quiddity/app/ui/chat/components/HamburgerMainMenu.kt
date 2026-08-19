@@ -314,6 +314,24 @@ internal fun MainMenuContent(
                 trailingTint = MaterialTheme.colorScheme.primary
             )
             Spacer(modifier = Modifier.size(4.dp))
+            // 数据一览：当前轮数 + 距离下一次压缩还有多少轮（灰色小字）
+            val userRounds = messages.count { it.role == com.quiddity.app.data.model.Role.USER }
+            val roundsToCompression = conversation?.let { conv ->
+                if (conv.memoryBankEnabled) {
+                    (conv.memoryBankRounds - (userRounds - conv.lastCompressedAtRound)).coerceAtLeast(0)
+                } else {
+                    null
+                }
+            }
+            Text(
+                text = "当前：${userRounds} 轮 · 距离下一次压缩还有：${
+                    roundsToCompression?.let { "${it} 轮" } ?: "未启用"
+                }",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)
+            )
+            Spacer(modifier = Modifier.size(4.dp))
             // Agent 模式不提供角色卡导出/导入：人设来自角色库唯一角色卡（uid）直接引用
             if (conversation?.type != ConversationType.AGENT) {
                 ExportImportCard(
