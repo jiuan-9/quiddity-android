@@ -62,6 +62,14 @@ object ReplyOverlayController {
     @Volatile
     private var inputConversation: Pair<String, ConversationType>? = null
 
+    /** 当前气泡是否已启动 4s 自动回收（仅在回复结束后启动一次）。 */
+    @Volatile
+    private var bubbleTimerArmed = false
+
+    /** 工具动作最小展示截止时间（避免快速工具一闪而过）。 */
+    @Volatile
+    private var toolHoldUntil = 0L
+
     /** 瞬时状态文案（如「已发送」），到期自动清除；仅在没有进行中回复时展示。 */
     @Volatile
     private var transientStatus: String? = null
@@ -113,6 +121,7 @@ object ReplyOverlayController {
     }
 
     fun showToolAction(conversationId: String, actionText: String) {
+        toolHoldUntil = System.currentTimeMillis() + MIN_TOOL_DISPLAY_MS
         machine.showToolAction(conversationId, actionText)
         refreshWindow()
     }
@@ -187,24 +196,23 @@ object ReplyOverlayController {
 
     private fun refreshWindow() {
         mainHandler.post {
-            val keep = ReplyOverlayStateMachine.shouldKeepWindow(
-                    enabled = enabled,
-                    appVisible = appVisible,
-                    hasVisibleContent = machine.hasVisibleContent,
-                    inputModeActive = inputModeActive
-                ) || transientStatus != null
-            if (!keep) {
+            // 开关关闭 / 应用回到前台：立即回收窗口
+            if (!enabled || appVisible) {
                 service?.stopSelf()
                 return@post
             }
             if (service == null) {
-                val context = ServiceLocator.applicationContext
-                runCatching {
-                    context.startService(Intent(context, ReplyOverlayService::class.java))
-                }.onFailure {
-                    CrashLogger.logException(context, it, "ReplyOverlayController.startService")
+                // 无窗口且当前有内容才启动；空闲状态不凭空出现
+                if (machine.hasVisibleContent || transientStatus != null || inputModeActive) {
+                    val context = ServiceLocator.applicationContext
+                    runCatching {
+                        context.startService(Intent(context, ReplyOverlayService::class.java))
+                    }.onFailure {
+                        CrashLogger.logException(context, it, "ReplyOverlayController.startService")
+                    }
                 }
             } else {
+                // 窗口已存在：回复结束也保留头像（不闪退式消失），按当前状态渲染
                 render()
             }
         }
@@ -215,6 +223,14 @@ object ReplyOverlayController {
         // 输入模式打开期间不渲染气泡/状态，避免覆盖输入框
         if (inputModeActive) return
         val tool = machine.currentToolAction()
+        // 工具动作刚结束：保持当前工具气泡可见到最小展示时长，避免一闪而过
+        if (tool == null && System.currentTimeMillis() < toolHoldUntil) {
+            mainHandler.postDelayed(
+                { render() },
+                toolHoldUntil - System.currentTimeMillis()
+            )
+            return
+        }
         val count = machine.activeCount
         val status = buildStatusText(count).ifBlank { transientStatus.orEmpty() }
         val bubble = machine.nextBubble()
@@ -224,6 +240,7 @@ object ReplyOverlayController {
             // 清空上次气泡记录：工具动作结束后下一轮渲染会重新展示回复气泡并重启 4s 计时
             lastBubbleText = null
             lastBubbleConversation = null
+            bubbleTimerArmed = false
             svc.showToolBubble(count, tool)
             return
         }
@@ -236,6 +253,13 @@ object ReplyOverlayController {
                 lastBubbleText = bubble.text
                 lastBubbleConversation = bubble.conversationId to bubble.conversationType
                 svc.render(count, status, bubble)
+                bubbleTimerArmed = false
+            }
+            // 回复仍在进行（count>0）：气泡持续展示、随内容更新，不启动 4s 回收；
+            // 回复结束（count==0）且尚未启动计时时才展示 4s 后自动消费，
+            // 避免「气泡消失 → 又回到正在回复」的来回闪动
+            if (count == 0 && !bubbleTimerArmed) {
+                bubbleTimerArmed = true
                 svc.showBubble(
                     bubble = bubble,
                     onDismissed = {
@@ -248,6 +272,7 @@ object ReplyOverlayController {
         // 无气泡可展示：仅头像 + 状态文本（无会话进行时保持空状态）
         showingBubble = false
         lastBubbleText = null
+        bubbleTimerArmed = false
         svc.render(count, status, null)
     }
 
@@ -267,6 +292,7 @@ object ReplyOverlayController {
     fun onBubbleDismissed() {
         mainHandler.post {
             showingBubble = false
+            bubbleTimerArmed = false
             machine.consumeBubble()
             refreshWindow()
         }
@@ -286,6 +312,7 @@ object ReplyOverlayController {
     fun onBubbleClicked() {
         mainHandler.post {
             showingBubble = false
+            bubbleTimerArmed = false
             val pair = lastBubbleConversation
             // 点击即消费：该消息不再重播
             machine.consumeBubble()
@@ -326,13 +353,9 @@ object ReplyOverlayController {
     }
 
     /** 悬浮窗是否应当保持显示（设置开启 && 应用不可见）。Service 自启/重建时调用。 */
-    fun keepWindowVisible(): Boolean = ReplyOverlayStateMachine.shouldKeepWindow(
-        enabled = enabled,
-        appVisible = appVisible,
-        hasVisibleContent = machine.hasVisibleContent,
-        inputModeActive = inputModeActive
-    ) || transientStatus != null
+    fun keepWindowVisible(): Boolean = enabled && !appVisible
 
     private const val MAX_BUBBLE_CHARS = 80
     private const val TRANSIENT_STATUS_MS = 2_500L
+    private const val MIN_TOOL_DISPLAY_MS = 800L
 }

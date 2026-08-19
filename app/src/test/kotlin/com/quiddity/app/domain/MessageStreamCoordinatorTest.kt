@@ -630,6 +630,28 @@ class MessageStreamCoordinatorTest {
     }
 
     @Test
+    fun `bracket with partially streamed content never orphans a half message`() {
+        // 复现：括号先到，随后半句内容先以流式消息发出，再与括号合并——
+        // 旧实现会留下一条永远半截的重复消息（两条同时加载）
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("（轻笑）你好")
+        coord.accept("呀。")
+        coord.finalize()
+        val snap = coord.snapshot().map { it.content }
+        assertEquals(listOf("（轻笑）你好呀。"), snap, "括号与半句内容应合并为一条：$snap")
+        assertTrue(snap.all { it.isNotBlank() }, "不得残留半截空白/半句消息")
+    }
+
+    @Test
+    fun `bracket and trailing buffer merge in correct order at stream end`() {
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("（轻笑）你好")
+        coord.finalize()
+        val snap = coord.snapshot().map { it.content }
+        assertEquals(listOf("（轻笑）你好"), snap, "流结束时括号应在前、正文在后合成一条：$snap")
+    }
+
+    @Test
     fun `real observed duplicate with streamed bracket is deduplicated`() {
         val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
         coord.accept("（笑")

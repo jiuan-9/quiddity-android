@@ -94,19 +94,8 @@ internal class StreamEventProcessor(
                 if (!conversationRepository.updateMessage(target)) raiseStorageError()
                 // AI 消息完成时累加 token 用量
                 settingsController.accumulateTokenUsage(target.tokenCount)
-                // 悬浮窗：回复完成 → 入队展示气泡（应用不可见时由控制器弹出）
-                val bubbleText = target.content.trim().takeIf { it.isNotBlank() }
-                // 仅动作/神态描写（无实际台词）的消息对悬浮窗不可读，不展示为气泡
-                if (bubbleText != null && !target.isNotice && !target.isThinking &&
-                    !com.quiddity.app.data.repo.isActionOnlyReply(bubbleText)
-                ) {
-                    com.quiddity.app.active.ReplyOverlayController.enqueueBubble(
-                        text = bubbleText,
-                        conversationId = conversationId,
-                        conversationType = conversation.value?.type
-                            ?: com.quiddity.app.data.model.ConversationType.SOLO
-                    )
-                }
+                // 悬浮窗气泡改为「回复结束」统一入队（见 Done 分支）：
+                // 流式过程中不再逐段弹气泡，避免气泡闪动/被分段内容反复替换
             }
             is ChatRepository.Event.ToolUse -> {
                 _toolTraces.value = _toolTraces.value + ToolTrace(event.toolName, "running", null)
@@ -180,6 +169,26 @@ internal class StreamEventProcessor(
                 _pendingToolConfirm.value = null
                 // 任务结束兜底清理行动通知弹窗（正常流程每一步的完成弹窗会自动消失）
                 com.quiddity.app.active.OperationNotifyController.dismiss()
+                // 悬浮窗：回复结束，把本轮全部 AI 内容合并为一条最终气泡展示，
+                // 避免多段回复只显示最后一段、或气泡一闪而过又回到「正在回复」
+                val messagesNow = _messages.value
+                val lastUserIdx = messagesNow.indexOfLast { it.role == Role.USER }
+                val fullReply = messagesNow
+                    .subList((lastUserIdx + 1).coerceAtMost(messagesNow.size), messagesNow.size)
+                    .filter {
+                        it.role == Role.ASSISTANT && !it.isNotice && !it.isThinking &&
+                            !it.isError && it.content.isNotBlank()
+                    }
+                    .joinToString("") { it.content }
+                    .trim()
+                if (fullReply.isNotBlank()) {
+                    com.quiddity.app.active.ReplyOverlayController.enqueueBubble(
+                        text = fullReply,
+                        conversationId = conversationId,
+                        conversationType = conversation.value?.type
+                            ?: com.quiddity.app.data.model.ConversationType.SOLO
+                    )
+                }
                 com.quiddity.app.active.ReplyOverlayController.endReply(conversationId)
             }
             is ChatRepository.Event.Truncated -> {

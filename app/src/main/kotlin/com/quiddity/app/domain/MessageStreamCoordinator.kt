@@ -315,6 +315,7 @@ class MessageStreamCoordinator(
         // 单条更新（当前 buffer 内容）：buffer 为空白时不发出（避免空消息/纯空白气泡）
         // 本批已发出完成消息时不再发流式 New：下一批内容或 finalize 再补，防止两条同框出现
         if (buffer.isNotBlank() && signals.none { it is StreamCoordinator.Signal.Complete } &&
+            (mergeWithPrevious || pendingBrackets.isEmpty()) &&
             !(!mergeWithPrevious && isDuplicateOfLast(buffer.toString()))
         ) {
             val current = if (mergeWithPrevious && completed.isNotEmpty()) {
@@ -423,7 +424,25 @@ class MessageStreamCoordinator(
             val trailing = pendingBrackets.joinToString("") { it.second }
             pendingBrackets.clear()
             when {
-                buffer.isNotBlank() -> buffer.append(trailing)
+                buffer.isNotBlank() -> {
+                    // 括号 + 剩余正文合成一条消息（括号在前），并清空 buffer，
+                    // 避免流式半句与合并结果同时存在造成重复消息
+                    val mergedText = trailing + buffer.toString()
+                    buffer.setLength(0)
+                    val finalMsg = buildMessageFromContentAt(
+                        firstReservedIndex,
+                        mergedText,
+                        streaming = false
+                    )
+                    if (knownIds.add(finalMsg.id)) {
+                        signals += StreamCoordinator.Signal.New(finalMsg)
+                    } else {
+                        signals += StreamCoordinator.Signal.Update(finalMsg)
+                    }
+                    signals += StreamCoordinator.Signal.Complete(finalMsg)
+                    completed += finalMsg
+                    currentIndex = firstReservedIndex + 1
+                }
                 completed.isNotEmpty() -> {
                     val lastIdx = completed.lastIndex
                     val mergedContent = completed[lastIdx].content + trailing

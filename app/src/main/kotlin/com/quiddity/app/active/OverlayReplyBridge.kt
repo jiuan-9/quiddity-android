@@ -92,23 +92,31 @@ object OverlayReplyBridge {
                 convRepo.updateMessage(event.message)
             is ChatRepository.Event.CompleteMessage -> {
                 convRepo.updateMessage(event.message)
-                val bubbleText = event.message.content.trim().takeIf { it.isNotBlank() }
-                // 仅动作/神态描写（无实际台词）的消息对悬浮窗不可读，不展示为气泡
-                if (bubbleText != null && !event.message.isNotice && !event.message.isThinking &&
-                    !com.quiddity.app.data.repo.isActionOnlyReply(bubbleText)
-                ) {
-                    ReplyOverlayController.enqueueBubble(
-                        text = bubbleText,
-                        conversationId = conv.id,
-                        conversationType = conv.type
-                    )
-                }
             }
             is ChatRepository.Event.ToolConfirmBatch ->
                 // 悬浮窗无确认 UI：一律拒绝需要确认的工具操作（安全兜底）
                 event.resume(false)
-            is ChatRepository.Event.Done ->
+            is ChatRepository.Event.Done -> {
+                // 回复结束：整条回复（本轮全部 AI 内容）作为最终气泡展示
+                val currentMessages = convRepo.observeMessages(conv.id).value
+                val lastUserIdx = currentMessages.indexOfLast { it.role == Role.USER }
+                val fullReply = currentMessages
+                    .subList((lastUserIdx + 1).coerceAtMost(currentMessages.size), currentMessages.size)
+                    .filter {
+                        it.role == Role.ASSISTANT && !it.isNotice && !it.isThinking &&
+                            !it.isError && it.content.isNotBlank()
+                    }
+                    .joinToString("") { it.content }
+                    .trim()
+                if (fullReply.isNotBlank()) {
+                    ReplyOverlayController.enqueueBubble(
+                        text = fullReply,
+                        conversationId = conv.id,
+                        conversationType = conv.type
+                    )
+                }
                 ReplyOverlayController.endReply(conv.id)
+            }
             is ChatRepository.Event.Error ->
                 ReplyOverlayController.endReply(conv.id)
             is ChatRepository.Event.Truncated ->
