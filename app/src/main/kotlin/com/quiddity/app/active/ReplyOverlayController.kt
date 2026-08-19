@@ -40,6 +40,10 @@ object ReplyOverlayController {
     @Volatile
     private var enabled = false
 
+    /** 用户拖动到关闭按钮手动关闭：抑制自动弹出，直到回到应用或新的回复开始。 */
+    @Volatile
+    private var overlayDismissed = false
+
     @Volatile
     var overlayAvatarUri: String? = null
         private set
@@ -85,6 +89,7 @@ object ReplyOverlayController {
 
     /** QuiddityApp 在 ActivityLifecycleCallbacks 中驱动。 */
     fun setAppVisible(visible: Boolean) {
+        if (visible) overlayDismissed = false
         if (appVisible == visible) return
         appVisible = visible
         refreshWindow()
@@ -100,6 +105,7 @@ object ReplyOverlayController {
             inputModeActive = false
             dismissWindow()
         } else {
+            overlayDismissed = false
             refreshWindow()
         }
     }
@@ -111,6 +117,7 @@ object ReplyOverlayController {
     }
 
     fun startReply(conversationId: String, type: ConversationType) {
+        overlayDismissed = false
         machine.startReply(conversationId, type)
         refreshWindow()
     }
@@ -184,6 +191,19 @@ object ReplyOverlayController {
         }
     }
 
+    /** 用户拖动到关闭按钮：收起悬浮窗并抑制自动弹出（直到回应用或新回复）。 */
+    fun closeOverlay() {
+        mainHandler.post {
+            overlayDismissed = true
+            machine.clearAll()
+            showingBubble = false
+            bubbleTimerArmed = false
+            lastBubbleText = null
+            lastBubbleConversation = null
+            service?.stopSelf()
+        }
+    }
+
     /** 悬浮窗拖动结束：重置气泡展示记录，让当前气泡重新滑出（拖动期间气泡被隐藏）。 */
     fun onOverlayDragEnd() {
         mainHandler.post {
@@ -201,6 +221,8 @@ object ReplyOverlayController {
                 service?.stopSelf()
                 return@post
             }
+            // 用户手动关闭：不再自动弹出
+            if (overlayDismissed) return@post
             if (service == null) {
                 // 无窗口且当前有内容才启动；空闲状态不凭空出现
                 if (machine.hasVisibleContent || transientStatus != null || inputModeActive) {

@@ -269,7 +269,7 @@ class MessageStreamCoordinator(
 
         // 循环切分：一次 delta 可能包含多个切分点，全部切出
         while (true) {
-            val seg = findNextCompleteSegment()
+            val seg = findNextCompleteSegment(buffer)
             if (seg != null) {
                 // 从 buffer 移除已消费部分
                 consumeFromBuffer(seg.consumeEnd)
@@ -313,8 +313,9 @@ class MessageStreamCoordinator(
         }
 
         // 单条更新（当前 buffer 内容）：buffer 为空白时不发出（避免空消息/纯空白气泡）
-        // 本批已发出完成消息时不再发流式 New：下一批内容或 finalize 再补，防止两条同框出现
-        if (buffer.isNotBlank() && signals.none { it is StreamCoordinator.Signal.Complete } &&
+        // 本批即使已发出完成消息，剩余内容也立即以新气泡流式显示：
+        // 多句同批到达时下一句会立刻开始流式输入，而不是等收尾被合并成一条
+        if (buffer.isNotBlank() &&
             (mergeWithPrevious || pendingBrackets.isEmpty()) &&
             !(!mergeWithPrevious && isDuplicateOfLast(buffer.toString()))
         ) {
@@ -491,6 +492,18 @@ class MessageStreamCoordinator(
         buffer.setLength(0)
         buffer.append(cleaned)
         if (buffer.isBlank()) return signals
+        // 切分开关开启：收尾时把剩余 buffer 按句子继续切分为多条消息，
+        // 修复「多消息切分」在整段多句同批到达时被合并成一条的问题
+        if (splitEnabled && !mergeWithPrevious) {
+            while (true) {
+                val seg = findNextCompleteSegment(buffer) ?: break
+                consumeFromBuffer(seg.consumeEnd)
+                if (seg.emit && seg.text.isNotBlank()) {
+                    emitCompleted(signals, seg.text)
+                }
+            }
+            if (buffer.isBlank()) return signals
+        }
         val finalMsg = buildMessage(streaming = false)
         // 收尾残留若与最后一条已发消息近重复（模型复述）：
         // - 尚未以流式消息发出（id 未登记）→ 直接丢弃，不产生任何消息；
@@ -633,9 +646,8 @@ class MessageStreamCoordinator(
      *
      * @return [Segment] 或 null（buffer 中尚无完整段落，等待更多 delta）
      */
-    private fun findNextCompleteSegment(): Segment? {
-        if (!splitEnabled || buffer.isBlank()) return null
-        val text = buffer
+    private fun findNextCompleteSegment(text: CharSequence): Segment? {
+        if (!splitEnabled || text.isBlank()) return null
         val quoteStack = ArrayDeque<QuoteFrame>()
         var i = 0
         while (i < text.length) {

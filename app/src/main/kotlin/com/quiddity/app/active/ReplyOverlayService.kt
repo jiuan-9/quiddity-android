@@ -5,6 +5,8 @@ import android.animation.AnimatorListenerAdapter
 import android.animation.ValueAnimator
 import android.app.Service
 import android.content.Intent
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.graphics.PixelFormat
 import android.os.Handler
 import android.os.IBinder
@@ -14,6 +16,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.view.animation.DecelerateInterpolator
+import android.widget.TextView
 import com.quiddity.app.util.CrashLogger
 
 /**
@@ -52,6 +55,11 @@ class ReplyOverlayService : Service(), ReplyOverlayView.Listener {
 
     /** 松手吸附位置动画（拖动中取消）。 */
     private var snapAnimator: ValueAnimator? = null
+
+    /** 拖动时显示的关闭按钮（独立悬浮窗，拖到上面即关闭）。 */
+    private var closeButtonView: TextView? = null
+    private var closeButtonParams: WindowManager.LayoutParams? = null
+    private var closeHighlighted = false
 
     override fun onCreate() {
         super.onCreate()
@@ -199,15 +207,27 @@ class ReplyOverlayService : Service(), ReplyOverlayView.Listener {
         posX = x
         posY = y
         updateWindowPosition()
+        updateCloseButtonHighlight()
     }
 
     override fun onDragEnd() {
+        if (isOverCloseButton()) {
+            // 拖到关闭按钮上：收起悬浮窗（连同关闭按钮）
+            hideCloseButton()
+            ReplyOverlayController.closeOverlay()
+            return
+        }
+        hideCloseButton()
         snapToEdge()
         // 拖动结束后恢复气泡展示（拖动期间气泡被隐藏）；
         // 延迟到吸附动画完成后再恢复，避免布局抢先跳到贴边点打断回弹动画
         mainHandler.postDelayed({
             ReplyOverlayController.onOverlayDragEnd()
         }, SNAP_ANIM_MS + 30L)
+    }
+
+    override fun onDragStart() {
+        showCloseButton()
     }
 
     override fun onSnapped(left: Boolean, x: Int, y: Int) {
@@ -249,6 +269,7 @@ class ReplyOverlayService : Service(), ReplyOverlayView.Listener {
         idleFadeRunnable = null
         snapAnimator?.cancel()
         snapAnimator = null
+        hideCloseButton()
         overlayView.setReplying(false)
         ReplyOverlayController.onServiceStopped(this)
         if (windowAdded) {
@@ -373,6 +394,70 @@ class ReplyOverlayService : Service(), ReplyOverlayView.Listener {
         lastPosY = layoutParams.y
     }
 
+    /** 显示拖动关闭按钮：固定在屏幕底部中间。 */
+    private fun showCloseButton() {
+        if (closeButtonView != null) return
+        val button = TextView(this).apply {
+            text = "✕"
+            textSize = 20f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(CLOSE_BUTTON_COLOR)
+            }
+        }
+        val params = WindowManager.LayoutParams(
+            dp(64),
+            dp(64),
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            y = dp(64)
+        }
+        runCatching {
+            windowManager.addView(button, params)
+            closeButtonView = button
+            closeButtonParams = params
+            closeHighlighted = false
+        }
+    }
+
+    /** 隐藏拖动关闭按钮。 */
+    private fun hideCloseButton() {
+        closeButtonView?.let { runCatching { windowManager.removeView(it) } }
+        closeButtonView = null
+        closeButtonParams = null
+        closeHighlighted = false
+    }
+
+    /** 悬浮窗是否与关闭按钮重叠（按窗口中心与按钮中心的距离判断）。 */
+    private fun isOverCloseButton(): Boolean {
+        if (closeButtonView == null) return false
+        val centerX = posX + overlayView.measuredWidth / 2f
+        val centerY = posY + overlayView.measuredHeight / 2f
+        val buttonCenterX = screenWidth() / 2f
+        val buttonCenterY = screenHeight() - dp(64) - dp(32).toFloat()
+        val dx = centerX - buttonCenterX
+        val dy = centerY - buttonCenterY
+        return (dx * dx + dy * dy) <= (dp(56) * dp(56)).toFloat()
+    }
+
+    /** 拖动过程中实时高亮关闭按钮（悬浮窗进入命中范围时变深色）。 */
+    private fun updateCloseButtonHighlight() {
+        val button = closeButtonView ?: return
+        val over = isOverCloseButton()
+        if (over == closeHighlighted) return
+        closeHighlighted = over
+        (button.background as? GradientDrawable)?.setColor(
+            if (over) CLOSE_BUTTON_HIGHLIGHT_COLOR else CLOSE_BUTTON_COLOR
+        )
+    }
+
     private fun screenWidth(): Int = resources.displayMetrics.widthPixels
 
     private fun screenHeight(): Int = resources.displayMetrics.heightPixels
@@ -391,5 +476,7 @@ class ReplyOverlayService : Service(), ReplyOverlayView.Listener {
         const val RESTORE_ANIM_MS = 180L
         const val SNAP_ANIM_MS = 220L
         const val IDLE_ALPHA = 0.35f
+        const val CLOSE_BUTTON_COLOR = 0xCCE53935.toInt()
+        const val CLOSE_BUTTON_HIGHLIGHT_COLOR = 0xFFB71C1C.toInt()
     }
 }

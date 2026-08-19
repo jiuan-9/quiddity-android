@@ -244,8 +244,9 @@ class MessageStreamCoordinatorTest {
         coord.finalize()
         val snap = coord.snapshot()
         assertEquals(
-            listOf("Hello!", "How are you?I am fine."),
-            snap.map { it.content }
+            listOf("Hello!", "How are you?", "I am fine."),
+            snap.map { it.content },
+            "收尾时剩余句子应按句末标点继续切分，而不是合并成一条"
         )
     }
 
@@ -595,9 +596,9 @@ class MessageStreamCoordinatorTest {
         coord.finalize()
         val snap = coord.snapshot()
         assertEquals(
-            listOf("第一句。", "第二句！第三句？"),
+            listOf("第一句。", "第二句！", "第三句？"),
             snap.map { it.content },
-            "finalize 收尾不得丢字"
+            "finalize 收尾按句切分，不得丢字、不得把多句合并成一条"
         )
     }
 

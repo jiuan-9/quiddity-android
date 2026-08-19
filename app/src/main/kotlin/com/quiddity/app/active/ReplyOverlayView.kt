@@ -42,6 +42,8 @@ internal class ReplyOverlayView(
         fun onPositionChanged(x: Int, y: Int)
         /** 拖动结束，由 Service 计算贴边位置并回调 [onSnapped]。 */
         fun onDragEnd()
+        /** 拖动开始（超过阈值后触发，用于显示关闭按钮）。 */
+        fun onDragStart()
         /** 松手吸附边缘后重新布局（左右翻转）。 */
         fun onSnapped(left: Boolean, x: Int, y: Int)
         fun onAvatarClicked()
@@ -160,8 +162,9 @@ internal class ReplyOverlayView(
 
     private var downRawX = 0f
     private var downRawY = 0f
-    private var downX = 0
-    private var downY = 0
+    /** 触点在窗口内的偏移（跟手锚点）：拖动时保持该偏移不变，窗口始终贴着手。 */
+    private var downOffsetX = 0f
+    private var downOffsetY = 0f
     private var dragging = false
 
     private var currentBubbleText: String? = null
@@ -451,12 +454,11 @@ internal class ReplyOverlayView(
                 listener.onUserInteraction()
                 downRawX = event.rawX
                 downRawY = event.rawY
-                // 根视图的 parent 是 ViewRootImpl（非 View），不能强转；
-                // 子视图的 parent 是悬浮窗根布局（x/y 恒为 0），两者统一按 0 锚定即可
-                val anchorX = (v.parent as? View)?.x ?: 0f
-                val anchorY = (v.parent as? View)?.y ?: 0f
-                downX = (event.rawX - anchorX).toInt()
-                downY = (event.rawY - anchorY).toInt()
+                // 抓取点 = 触点在窗口内的坐标：
+                // 根视图直接用 event.x/y；子视图要加上子视图在根布局里的偏移。
+                // 拖动时窗口左上角 = 手指屏幕坐标 - 抓取点偏移，实现 1:1 跟手无跳变。
+                downOffsetX = if (v === this) event.x else (v.left + event.x).toFloat()
+                downOffsetY = if (v === this) event.y else (v.top + event.y).toFloat()
                 dragging = false
                 return true
             }
@@ -466,9 +468,13 @@ internal class ReplyOverlayView(
                 if (!dragging && (kotlin.math.abs(dx) > dp(6) || kotlin.math.abs(dy) > dp(6))) {
                     dragging = true
                     hideBubble()
+                    listener.onDragStart()
                 }
                 if (dragging) {
-                    listener.onPositionChanged(downX + dx.toInt(), downY + dy.toInt())
+                    listener.onPositionChanged(
+                        (downRawX + dx - downOffsetX).toInt(),
+                        (downRawY + dy - downOffsetY).toInt()
+                    )
                 }
                 return true
             }
