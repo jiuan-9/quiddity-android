@@ -350,6 +350,7 @@ fun CodeBlockView(
     }
 }
 
+/**
  * 内联代码块渲染（用于普通气泡内部混合内容中的代码块）。
  *
  * 与 [CodeBlockView] 的差异：

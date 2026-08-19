@@ -77,7 +77,6 @@ import com.quiddity.app.ui.chat.components.GroupAvatarBar
 import com.quiddity.app.ui.chat.components.MiniAppInviteCard
 import com.quiddity.app.ui.chat.components.NoticeBubble
 import com.quiddity.app.ui.chat.components.ReeditNoticeBubble
-import com.quiddity.app.ui.theme.Motion
 import kotlinx.coroutines.launch
 
 @Composable

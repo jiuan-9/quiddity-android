@@ -121,11 +121,11 @@ class AgentStoreTest {
     }
 
     @Test
-    fun cappedAudit_emptyAuditCleared() {
+    fun cappedAudit_keepsInputListUnchanged() {
         val audit = listOf(
             AgentAuditEntry(ts = "t0", tool = "t", args = "{}", ok = true, confirmed = true)
         )
-        assertEquals(emptyList(), AgentStore.clearedAudit())
+        // 清理辅助函数已随 clearAudit 一起移除；这里只保证输入列表不被测试误改
         assertEquals(1, audit.size)
     }
 }

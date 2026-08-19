@@ -333,8 +333,6 @@ object ReplyOverlayController {
         inputModeActive = inputModeActive
     ) || transientStatus != null
 
-    private companion object {
-        const val MAX_BUBBLE_CHARS = 80
-        const val TRANSIENT_STATUS_MS = 2_500L
-    }
+    private const val MAX_BUBBLE_CHARS = 80
+    private const val TRANSIENT_STATUS_MS = 2_500L
 }
