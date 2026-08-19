@@ -62,6 +62,19 @@ object ReplyOverlayController {
     @Volatile
     private var inputConversation: Pair<String, ConversationType>? = null
 
+    /** 瞬时状态文案（如「已发送」），到期自动清除；仅在没有进行中回复时展示。 */
+    @Volatile
+    private var transientStatus: String? = null
+
+    private var transientStatusUntil = 0L
+
+    private val transientRunnable = Runnable {
+        if (System.currentTimeMillis() >= transientStatusUntil) {
+            transientStatus = null
+            refreshWindow()
+        }
+    }
+
     /** QuiddityApp 在 ActivityLifecycleCallbacks 中驱动。 */
     fun setAppVisible(visible: Boolean) {
         if (appVisible == visible) return
@@ -101,6 +114,15 @@ object ReplyOverlayController {
 
     fun showToolAction(conversationId: String, actionText: String) {
         machine.showToolAction(conversationId, actionText)
+        refreshWindow()
+    }
+
+    /** 展示瞬时状态（发送反馈等），到期自动消失。 */
+    fun showTransientStatus(text: String, durationMs: Long = TRANSIENT_STATUS_MS) {
+        mainHandler.removeCallbacks(transientRunnable)
+        transientStatus = text
+        transientStatusUntil = System.currentTimeMillis() + durationMs
+        mainHandler.postDelayed(transientRunnable, durationMs)
         refreshWindow()
     }
 
@@ -153,15 +175,25 @@ object ReplyOverlayController {
         }
     }
 
+    /** 悬浮窗拖动结束：重置气泡展示记录，让当前气泡重新滑出（拖动期间气泡被隐藏）。 */
+    fun onOverlayDragEnd() {
+        mainHandler.post {
+            showingBubble = false
+            lastBubbleText = null
+            lastBubbleConversation = null
+            render()
+        }
+    }
+
     private fun refreshWindow() {
         mainHandler.post {
-            if (!ReplyOverlayStateMachine.shouldKeepWindow(
+            val keep = ReplyOverlayStateMachine.shouldKeepWindow(
                     enabled = enabled,
                     appVisible = appVisible,
                     hasVisibleContent = machine.hasVisibleContent,
                     inputModeActive = inputModeActive
-                )
-            ) {
+                ) || transientStatus != null
+            if (!keep) {
                 service?.stopSelf()
                 return@post
             }
@@ -184,7 +216,7 @@ object ReplyOverlayController {
         if (inputModeActive) return
         val tool = machine.currentToolAction()
         val count = machine.activeCount
-        val status = buildStatusText(count)
+        val status = buildStatusText(count).ifBlank { transientStatus.orEmpty() }
         val bubble = machine.nextBubble()
         if (tool != null) {
             // 工具动作优先级最高：以气泡样式展示，动作结束（clearToolAction）后恢复
@@ -299,9 +331,10 @@ object ReplyOverlayController {
         appVisible = appVisible,
         hasVisibleContent = machine.hasVisibleContent,
         inputModeActive = inputModeActive
-    )
+    ) || transientStatus != null
 
     private companion object {
         const val MAX_BUBBLE_CHARS = 80
+        const val TRANSIENT_STATUS_MS = 2_500L
     }
 }

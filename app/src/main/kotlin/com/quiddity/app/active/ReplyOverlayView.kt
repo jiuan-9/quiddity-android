@@ -1,5 +1,6 @@
 package com.quiddity.app.active
 
+import android.animation.ValueAnimator
 import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.BitmapFactory
@@ -12,7 +13,9 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewOutlineProvider
+import android.view.animation.AccelerateDecelerateInterpolator
 import android.view.animation.DecelerateInterpolator
+import android.view.animation.OvershootInterpolator
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -163,6 +166,20 @@ internal class ReplyOverlayView(
 
     private var currentBubbleText: String? = null
     private var inputModeActive = false
+    private var replyPulseActive = false
+
+    /** 回复中头像轻微脉动（人性化反馈：AI 正在思考/输出）。 */
+    private val replyPulseAnimator = ValueAnimator.ofFloat(1f, 1.06f).apply {
+        duration = 700L
+        interpolator = AccelerateDecelerateInterpolator()
+        repeatMode = ValueAnimator.REVERSE
+        repeatCount = ValueAnimator.INFINITE
+        addUpdateListener {
+            val scale = it.animatedValue as Float
+            avatarView.scaleX = scale
+            avatarView.scaleY = scale
+        }
+    }
 
     /** 是否正在拖动（Service 据此跳过尺寸变化触发的自动吸附）。 */
     val isDragging: Boolean
@@ -230,17 +247,51 @@ internal class ReplyOverlayView(
         }
     }
 
-    /** 整窗透明度（空闲淡化用）。 */
-    fun setWindowAlpha(alpha: Float) {
-        this.alpha = alpha
+    /** 窗口透明度平滑过渡（淡化/恢复都走动画，不做瞬间跳变）。 */
+    fun animateWindowAlpha(target: Float, durationMs: Long) {
+        animate()
+            .alpha(target)
+            .setDuration(durationMs)
+            .setInterpolator(DecelerateInterpolator())
+            .start()
+    }
+
+    /** 窗口出现动画：整体从透明淡入。 */
+    fun playEntrance() {
+        alpha = 0f
+        animate()
+            .alpha(1f)
+            .setDuration(300L)
+            .setInterpolator(DecelerateInterpolator())
+            .start()
+    }
+
+    /** 回复进行中：头像轻脉动；停止时复位。 */
+    fun setReplying(active: Boolean) {
+        if (replyPulseActive == active) return
+        replyPulseActive = active
+        if (active) {
+            replyPulseAnimator.start()
+        } else {
+            replyPulseAnimator.cancel()
+            avatarView.scaleX = 1f
+            avatarView.scaleY = 1f
+        }
     }
 
     /** 打开输入模式：显示输入气泡并请求焦点。 */
     fun startInputMode() {
         if (inputModeActive) return
         inputModeActive = true
+        setReplying(false)
         bubbleView.visibility = View.INVISIBLE
         inputView.visibility = View.VISIBLE
+        inputView.alpha = 0f
+        inputView.animate()
+            .alpha(1f)
+            .setDuration(160L)
+            .setInterpolator(DecelerateInterpolator())
+            .start()
         inputEditText.setText("")
         listener.onInputModeChanged(true)
     }
@@ -291,9 +342,22 @@ internal class ReplyOverlayView(
 
     /** 设置多会话角标（<=1 隐藏）。 */
     fun setBadgeCount(count: Int) {
-        badgeView.apply {
-            visibility = if (count > 1) View.VISIBLE else View.GONE
-            text = if (count > 99) "99+" else count.toString()
+        val visible = count > 1
+        badgeView.text = if (count > 99) "99+" else count.toString()
+        if (visible && badgeView.visibility != View.VISIBLE) {
+            badgeView.visibility = View.VISIBLE
+            // 角标弹出动画（贴右时保持镜像方向）
+            val flipSign = if (snappedLeft) 1f else -1f
+            badgeView.scaleX = 0.5f * flipSign
+            badgeView.scaleY = 0.5f
+            badgeView.animate()
+                .scaleX(flipSign)
+                .scaleY(1f)
+                .setDuration(200L)
+                .setInterpolator(OvershootInterpolator(1.8f))
+                .start()
+        } else {
+            badgeView.visibility = if (visible) View.VISIBLE else View.GONE
         }
     }
 
@@ -373,6 +437,7 @@ internal class ReplyOverlayView(
         avatarFrame.scaleX = if (flip) -1f else 1f
         bubbleView.scaleX = if (flip) -1f else 1f
         badgeView.scaleX = if (flip) -1f else 1f
+        inputView.scaleX = if (flip) -1f else 1f
         listener.onSnapped(left, x, y)
     }
 

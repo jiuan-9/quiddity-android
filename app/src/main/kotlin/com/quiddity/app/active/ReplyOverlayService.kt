@@ -1,5 +1,8 @@
 package com.quiddity.app.active
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.ValueAnimator
 import android.app.Service
 import android.content.Intent
 import android.graphics.PixelFormat
@@ -10,6 +13,7 @@ import android.view.inputmethod.InputMethodManager
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
+import android.view.animation.DecelerateInterpolator
 import com.quiddity.app.util.CrashLogger
 
 /**
@@ -46,12 +50,16 @@ class ReplyOverlayService : Service(), ReplyOverlayView.Listener {
     /** 当前吸附边（true = 屏幕左侧），窗口伸缩时以头像为锚点保持不动。 */
     private var snappedLeft = true
 
+    /** 松手吸附位置动画（拖动中取消）。 */
+    private var snapAnimator: ValueAnimator? = null
+
     override fun onCreate() {
         super.onCreate()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         overlayView = ReplyOverlayView(this, this)
-        posX = screenWidth() - dp(56)
-        posY = screenHeight() / 2 - dp(24)
+        // 记住用户上次拖动的位置：服务随内容回收重建时不再跳回默认点
+        posX = if (lastPosX >= 0) lastPosX else screenWidth() - dp(56)
+        posY = if (lastPosY >= 0) lastPosY else screenHeight() / 2 - dp(24)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -77,6 +85,7 @@ class ReplyOverlayService : Service(), ReplyOverlayView.Listener {
     ) {
         if (!windowAdded) ensureWindowAdded()
         if (inputModeActive) return
+        overlayView.setReplying(count > 0)
         overlayView.setBadgeCount(count)
         when {
             bubble != null -> {
@@ -173,10 +182,10 @@ class ReplyOverlayService : Service(), ReplyOverlayView.Listener {
     /** 空闲淡化：无交互 2s 后把窗口淡化，任何交互/展示恢复全透明。 */
     private fun resetIdleFade() {
         idleFadeRunnable?.let { mainHandler.removeCallbacks(it) }
-        overlayView.setWindowAlpha(1f)
+        overlayView.animateWindowAlpha(1f, RESTORE_ANIM_MS)
         idleFadeRunnable = Runnable {
             idleFadeRunnable = null
-            if (!inputModeActive) overlayView.setWindowAlpha(IDLE_ALPHA)
+            if (!inputModeActive) overlayView.animateWindowAlpha(IDLE_ALPHA, IDLE_FADE_ANIM_MS)
         }.also { mainHandler.postDelayed(it, IDLE_FADE_MS) }
     }
 
@@ -185,6 +194,8 @@ class ReplyOverlayService : Service(), ReplyOverlayView.Listener {
     }
 
     override fun onPositionChanged(x: Int, y: Int) {
+        snapAnimator?.cancel()
+        snapAnimator = null
         posX = x
         posY = y
         updateWindowPosition()
@@ -192,12 +203,15 @@ class ReplyOverlayService : Service(), ReplyOverlayView.Listener {
 
     override fun onDragEnd() {
         snapToEdge()
+        // 拖动结束后恢复气泡展示（拖动期间气泡被隐藏）；
+        // 延迟到吸附动画完成后再恢复，避免布局抢先跳到贴边点打断回弹动画
+        mainHandler.postDelayed({
+            ReplyOverlayController.onOverlayDragEnd()
+        }, SNAP_ANIM_MS + 30L)
     }
 
     override fun onSnapped(left: Boolean, x: Int, y: Int) {
-        posX = x
-        posY = y
-        updateWindowPosition()
+        // 位置由 animateWindowTo 平滑过渡，这里只接收吸附方向翻转，不直接落点
     }
 
     override fun onAvatarClicked() {
@@ -233,6 +247,9 @@ class ReplyOverlayService : Service(), ReplyOverlayView.Listener {
         cancelBubbleTimer()
         idleFadeRunnable?.let { mainHandler.removeCallbacks(it) }
         idleFadeRunnable = null
+        snapAnimator?.cancel()
+        snapAnimator = null
+        overlayView.setReplying(false)
         ReplyOverlayController.onServiceStopped(this)
         if (windowAdded) {
             runCatching { windowManager.removeView(overlayView) }
@@ -260,6 +277,7 @@ class ReplyOverlayService : Service(), ReplyOverlayView.Listener {
             windowManager.addView(overlayView, layoutParams)
             params = layoutParams
             windowAdded = true
+            overlayView.playEntrance()
         }.onFailure {
             CrashLogger.logException(this, it, "ReplyOverlayService.addView")
             stopSelf()
@@ -272,6 +290,8 @@ class ReplyOverlayService : Service(), ReplyOverlayView.Listener {
         layoutParams.x = posX
         layoutParams.y = posY
         runCatching { windowManager.updateViewLayout(overlayView, layoutParams) }
+        lastPosX = posX
+        lastPosY = posY
     }
 
     /** 松手吸附：按窗口中心判定贴左 / 贴右，并夹紧 Y。 */
@@ -283,10 +303,40 @@ class ReplyOverlayService : Service(), ReplyOverlayView.Listener {
         snappedLeft = left
         val snappedX = if (left) dp(8) else screenWidth() - windowWidth - dp(8)
         val snappedY = posY.coerceIn(0, (screenHeight() - windowHeight - dp(8)).coerceAtLeast(0))
-        posX = snappedX
-        posY = snappedY
         overlayView.snapToEdge(left, snappedX, snappedY)
-        layoutWindow()
+        animateWindowTo(snappedX, snappedY)
+    }
+
+    /** 松手吸附回弹：位置从当前点平滑过渡到贴边点（约 220ms）。 */
+    private fun animateWindowTo(targetX: Int, targetY: Int) {
+        val fromX = posX
+        val fromY = posY
+        snapAnimator?.cancel()
+        snapAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = SNAP_ANIM_MS
+            interpolator = DecelerateInterpolator()
+            addUpdateListener { animator ->
+                val fraction = animator.animatedFraction
+                posX = fromX + ((targetX - fromX) * fraction).toInt()
+                posY = fromY + ((targetY - fromY) * fraction).toInt()
+                updateWindowPosition()
+            }
+            addListener(object : AnimatorListenerAdapter() {
+                private var cancelled = false
+                override fun onAnimationCancel(animation: Animator) {
+                    cancelled = true
+                }
+                override fun onAnimationEnd(animation: Animator) {
+                    snapAnimator = null
+                    if (!cancelled) {
+                        posX = targetX
+                        posY = targetY
+                        updateWindowPosition()
+                    }
+                }
+            })
+            start()
+        }
     }
 
     /**
@@ -319,6 +369,8 @@ class ReplyOverlayService : Service(), ReplyOverlayView.Listener {
         posX = layoutParams.x
         posY = layoutParams.y
         runCatching { windowManager.updateViewLayout(overlayView, layoutParams) }
+        lastPosX = layoutParams.x
+        lastPosY = layoutParams.y
     }
 
     private fun screenWidth(): Int = resources.displayMetrics.widthPixels
@@ -328,8 +380,16 @@ class ReplyOverlayService : Service(), ReplyOverlayView.Listener {
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     private companion object {
+        @Volatile
+        var lastPosX = -1
+        @Volatile
+        var lastPosY = -1
+
         const val BUBBLE_DISPLAY_MS = 4_000L
         const val IDLE_FADE_MS = 2_000L
+        const val IDLE_FADE_ANIM_MS = 500L
+        const val RESTORE_ANIM_MS = 180L
+        const val SNAP_ANIM_MS = 220L
         const val IDLE_ALPHA = 0.35f
     }
 }

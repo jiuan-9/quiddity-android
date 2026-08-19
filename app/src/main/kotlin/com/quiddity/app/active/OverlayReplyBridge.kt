@@ -45,7 +45,12 @@ object OverlayReplyBridge {
                     timestamp = now
                 )
                 convRepo.appendMessage(userMsg)
-                if (type == ConversationType.GROUP) return@launch
+                // 群聊快捷发送只追加消息（回复靠群内点名触发）：
+                // 给用户「已发送」反馈，避免发送后毫无提示
+                if (type == ConversationType.GROUP) {
+                    ReplyOverlayController.showTransientStatus("已发送")
+                    return@launch
+                }
                 ReplyOverlayController.startReply(conv.id, type)
                 val history = convRepo.observeMessages(conv.id).value
                 ServiceLocator.chatRepository.streamAssistantReply(
