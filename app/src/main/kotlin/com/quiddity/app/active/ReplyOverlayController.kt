@@ -114,7 +114,11 @@ object ReplyOverlayController {
         conversationId: String,
         conversationType: ConversationType
     ) {
-        machine.enqueueBubble(text, conversationId, conversationType)
+        // 截断集中在这里：悬浮窗只展示一条短气泡，超长内容统一补「…」
+        val display = text.trim().let {
+            if (it.length > MAX_BUBBLE_CHARS) it.take(MAX_BUBBLE_CHARS).trimEnd() + "…" else it
+        }
+        machine.enqueueBubble(display, conversationId, conversationType)
         refreshWindow()
     }
 
@@ -180,7 +184,7 @@ object ReplyOverlayController {
         if (inputModeActive) return
         val tool = machine.currentToolAction()
         val count = machine.activeCount
-        val status = machine.aggregateStatusText()
+        val status = buildStatusText(count)
         val bubble = machine.nextBubble()
         if (tool != null) {
             // 工具动作优先级最高：以气泡样式展示，动作结束（clearToolAction）后恢复
@@ -188,7 +192,7 @@ object ReplyOverlayController {
             // 清空上次气泡记录：工具动作结束后下一轮渲染会重新展示回复气泡并重启 4s 计时
             lastBubbleText = null
             lastBubbleConversation = null
-            svc.showToolBubble(tool)
+            svc.showToolBubble(count, tool)
             return
         }
         if (bubble != null) {
@@ -213,6 +217,18 @@ object ReplyOverlayController {
         showingBubble = false
         lastBubbleText = null
         svc.render(count, status, null)
+    }
+
+    /** 人性化状态文案：单个会话显示「名字」正在回复，多个会话聚合计数。 */
+    private fun buildStatusText(count: Int): String {
+        if (count == 0) return ""
+        if (count == 1) {
+            val id = machine.activeConversationIds().firstOrNull() ?: return "正在回复…"
+            val name = ServiceLocator.conversationRepository.getConversation(id)
+                ?.persona?.name?.takeIf { it.isNotBlank() }
+            return if (name != null) "「$name」正在回复…" else "正在回复…"
+        }
+        return "$count 个对话正在回复…"
     }
 
     /** 气泡展示完成（Service 回调）→ 消费队首并渲染下一条。 */
@@ -284,4 +300,8 @@ object ReplyOverlayController {
         hasVisibleContent = machine.hasVisibleContent,
         inputModeActive = inputModeActive
     )
+
+    private companion object {
+        const val MAX_BUBBLE_CHARS = 80
+    }
 }

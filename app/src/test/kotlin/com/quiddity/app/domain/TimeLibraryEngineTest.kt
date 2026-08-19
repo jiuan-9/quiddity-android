@@ -113,40 +113,9 @@ class TimeLibraryEngineTest {
     }
 
     @Test
-    fun `parseGeneratedPassword extracts digits only`() {
-        val raw = "13:30\n14:00\n【查看密码】 520131\n【是否告知】是"
-        assertEquals("520131", TimeLibraryEngine.parseGeneratedPassword(raw))
-        assertTrue(TimeLibraryEngine.parsePasswordRevealed(raw))
-    }
-
-    @Test
-    fun `parseGeneratedPassword returns empty when absent`() {
-        assertEquals("", TimeLibraryEngine.parseGeneratedPassword("13:30"))
-        assertTrue(TimeLibraryEngine.parsePasswordRevealed("13:30"), "未明确说「否」时默认告知，保证功能可用")
-    }
-
-    @Test
     fun `password digits are not parsed as times`() {
         val raw = "13:30\n【查看密码】520131\n【是否告知】否"
         assertEquals(listOf("13:30"), TimeLibraryEngine.parseGeneratedTimes(raw))
-        assertFalse(TimeLibraryEngine.parsePasswordRevealed(raw))
-    }
-
-    @Test
-    fun `sanitizePassword keeps digits and validates length`() {
-        assertEquals("520131", TimeLibraryEngine.sanitizePassword("520131"))
-        assertEquals("123456", TimeLibraryEngine.sanitizePassword("密码123456abc"))
-        assertEquals("", TimeLibraryEngine.sanitizePassword("12"))
-        assertEquals("", TimeLibraryEngine.sanitizePassword("abcd"))
-    }
-
-    @Test
-    fun `fallbackPassword is deterministic and six digits`() {
-        val a = TimeLibraryEngine.fallbackPassword("conv_1|2026-08-03")
-        val b = TimeLibraryEngine.fallbackPassword("conv_1|2026-08-03")
-        assertEquals(a, b)
-        assertEquals(6, a.length)
-        assertTrue(a.all { it.isDigit() })
     }
 
     // ============================================================
@@ -324,8 +293,11 @@ class TimeLibraryEngineTest {
         )
         val result = TimeLibraryEngine.enforceTimeLibraryRules(times, emptySet())
         assertEquals(10, result.size)
-        assertEquals(5, result.count { !TimeLibraryEngine.isAfternoon(it) })
-        assertEquals(5, result.count { TimeLibraryEngine.isAfternoon(it) })
+        val isPm: (String) -> Boolean = {
+            (TimeLibraryEngine.parseMinutes(it) ?: 0) / 60 >= 12
+        }
+        assertEquals(5, result.count { !isPm(it) })
+        assertEquals(5, result.count { isPm(it) })
         assertTrue("01:00" in result)
         assertTrue("13:00" in result)
         assertTrue("06:00" !in result)
@@ -338,8 +310,11 @@ class TimeLibraryEngineTest {
             listOf("01:00", "02:00", "03:00", "04:00", "05:00", "06:00", "13:00"),
             setOf(0)
         )
-        assertEquals(4, result.count { !TimeLibraryEngine.isAfternoon(it) })
-        assertEquals(1, result.count { TimeLibraryEngine.isAfternoon(it) })
+        val isPm: (String) -> Boolean = {
+            (TimeLibraryEngine.parseMinutes(it) ?: 0) / 60 >= 12
+        }
+        assertEquals(4, result.count { !isPm(it) })
+        assertEquals(1, result.count { isPm(it) })
     }
 
     @Test
@@ -348,8 +323,11 @@ class TimeLibraryEngineTest {
             listOf("01:00", "02:00", "03:00", "04:00", "05:00", "13:00", "14:00", "15:00", "16:00", "17:00"),
             setOf(0, 1, 5, 6)
         )
-        assertEquals(3, result.count { !TimeLibraryEngine.isAfternoon(it) })
-        assertEquals(3, result.count { TimeLibraryEngine.isAfternoon(it) })
+        val isPm: (String) -> Boolean = {
+            (TimeLibraryEngine.parseMinutes(it) ?: 0) / 60 >= 12
+        }
+        assertEquals(3, result.count { !isPm(it) })
+        assertEquals(3, result.count { isPm(it) })
         assertEquals(6, result.size)
     }
 }

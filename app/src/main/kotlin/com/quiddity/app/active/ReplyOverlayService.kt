@@ -15,11 +15,12 @@ import com.quiddity.app.util.CrashLogger
 /**
  * 回复悬浮窗服务：承载 [ReplyOverlayView] 系统窗口。
  *
- * 普通 started service（不占前台通知）；设置开启 + 应用不可见时**始终显示**，
- * 由 [ReplyOverlayController] 驱动渲染与回收。
+ * 普通 started service（不占前台通知）；由 [ReplyOverlayController] 在
+ * 设置开启 + 应用不可见 + 有可见内容时启动，无内容时自动回收。
  * - 无交互 2s 后自动淡化窗口（alpha → 0.35），任意交互恢复全透明；
  * - 点击气泡进入输入模式（输入气泡 + 自动滑出输入法键盘）；
- * - 消息气泡展示 4s 后自动消费（仅保留最新一条）。
+ * - 消息气泡展示 4s 后滑回并自动消费（仅保留最新一条）；
+ * - Agent 工具调用实时以气泡样式展示「正在做什么」。
  */
 class ReplyOverlayService : Service(), ReplyOverlayView.Listener {
 
@@ -103,17 +104,19 @@ class ReplyOverlayService : Service(), ReplyOverlayView.Listener {
         cancelBubbleTimer()
         bubbleDismissRunnable = Runnable {
             bubbleDismissRunnable = null
-            onDismissed()
+            // 人性化：展示结束先让气泡滑回再消费，避免瞬间消失
+            overlayView.dismissBubble(onEnd = onDismissed)
         }.also { mainHandler.postDelayed(it, BUBBLE_DISPLAY_MS) }
         resetIdleFade()
     }
 
     /** Agent 工具动作：以气泡样式实时展示（动作结束由 clearToolAction 恢复）。 */
-    fun showToolBubble(text: String) {
+    fun showToolBubble(count: Int, text: String) {
         if (!windowAdded) ensureWindowAdded()
         if (inputModeActive) return
         cancelBubbleTimer()
-        overlayView.showReplyBubble(text)
+        overlayView.setBadgeCount(count)
+        overlayView.showToolActionBubble(text)
         layoutWindow()
         resetIdleFade()
     }
@@ -216,6 +219,10 @@ class ReplyOverlayService : Service(), ReplyOverlayView.Listener {
 
     override fun onInputSubmit(text: String) {
         ReplyOverlayController.onOverlayInputSent(text)
+    }
+
+    override fun onInputCancel() {
+        ReplyOverlayController.onInputModeClosed()
     }
 
     override fun onInputModeChanged(active: Boolean) {

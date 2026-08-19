@@ -101,7 +101,7 @@ internal class StreamEventProcessor(
                     !com.quiddity.app.data.repo.isActionOnlyReply(bubbleText)
                 ) {
                     com.quiddity.app.active.ReplyOverlayController.enqueueBubble(
-                        text = bubbleText.take(MAX_BUBBLE_CHARS),
+                        text = bubbleText,
                         conversationId = conversationId,
                         conversationType = conversation.value?.type
                             ?: com.quiddity.app.data.model.ConversationType.SOLO
@@ -220,9 +220,6 @@ internal class StreamEventProcessor(
         }
     }
 
-    private companion object {
-        const val MAX_BUBBLE_CHARS = 80
-    }
     fun stripThinkingEcho(msg: Message): Message {
         if (msg.isThinking || msg.isNotice || msg.content.isBlank()) return msg
         val thinking = _messages.value.asReversed()

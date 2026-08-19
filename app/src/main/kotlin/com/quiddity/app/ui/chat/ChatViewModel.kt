@@ -185,7 +185,6 @@ class ChatViewModel(
     fun cancelPendingSend() = settingsController.cancelPendingSend()
     fun setConversationApi(catalogId: String) = settingsController.setConversationApi(catalogId)
     fun setActiveMessageEnabled(enabled: Boolean) = settingsController.setActiveMessageEnabled(enabled)
-    fun markTimeLibraryUnlocked() = settingsController.markTimeLibraryUnlocked()
     fun updateTimeLibrary(times: List<String>, disabledSlots: List<Int>) = settingsController.updateTimeLibrary(times, disabledSlots)
     fun ensureTimeLibraryGenerated() = settingsController.ensureTimeLibraryGenerated()
     fun consumeTimeLibraryHint() = settingsController.consumeTimeLibraryHint()

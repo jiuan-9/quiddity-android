@@ -134,10 +134,8 @@ fun HamburgerMenu(
     // 导入后需重填密钥的模型配置名称清单（3.2 解密自检失败项）
     var pendingKeyRefill by remember { mutableStateOf<List<String>?>(null) }
     var pendingExportFormat by remember { mutableStateOf<ExportFormatPicker?>(null) }
-    // 查看时间库流程：0=关闭 1=输密码 2=展示内容
+    // 查看时间库流程：0=关闭 1=展示内容
     var timeLibraryViewStep by remember { mutableIntStateOf(0) }
-    var timeLibraryPasswordInput by remember { mutableStateOf("") }
-    var timeLibraryPasswordError by remember { mutableStateOf(false) }
 
     LaunchedEffect(visible) {
         if (!visible) {
@@ -296,13 +294,8 @@ fun HamburgerMenu(
 
     TimeLibraryViewFlow(
         step = timeLibraryViewStep,
-        passwordInput = timeLibraryPasswordInput,
-        passwordError = timeLibraryPasswordError,
         conversation = conversation,
-        viewModel = viewModel,
-        onStepChange = { timeLibraryViewStep = it },
-        onPasswordInputChange = { timeLibraryPasswordInput = it },
-        onPasswordErrorChange = { timeLibraryPasswordError = it }
+        onStepChange = { timeLibraryViewStep = it }
     )
 
     ExportFormatDialog(

@@ -356,9 +356,12 @@ object AgentSecurity {
         // 悬浮窗：所有工具调用（含只读/OCR）都以气泡样式实时展示「AI 正在干什么」，
         // 不限于行动弹窗工具，避免用户看不到 Agent 的工具调用过程
         if (conversationId != null) {
+            val agentName = ctx.conversation?.persona?.name
+                ?.takeIf { it.isNotBlank() }
+                ?: "AI"
             com.quiddity.app.active.ReplyOverlayController.showToolAction(
                 conversationId,
-                agentActionFor(tool.name)
+                "「$agentName」${agentActionFor(tool.name)}"
             )
         }
         if (showPopup) {

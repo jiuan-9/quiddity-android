@@ -93,7 +93,7 @@ object OverlayReplyBridge {
                     !com.quiddity.app.data.repo.isActionOnlyReply(bubbleText)
                 ) {
                     ReplyOverlayController.enqueueBubble(
-                        text = bubbleText.take(MAX_BUBBLE_CHARS),
+                        text = bubbleText,
                         conversationId = conv.id,
                         conversationType = conv.type
                     )
@@ -115,5 +115,4 @@ object OverlayReplyBridge {
         }
     }
 
-    private const val MAX_BUBBLE_CHARS = 80
 }

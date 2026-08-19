@@ -31,6 +31,7 @@ class ReplyOverlayStateMachineTest {
         m.startReply("c2", ConversationType.GROUP)
         m.startReply("c3", ConversationType.AGENT)
         assertEquals(3, m.activeCount)
+        assertEquals(listOf("c1", "c2", "c3"), m.activeConversationIds())
         assertEquals("3 个对话正在回复…", m.aggregateStatusText())
         m.endReply("c1")
         assertEquals(2, m.activeCount)

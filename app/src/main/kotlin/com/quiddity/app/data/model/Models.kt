@@ -274,22 +274,6 @@ data class Conversation(
      */
     val disabledTimeSlots: List<Int> = emptyList(),
     /**
-     * 时间库查看密码（由 AI 在生成时间库时制定，纯数字）。
-     * 空字符串表示未设置密码（旧数据可直接查看）。
-     * 一旦生成即固定不变，不要求唯一。
-     */
-    val timeLibraryPassword: String = "",
-    /**
-     * AI 是否决定把查看密码告知用户。
-     * true = 在时间库状态卡上显示；false = 不显示，需向 AI 询问。
-     */
-    val timeLibraryPasswordRevealed: Boolean = false,
-    /**
-     * 用户是否成功打开过"查看时间库"。
-     * true 后，输密码弹窗会直接显示密码，无需再次输入。
-     */
-    val timeLibraryPasswordUnlocked: Boolean = false,
-    /**
      * 会话类型：SOLO=私聊（默认）/ GROUP=群聊。
      * 1.3.0 仅预留字段与接口，群聊实体不加入。
      */

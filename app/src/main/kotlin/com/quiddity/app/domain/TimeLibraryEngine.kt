@@ -3,7 +3,6 @@ package com.quiddity.app.domain
 import com.quiddity.app.data.model.TimePoint
 import com.quiddity.app.data.model.TimePointStatus
 import com.quiddity.app.util.QuiddityConstants
-import java.util.Locale
 
 /*
  * ============================================================================
@@ -137,44 +136,6 @@ object TimeLibraryEngine {
     /** 下午剩余可用时间框数（下标 5-9）。 */
     fun enabledPmCount(disabledSlots: Set<Int>): Int =
         (SLOTS_PER_HALF - disabledSlots.count { it in PM_START_SLOT until SLOT_COUNT }).coerceAtLeast(0)
-
-    /** 该时间点是否属于下午（12:00 及以后）。 */
-    fun isAfternoon(time: String): Boolean =
-        parseMinutes(time)?.let { it / 60 >= NOON_HOUR } ?: false
-
-    /**
-     * 从生成结果中提取 4~6 位数字查看密码；未输出返回空串。
-     * 纯数字无冒号，不会被 [parseGeneratedTimes] 误识别为时间。
-     */
-    fun parseGeneratedPassword(raw: String): String {
-        val match = Regex("""【查看密码】\s*(\d{4,6})""").find(raw) ?: return ""
-        return match.groupValues[1]
-    }
-
-    /**
-     * 校验并清洗 AI 输出的密码：只保留数字并取前 6 位；
-     * 不足 4 位视为无效返回空串（调用方改用兜底密码）。
-     */
-    fun sanitizePassword(raw: String): String {
-        val digits = raw.filter { it.isDigit() }
-        return if (digits.length >= 4) digits.take(6) else ""
-    }
-
-    /**
-     * 兜底密码：AI 未输出有效密码时使用，按会话 id + 日期稳定生成 6 位数字，
-     * 保证"查看时间库"功能任何时候都可用。
-     */
-    fun fallbackPassword(seed: String): String =
-        String.format(Locale.US, "%06d", (seed.hashCode() and 0x7fffffff) % 1_000_000)
-
-    /**
-     * 从生成结果中提取"是否告知查看密码"（是/否/true/false/1/0）。
-     * 未明确输出"否"时默认告知（保证用户能查看时间库，功能可用）。
-     */
-    fun parsePasswordRevealed(raw: String): Boolean {
-        val match = Regex("""【是否告知】\s*(是|否|true|false|1|0)""").find(raw) ?: return true
-        return match.groupValues[1] in setOf("是", "true", "1")
-    }
 
     /**
      * 时间库更新与兜底：

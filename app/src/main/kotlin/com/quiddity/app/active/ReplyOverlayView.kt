@@ -1,12 +1,14 @@
 package com.quiddity.app.active
 
 import android.content.Context
+import android.content.res.ColorStateList
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.graphics.Outline
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewOutlineProvider
@@ -45,6 +47,8 @@ internal class ReplyOverlayView(
         fun onUserInteraction()
         /** 输入气泡发送。 */
         fun onInputSubmit(text: String)
+        /** 输入气泡取消（返回键 / 点击 ✕）。 */
+        fun onInputCancel()
         /** 输入模式状态变化（active=false 表示已关闭）。 */
         fun onInputModeChanged(active: Boolean)
         /** 气泡展示完成（自动回收）。 */
@@ -112,6 +116,7 @@ internal class ReplyOverlayView(
         isSingleLine = true
         imeOptions = EditorInfo.IME_ACTION_SEND
         inputType = EditorInfo.TYPE_CLASS_TEXT
+        hint = "回复…"
         background = null
         setPadding(dp(10), 0, dp(6), 0)
         setOnEditorActionListener { _, actionId, _ ->
@@ -122,6 +127,22 @@ internal class ReplyOverlayView(
                 false
             }
         }
+        setOnKeyListener { _, keyCode, event ->
+            if (keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_DOWN) {
+                listener.onInputCancel()
+                true
+            } else {
+                false
+            }
+        }
+    }
+
+    private val cancelButton = TextView(context).apply {
+        text = "✕"
+        setTextColor(0x99FFFFFF.toInt())
+        textSize = 14f
+        setPadding(dp(8), dp(8), dp(6), dp(8))
+        gravity = Gravity.CENTER
     }
 
     private val sendButton = TextView(context).apply {
@@ -185,6 +206,7 @@ internal class ReplyOverlayView(
         inputEditText.minWidth = dp(160)
         inputEditText.maxWidth = dp(240)
         inputView.addView(inputEditText)
+        inputView.addView(cancelButton)
         inputView.addView(sendButton)
         val inputLayout = LayoutParams(
             LayoutParams.WRAP_CONTENT,
@@ -196,6 +218,7 @@ internal class ReplyOverlayView(
         setOnTouchListener { v, e -> handleTouch(v, e, onTap = { listener.onAvatarClicked() }) }
         avatarFrame.setOnTouchListener { v, e -> handleTouch(v, e, onTap = { listener.onAvatarClicked() }) }
         bubbleView.setOnTouchListener { v, e -> handleTouch(v, e, onTap = { listener.onBubbleClicked() }) }
+        cancelButton.setOnClickListener { listener.onInputCancel() }
         sendButton.setOnClickListener { submitInput() }
         inputView.setOnTouchListener { _, e ->
             if (e.actionMasked == MotionEvent.ACTION_DOWN) listener.onUserInteraction()
@@ -287,6 +310,20 @@ internal class ReplyOverlayView(
 
     /** 展示回复气泡：从头像一侧滑出（局部坐标 +宽 → 0，镜像后自动朝向屏幕内侧）。 */
     fun showReplyBubble(text: String) {
+        showBubble(text, toolStyle = false)
+    }
+
+    /** 展示 Agent 工具动作气泡（蓝色调，与普通回复区分）。 */
+    fun showToolActionBubble(text: String) {
+        showBubble(text, toolStyle = true)
+    }
+
+    private fun showBubble(text: String, toolStyle: Boolean) {
+        bubbleView.backgroundTintList = if (toolStyle) {
+            ColorStateList.valueOf(TOOL_BUBBLE_COLOR)
+        } else {
+            null
+        }
         if (currentBubbleText == text && bubbleView.alpha > 0.5f) return
         currentBubbleText = text
         bubbleView.apply {
@@ -311,6 +348,21 @@ internal class ReplyOverlayView(
             alpha = 0f
             translationX = 0f
         }
+    }
+
+    /** 气泡滑回并淡出（4s 展示结束），动画完成后回调 [onEnd]。 */
+    fun dismissBubble(onEnd: () -> Unit) {
+        if (currentBubbleText == null || bubbleView.alpha <= 0.1f) {
+            onEnd()
+            return
+        }
+        bubbleView.animate()
+            .translationX((if (width > 0) width else dp(110)).toFloat())
+            .alpha(0f)
+            .setDuration(200L)
+            .setInterpolator(DecelerateInterpolator())
+            .withEndAction(onEnd)
+            .start()
     }
 
     /** 吸附到指定边缘：贴左不镜像，贴右整体镜像并反向镜像子视图保证可读。 */
@@ -372,5 +424,6 @@ internal class ReplyOverlayView(
 
     private companion object {
         const val HINT_COLOR = 0x80FFFFFF.toInt()
+        const val TOOL_BUBBLE_COLOR = 0xE61F3B66.toInt()
     }
 }

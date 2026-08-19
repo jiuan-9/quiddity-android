@@ -306,14 +306,6 @@ internal class SettingsController(
             }
         }
     }
-    fun markTimeLibraryUnlocked() {
-        viewModelScope.launch {
-            val conv = conversation.value ?: return@launch
-            if (!conv.timeLibraryPasswordUnlocked) {
-                conversationRepository.updateConversation(conv.copy(timeLibraryPasswordUnlocked = true))
-            }
-        }
-    }
     fun updateTimeLibrary(times: List<String>, disabledSlots: List<Int>) {
         viewModelScope.launch {
             val conv = conversation.value ?: return@launch

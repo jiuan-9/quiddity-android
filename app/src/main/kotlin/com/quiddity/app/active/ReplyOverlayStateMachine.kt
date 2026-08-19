@@ -46,6 +46,11 @@ class ReplyOverlayStateMachine {
             active.isNotEmpty() || toolActions.isNotEmpty() || bubble != null
         }
 
+    /** 当前正在进行回复的会话 id 列表（用于状态文案展示会话名）。 */
+    fun activeConversationIds(): List<String> = synchronized(lock) {
+        active.keys.toList()
+    }
+
     fun startReply(conversationId: String, type: ConversationType) {
         synchronized(lock) {
             if (!active.containsKey(conversationId)) {

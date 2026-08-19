@@ -544,19 +544,6 @@ object PromptBuilder {
             sb.append("\n\n")
         }
 
-        // ===== 7. 时间库说明（主动消息开启且有查看密码时） =====
-        // 让 AI 确切知道时间库查看密码与告知状态，避免在对话中编造错误密码
-        if (conv.activeMessageEnabled && conv.timeLibraryPassword.isNotBlank()) {
-            sb.append("【时间库查看密码】\n")
-            sb.append("本会话今日时间库的查看密码是：").append(conv.timeLibraryPassword).append("\n")
-            if (conv.timeLibraryPasswordRevealed) {
-                sb.append("你已告知用户该密码；用户问起时可以如实回答。\n")
-            } else {
-                sb.append("你尚未主动告知用户该密码；不要主动提起，但用户直接询问时可以如实回答。\n")
-            }
-            sb.append("\n")
-        }
-
         return sb.toString().trim()
     }
 

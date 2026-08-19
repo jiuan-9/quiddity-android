@@ -21,7 +21,6 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.quiddity.app.data.model.Conversation
 import com.quiddity.app.data.model.ExportPayload
-import com.quiddity.app.ui.chat.ChatViewModel
 import com.quiddity.app.ui.components.ConfirmDialog
 import com.quiddity.app.util.ConversationCodec
 
@@ -88,53 +87,14 @@ internal fun HamburgerConfirmDialogs(
     }
 }
 
-/**
- * 查看时间库流程：先验密码（如有），再展示内容。
- */
+/** 查看时间库流程：直接展示内容（无密码机制）。 */
 @Composable
 internal fun TimeLibraryViewFlow(
     step: Int,
-    passwordInput: String,
-    passwordError: Boolean,
     conversation: Conversation?,
-    viewModel: ChatViewModel,
-    onStepChange: (Int) -> Unit,
-    onPasswordInputChange: (String) -> Unit,
-    onPasswordErrorChange: (Boolean) -> Unit
+    onStepChange: (Int) -> Unit
 ) {
-    if (step == 1) {
-        val conv = conversation
-        if (conv != null && conv.timeLibraryPassword.isNotBlank()) {
-            TimeLibraryPasswordDialog(
-                error = passwordError,
-                input = passwordInput,
-                revealed = conv.timeLibraryPasswordRevealed,
-                password = conv.timeLibraryPassword,
-                onInputChange = { value ->
-                    onPasswordInputChange(value.filter { it.isDigit() }.take(6))
-                    onPasswordErrorChange(false)
-                },
-                onConfirm = {
-                    if (passwordInput == conv.timeLibraryPassword) {
-                        viewModel.markTimeLibraryUnlocked()
-                        onStepChange(2)
-                        onPasswordInputChange("")
-                        onPasswordErrorChange(false)
-                    } else {
-                        onPasswordErrorChange(true)
-                    }
-                },
-                onDismiss = {
-                    onStepChange(0)
-                    onPasswordInputChange("")
-                    onPasswordErrorChange(false)
-                }
-            )
-        } else {
-            onStepChange(2)
-        }
-    }
-    if (step == 2) {
+    if (step >= 1) {
         TimeLibraryDetailDialog(
             conversation = conversation,
             onDismiss = { onStepChange(0) }

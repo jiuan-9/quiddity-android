@@ -16,11 +16,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -37,10 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import com.quiddity.app.data.model.Conversation
 import com.quiddity.app.domain.TimeLibraryEngine
 import com.quiddity.app.ui.components.ConfirmDialog
@@ -66,90 +61,6 @@ private fun readableTimeText(time: String): String {
     return "$period $hour12:$minute"
 }
 
-/**
- * 查找聊天记录面板：输入关键词在本会话历史消息中搜索，
- * 结果按微信样式展示头像、名字、时间与内容摘录，点击跳转到对应消息。
- */
-@Composable
-internal fun TimeLibraryPasswordDialog(
-    error: Boolean,
-    input: String,
-    revealed: Boolean,
-    password: String,
-    onInputChange: (String) -> Unit,
-    onConfirm: () -> Unit,
-    onDismiss: () -> Unit
-) {
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
-    ) {
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 32.dp),
-            shape = RoundedCornerShape(20.dp),
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 6.dp
-        ) {
-            Column(
-                modifier = Modifier.padding(20.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(
-                    text = "查看时间库",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Spacer(modifier = Modifier.size(8.dp))
-                Text(
-                    text = "这个会话的时间库设置了查看密码，密码由 AI 制定。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                )
-                if (!revealed) {
-                    Spacer(modifier = Modifier.size(6.dp))
-                    Text(
-                        text = "AI 决定不告知密码。你可以直接在聊天里问 AI，或等明天重新生成时间库后再查看。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error.copy(alpha = 0.8f),
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                    )
-                }
-                Spacer(modifier = Modifier.size(12.dp))
-                OutlinedTextField(
-                    value = input,
-                    onValueChange = onInputChange,
-                    label = { Text("数字密码") },
-                    singleLine = true,
-                    isError = error,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword)
-                )
-                if (error) {
-                    Spacer(modifier = Modifier.size(4.dp))
-                    Text(
-                        text = "密码不对，请重试",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                }
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 12.dp),
-                    horizontalArrangement = Arrangement.End
-                ) {
-                    TextButton(onClick = onDismiss) { Text("取消") }
-                    Spacer(modifier = Modifier.size(8.dp))
-                    TextButton(onClick = onConfirm) { Text("查看") }
-                }
-            }
-        }
-    }
-}
-
 /** 查看时间库：内容展示弹窗（用户可读的时间说法）。 */
 @Composable
 internal fun TimeLibraryDetailDialog(
@@ -173,10 +84,6 @@ internal fun TimeLibraryDetailDialog(
             }
             appendLine("")
             appendLine("说明：「下午 1:30」就是下午一点半；「待触发」表示还没到时间，「已处理」表示到点已经处理过了。")
-        }
-        if (conv.timeLibraryPassword.isNotBlank() && conv.timeLibraryPasswordRevealed) {
-            appendLine("")
-            appendLine("查看密码：${conv.timeLibraryPassword}")
         }
     }
     ConfirmDialog(
