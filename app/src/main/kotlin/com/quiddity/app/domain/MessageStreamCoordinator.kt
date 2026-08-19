@@ -46,11 +46,6 @@ interface StreamCoordinator {
     }
 
     fun accept(delta: String): List<Signal>
-    /**
-     * 接收 DeepSeek 思考内容增量（reasoning_content）。
-     * 思考内容单独成一条 isThinking 消息，普通内容开始或流结束时自动完成。
-     */
-    fun acceptReasoning(delta: String): List<Signal>
     /** 追加一段应用内思考（如工具系列使用后的评估），附着到下一条新建消息。 */
     fun appendThinking(extra: String)
     /**
@@ -164,12 +159,6 @@ class MessageStreamCoordinator(
     private val thinkingChunk = StringBuilder()
     /** 跨 delta 保留的尾部（可能是【思考】/【回答】标记的开头，等待下一个分片补全）。 */
     private var markerTail = ""
-
-    override fun acceptReasoning(delta: String): List<StreamCoordinator.Signal> {
-        // 思考统一由提示词引导（【思考】/【回答】标记）产生，客户端按标记拆分展示；
-        // 不采用厂商 reasoning_content 兜底，避免出现与角色第一人称无关的原始推理文本。
-        return emptyList()
-    }
 
     /** 追加一段思考（如工具系列使用后的第一人称评估），附着到下一条新建消息。 */
     override fun appendThinking(extra: String) {

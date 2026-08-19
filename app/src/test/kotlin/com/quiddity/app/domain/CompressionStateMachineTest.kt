@@ -35,12 +35,6 @@ class CompressionStateMachineTest {
     }
 
     @Test
-    fun `resultState maps success and failure`() {
-        assertEquals(CompressionState.Success, CompressionStateMachine.resultState(success = true))
-        assertEquals(CompressionState.Failed, CompressionStateMachine.resultState(success = false))
-    }
-
-    @Test
     fun `consume resets transient states to idle`() {
         assertEquals(CompressionState.Idle, CompressionStateMachine.consume(CompressionState.Success))
         assertEquals(CompressionState.Idle, CompressionStateMachine.consume(CompressionState.Failed))

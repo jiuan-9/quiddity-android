@@ -21,7 +21,6 @@ import com.quiddity.app.domain.MessageStreamCoordinator
 import com.quiddity.app.domain.PromptBuilder
 import com.quiddity.app.domain.StreamCoordinator
 import com.quiddity.app.domain.agent.AgentRoundEffects
-import com.quiddity.app.domain.agent.AgentContext
 import com.quiddity.app.domain.agent.AgentToolRegistry
 import com.quiddity.app.domain.agent.AgentWorkflowController
 import kotlinx.serialization.json.JsonObject
@@ -428,21 +427,6 @@ class ChatRepository(
         message: Message
     ): String = groupReplyRunner.decideGroupResponder(members, transcript, message)
 
-    companion object {
-        /**
-         * ? AGENT ???????????????? null??? read_memory/search_chat ????
-         */
-        internal suspend fun dispatchAgentToolIfNeeded(
-            type: ConversationType,
-            name: String,
-            args: String,
-            registry: AgentToolRegistry?,
-            ctx: AgentContext?
-        ): String? {
-            if (type != ConversationType.AGENT || registry == null || ctx == null) return null
-            return registry.dispatch(name, args, ctx)
-        }
-    }
 }
 
 internal class GroupReplyPrefixSanitizer(names: List<String>) {

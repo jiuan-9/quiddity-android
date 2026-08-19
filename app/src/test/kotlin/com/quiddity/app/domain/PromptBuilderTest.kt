@@ -292,25 +292,6 @@ class PromptBuilderTest {
     }
 
     @Test
-    fun `group decision prompt contains transcript and output constraint`() {
-        val member = conv().copy(
-            persona = com.quiddity.app.data.model.Persona(name = "小A")
-        )
-        val transcript = PromptBuilder.buildGroupTranscript(
-            listOf(
-                msg("m1", content = "你好", senderId = "conv_user"),
-                msg("m2", content = "你们好呀", senderId = "conv_b")
-            ),
-            lastN = 10,
-            senderNames = mapOf("conv_user" to "我", "conv_b" to "小B")
-        )
-        val prompt = PromptBuilder.buildGroupDecisionPrompt(member, transcript)
-        assertTrue(prompt.contains("群聊转述"), "决策提示词应包含群聊转述节")
-        assertTrue(prompt.contains("我：你好"), "转述应使用名字：内容格式")
-        assertTrue(prompt.contains("严格只输出数字 0"), "应包含输出约束")
-    }
-
-    @Test
     fun `group memory summary prompt contains transcript`() {
         val transcript = PromptBuilder.buildGroupTranscript(
             listOf(msg("m1", content = "第一句", senderId = "conv_a")),

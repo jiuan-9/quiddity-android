@@ -615,18 +615,8 @@ class ApiCatalogManager(
         Provider("custom", "自定义", "", "", emptyList())
     )
 
-    fun findVisionProvider(id: String?): Provider =
-        visionProviders.firstOrNull { it.id == id } ?: customProvider
-
     fun visionDisplayNameOf(providerId: String): String =
         visionProviders.firstOrNull { it.id == providerId }?.name ?: "自定义"
-
-    /**
-     * 获取指定服务商的官方 API-KEY 控制台地址。
-     * 自定义或未知服务商返回空字符串。
-     */
-    fun keyUrlFor(providerId: String): String =
-        providers.firstOrNull { it.id == providerId }?.keyUrl ?: ""
 
     // ==================== ID 生成（统一格式） ====================
 

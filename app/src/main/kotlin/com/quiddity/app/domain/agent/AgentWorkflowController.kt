@@ -62,8 +62,6 @@ class AgentWorkflowController {
     private val retriedKeys = mutableSetOf<String>()
 
     /** 已执行过的调用总数（去重后复用不增加计数）。 */
-    fun executedCount(): Int = history.size
-
     /**
      * 去重命中：同工具、同参数（规范化比较）且执行成功的调用。
      * 命中后应复用其结果，不再执行；未命中返回 null。

@@ -5,6 +5,7 @@ import androidx.activity.result.ActivityResultLauncher
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationVector1D
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -68,6 +69,7 @@ import com.quiddity.app.data.model.Message
 import com.quiddity.app.data.model.Role
 import com.quiddity.app.domain.ChatRecordSearch
 import com.quiddity.app.domain.GroupReplyQueue
+import com.quiddity.app.ui.theme.Motion
 import com.quiddity.app.ui.chat.ChatViewModel
 import com.quiddity.app.ui.chat.components.ChatInputBar
 import com.quiddity.app.ui.chat.components.GameLogBubble
@@ -233,7 +235,15 @@ internal fun ContextUsageRing(
     limit: Int,
     modifier: Modifier = Modifier
 ) {
-    val fraction = if (limit > 0) (used.toFloat() / limit).coerceIn(0f, 1f) else 0f
+    val targetFraction = if (limit > 0) (used.toFloat() / limit).coerceIn(0f, 1f) else 0f
+    val fraction by animateFloatAsState(
+        targetValue = targetFraction,
+        animationSpec = tween(
+            Motion.DurationMedium,
+            easing = Motion.EasingEmphasizedDecelerate
+        ),
+        label = "context_usage_fraction"
+    )
     val color = when {
         fraction >= 0.9f -> MaterialTheme.colorScheme.error
         fraction >= 0.7f -> MaterialTheme.colorScheme.tertiary

@@ -4,16 +4,6 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
-internal fun globalActionName(action: String?): String = when (action) {
-            "back" -> "返回"
-            "home" -> "首页"
-            "recents" -> "最近任务"
-            "notifications" -> "通知栏"
-            "quick_settings" -> "快捷设置"
-            "lock" -> "锁屏"
-            else -> action.orEmpty()
-        }
-
 internal fun paramsObject(
             properties: Map<String, JsonObject>,
             required: List<String>

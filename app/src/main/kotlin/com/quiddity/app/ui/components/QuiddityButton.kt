@@ -90,26 +90,3 @@ fun QuidditySecondaryButton(
     }
 }
 
-/**
- * 危险按钮：红色描边。
- */
-@Composable
-fun QuiddityDangerButton(
-    text: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    enabled: Boolean = true
-) {
-    OutlinedButton(
-        onClick = onClick,
-        modifier = modifier,
-        enabled = enabled,
-        shape = RoundedCornerShape(12.dp),
-        colors = ButtonDefaults.outlinedButtonColors(
-            contentColor = MaterialTheme.colorScheme.error
-        ),
-        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp)
-    ) {
-        Text(text = text, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
-    }
-}

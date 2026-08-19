@@ -360,12 +360,6 @@ class ConversationRepository(
         }
     }
 
-    suspend fun togglePin(convId: String) {
-        getConversation(convId)?.let {
-            updateConversation(it.copy(pinned = !it.pinned))
-        }
-    }
-
     /** 用于数据导出。 */
     suspend fun exportAllConversations(): List<Conversation> = store.conversations.value
 

@@ -45,8 +45,6 @@ internal class ReplyOverlayView(
         fun onUserInteraction()
         /** 输入气泡发送。 */
         fun onInputSubmit(text: String)
-        /** 输入气泡取消（返回键 / 点击外部）。 */
-        fun onInputCancel()
         /** 输入模式状态变化（active=false 表示已关闭）。 */
         fun onInputModeChanged(active: Boolean)
         /** 气泡展示完成（自动回收）。 */

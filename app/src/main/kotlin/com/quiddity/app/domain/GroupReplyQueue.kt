@@ -64,8 +64,6 @@ class GroupReplyQueue(
     }
 
     /** 当前正在回复的成员；队空时 null。 */
-    fun replyingMember(): String? = items.firstOrNull()?.memberId
-
     /** 取出正在回复的成员（回复完成后调用），排队的顺位递补。 */
     fun dequeue(): Item? = if (items.isEmpty()) null else items.removeFirst()
 

@@ -23,7 +23,6 @@ class AgentWorkflowControllerTest {
         val c = AgentWorkflowController()
         assertNull(c.findDuplicate("read_screen", obj("maxChars" to "100")))
         assertNull(c.findDuplicate("list_apps", JsonObject(emptyMap())))
-        assertEquals(0, c.executedCount())
     }
 
     @Test
@@ -79,11 +78,4 @@ class AgentWorkflowControllerTest {
         assertFalse(c.shouldRetry("read_file", args, ok = false, retryable = true))
     }
 
-    @Test
-    fun executedCount_tracksRealExecutions() {
-        val c = AgentWorkflowController()
-        c.record("list_apps", JsonObject(emptyMap()), ok = true, result = "ok")
-        c.record("list_apps", JsonObject(emptyMap()), ok = true, result = "ok")
-        assertEquals(2, c.executedCount())
-    }
 }

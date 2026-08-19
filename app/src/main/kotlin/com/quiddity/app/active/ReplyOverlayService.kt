@@ -68,10 +68,9 @@ class ReplyOverlayService : Service(), ReplyOverlayView.Listener {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    /** 渲染当前聚合状态：工具动作 > 回复气泡 > 状态文本。 */
+    /** 渲染当前聚合状态：回复气泡 > 状态文本（工具动作由 [showToolBubble] 独立渲染）。 */
     fun render(
         count: Int,
-        toolAction: String?,
         statusText: String,
         bubble: ReplyOverlayStateMachine.ReplyBubble?
     ) {
@@ -79,11 +78,6 @@ class ReplyOverlayService : Service(), ReplyOverlayView.Listener {
         if (inputModeActive) return
         overlayView.setBadgeCount(count)
         when {
-            toolAction != null -> {
-                cancelBubbleTimer()
-                overlayView.showStatusText(toolAction)
-                layoutWindow()
-            }
             bubble != null -> {
                 overlayView.showReplyBubble(bubble.text)
                 layoutWindow()
@@ -222,10 +216,6 @@ class ReplyOverlayService : Service(), ReplyOverlayView.Listener {
 
     override fun onInputSubmit(text: String) {
         ReplyOverlayController.onOverlayInputSent(text)
-    }
-
-    override fun onInputCancel() {
-        ReplyOverlayController.onInputModeClosed()
     }
 
     override fun onInputModeChanged(active: Boolean) {

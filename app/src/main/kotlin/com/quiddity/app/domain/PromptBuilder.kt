@@ -947,28 +947,6 @@ $persona
         "3. 只说你会说的话，不替其他成员或用户发言。"
 
     /**
-     * 构造"该不该我接话"的判断指令（4.2）：成员人设 + 群聊转述 + 输出约束。
-     *
-     * 返回值约定（5.2）：严格等于独立数字 0 → 不接话；包含任何其他内容 → 该内容即要说的消息。
-     * 调用方用 [QuiddityConstants.GROUP_DECIDE_MAX_TOKENS] 限制输出。
-     */
-    fun buildGroupDecisionPrompt(member: Conversation, transcript: String): String {
-        val persona = buildPersonaSnippet(member).ifBlank { QuiddityConstants.DEFAULT_AI_IDENTITY }
-        return """
-你现在扮演以下人设的 AI 角色：
-$persona
-
-你正在参与一场群聊。请在阅读群聊转述后判断是否该由你自然接话。
-规则：
-1. 若你应当接话：直接输出你想说的内容，以你的身份口吻，贴合人设与群聊上下文，不要任何前缀、解释或引号。
-2. 若你不应接话：严格只输出数字 0（仅一个 0，无任何其它字符）。
-
-【群聊转述】
-$transcript
-""".trim()
-    }
-
-    /**
      * 构造群聊小本本压缩的 user 消息（6.7）：待压缩的群聊转述。
      * system 提示词为 [GROUP_MEMORY_SYSTEM_PROMPT]。
      */

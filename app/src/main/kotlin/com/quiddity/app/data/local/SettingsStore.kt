@@ -230,10 +230,6 @@ class SettingsStore(private val context: Context) {
     }
 
     /** 预加载设置数据，确保首次写入前磁盘数据已加载到内存。 */
-    suspend fun ensureLoaded() {
-        context.appSettingsDataStore.data.first()
-    }
-
     private fun parseCatalog(jsonStr: String?): List<ApiCatalogEntry> {
         if (jsonStr.isNullOrEmpty()) return emptyList()
         return runCatching {

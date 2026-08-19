@@ -392,13 +392,6 @@ class SettingsViewModel(
         }
     }
 
-    /** 测试 API 连接（封装 Result，UI 层只关心成功 / 失败）。 */
-    suspend fun testApiConnection(
-        apiUrl: String,
-        apiKey: String,
-        model: String
-    ): Result<String> = apiCatalogManager.testConnection(apiUrl, apiKey, model)
-
     // ===== 数据导出 / 导入 =====
     /**
      * 全量导出（schema v2，2.0.0 数据契约）。

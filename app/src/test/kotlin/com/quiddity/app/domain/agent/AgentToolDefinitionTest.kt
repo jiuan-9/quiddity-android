@@ -1,12 +1,8 @@
 package com.quiddity.app.domain.agent
 
-import com.quiddity.app.data.model.ConversationType
-import com.quiddity.app.data.repo.ChatRepository
-import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /*
@@ -74,48 +70,6 @@ class AgentToolDefinitionTest {
             assertEquals("function", parsed?.get("type")?.let { (it as? JsonPrimitive)?.content }, tool.name)
         }
         java.io.File("build/tool-defs.json").writeText(sb.toString())
-    }
-
-    @Test
-    fun dispatchAgentToolIfNeeded_soloConversation_returnsNull() {
-        val result = runBlocking {
-            ChatRepository.dispatchAgentToolIfNeeded(
-                type = ConversationType.SOLO,
-                name = "list_apps",
-                args = "{}",
-                registry = registry,
-                ctx = testContext()
-            )
-        }
-        assertNull(result)
-    }
-
-    @Test
-    fun dispatchAgentToolIfNeeded_agentWithoutRegistry_returnsNull() {
-        val result = runBlocking {
-            ChatRepository.dispatchAgentToolIfNeeded(
-                type = ConversationType.AGENT,
-                name = "list_apps",
-                args = "{}",
-                registry = null,
-                ctx = testContext()
-            )
-        }
-        assertNull(result)
-    }
-
-    @Test
-    fun dispatchAgentToolIfNeeded_agentWithRegistry_dispatchesUnknownTool() {
-        val result = runBlocking {
-            ChatRepository.dispatchAgentToolIfNeeded(
-                type = ConversationType.AGENT,
-                name = "no_such_tool",
-                args = "{}",
-                registry = registry,
-                ctx = testContext()
-            )
-        }
-        assertTrue(result.orEmpty().contains("不存在"))
     }
 
     private fun testContext(): AgentContext = AgentContext(

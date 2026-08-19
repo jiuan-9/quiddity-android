@@ -221,10 +221,6 @@ class SettingsRepository(private val store: SettingsStore) {
         it.copy(proactiveMessageEnabled = enabled)
     }
 
-    suspend fun setProactiveMessageLastResetDate(date: String) = update {
-        it.copy(proactiveMessageLastResetDate = date)
-    }
-
     suspend fun setGroupTutorialSeen(seen: Boolean) = update {
         it.copy(groupTutorialSeen = seen)
     }

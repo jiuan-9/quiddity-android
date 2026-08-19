@@ -195,14 +195,6 @@ class AgentRoundEffects {
     /** 本轮更改项（撤回时提示，不可删除）。 */
     fun changedItems(): List<String> = synchronized(lock) { changed.distinct().toList() }
 
-    /** 合并另一追踪器的结果（多轮工具循环共享时预留）。 */
-    fun mergeFrom(other: AgentRoundEffects) {
-        synchronized(lock) {
-            created += other.createdFiles()
-            changed += other.changedItems()
-        }
-    }
-
     private fun argString(args: JsonObject, key: String): String? =
         (args[key] as? JsonPrimitive)?.content
 }
@@ -218,4 +210,3 @@ data class AgentToolCallRequest(
 /**
  * Agent 工具注册表：名称 → 工具定义，负责按名称分派并施加安全门控。
  */
-

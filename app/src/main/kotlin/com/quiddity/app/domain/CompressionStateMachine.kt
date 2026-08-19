@@ -17,12 +17,6 @@ internal object CompressionStateMachine {
     }
 
     /**
-     * 压缩结果映射：成功 -> Success，失败 -> Failed。
-     */
-    fun resultState(success: Boolean): CompressionState =
-        if (success) CompressionState.Success else CompressionState.Failed
-
-    /**
      * 消费瞬态结果：Success / Failed -> Idle，其余保持不变。
      */
     fun consume(state: CompressionState): CompressionState =

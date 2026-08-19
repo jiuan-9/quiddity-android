@@ -199,7 +199,7 @@ object ReplyOverlayController {
                 showingBubble = true
                 lastBubbleText = bubble.text
                 lastBubbleConversation = bubble.conversationId to bubble.conversationType
-                svc.render(count, null, status, bubble)
+                svc.render(count, status, bubble)
                 svc.showBubble(
                     bubble = bubble,
                     onDismissed = {
@@ -212,7 +212,7 @@ object ReplyOverlayController {
         // 无气泡可展示：仅头像 + 状态文本（无会话进行时保持空状态）
         showingBubble = false
         lastBubbleText = null
-        svc.render(count, null, status, null)
+        svc.render(count, status, null)
     }
 
     /** 气泡展示完成（Service 回调）→ 消费队首并渲染下一条。 */
@@ -276,20 +276,6 @@ object ReplyOverlayController {
     fun renderNow() {
         mainHandler.post { render() }
     }
-
-    /** 点击头像 → 打开应用（头像点击原行为）。 */
-    fun openLastConversation() {
-        val pair = lastBubbleConversation
-        val context = ServiceLocator.applicationContext
-        if (pair == null) {
-            openApp()
-            return
-        }
-        context.startActivity(MainActivity.conversationIntent(context, pair.first, pair.second))
-    }
-
-    /** 仅供测试读取聚合状态。 */
-    fun snapshotForTest(): ReplyOverlayStateMachine = machine
 
     /** 悬浮窗是否应当保持显示（设置开启 && 应用不可见）。Service 自启/重建时调用。 */
     fun keepWindowVisible(): Boolean = ReplyOverlayStateMachine.shouldKeepWindow(

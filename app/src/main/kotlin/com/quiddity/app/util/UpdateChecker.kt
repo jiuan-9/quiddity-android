@@ -1,11 +1,8 @@
 package com.quiddity.app.util
 
 import android.app.DownloadManager
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
-import android.database.Cursor
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -594,84 +591,6 @@ object UpdateChecker {
     }.flowOn(Dispatchers.IO)
 
     /**
-     * 查询当前下载状态。
-     */
-    fun queryDownload(context: Context, downloadId: Long): DownloadProgress? {
-        if (downloadId <= 0) return null
-        val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-        val query = DownloadManager.Query().setFilterById(downloadId)
-        return try {
-            dm.query(query).use { cursor ->
-                if (cursor == null || !cursor.moveToFirst()) return null
-                readProgress(cursor, downloadId)
-            }
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    /**
-     * 监听下载进度的 Flow。
-     *
-     * 实现：注册 DownloadManager.ACTION_DOWNLOAD_COMPLETE 广播 + 每 500ms 主动轮询。
-     * 关闭 Flow 时自动注销广播。
-     */
-    fun observeDownload(context: Context, downloadId: Long): Flow<DownloadProgress> = callbackFlow {
-        if (downloadId <= 0) {
-            close()
-            return@callbackFlow
-        }
-        val appContext = context.applicationContext
-        val dm = appContext.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(ctx: Context?, intent: Intent?) {
-                val id = intent?.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L) ?: -1L
-                if (id == downloadId) {
-                    queryDownload(appContext, downloadId)?.let { trySend(it) }
-                }
-            }
-        }
-        val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            appContext.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            @Suppress("UnspecifiedRegisterReceiverFlag")
-            appContext.registerReceiver(receiver, filter)
-        }
-
-        val thread = Thread {
-            while (!isClosedForSend) {
-                val p = queryDownload(appContext, downloadId)
-                if (p != null) {
-                    trySend(p)
-                    if (p.status == DownloadStatus.SUCCESSFUL ||
-                        p.status == DownloadStatus.FAILED ||
-                        p.status == DownloadStatus.CANCELED
-                    ) {
-                        break
-                    }
-                }
-                try {
-                    Thread.sleep(500)
-                } catch (e: InterruptedException) {
-                    break
-                }
-            }
-        }.also { it.isDaemon = true; it.start() }
-
-        queryDownload(appContext, downloadId)?.let { trySend(it) }
-
-        awaitClose {
-            try {
-                appContext.unregisterReceiver(receiver)
-            } catch (_: Exception) {
-                // 已注销
-            }
-        }
-    }.flowOn(Dispatchers.IO)
-
-    /**
      * 安装包校验结果。
      *
      * - [Ok]：包名与本应用一致，且签名证书一致 → 可安全覆盖安装（数据保留）；
@@ -945,36 +864,6 @@ object UpdateChecker {
         } catch (_: Exception) {
             // 静默失败
         }
-    }
-
-    private fun readProgress(cursor: Cursor, downloadId: Long): DownloadProgress {
-        val statusIdx = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
-        val bytesIdx = cursor.getColumnIndex(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
-        val totalIdx = cursor.getColumnIndex(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
-        val localUriIdx = cursor.getColumnIndex(DownloadManager.COLUMN_LOCAL_URI)
-        val reasonIdx = cursor.getColumnIndex(DownloadManager.COLUMN_REASON)
-
-        val statusCode = if (statusIdx >= 0) cursor.getInt(statusIdx) else DownloadManager.STATUS_FAILED
-        val status = when (statusCode) {
-            DownloadManager.STATUS_PENDING -> DownloadStatus.PENDING
-            DownloadManager.STATUS_RUNNING -> DownloadStatus.RUNNING
-            DownloadManager.STATUS_PAUSED -> DownloadStatus.PAUSED
-            DownloadManager.STATUS_SUCCESSFUL -> DownloadStatus.SUCCESSFUL
-            DownloadManager.STATUS_FAILED -> DownloadStatus.FAILED
-            else -> DownloadStatus.FAILED
-        }
-        val bytes = if (bytesIdx >= 0) cursor.getLong(bytesIdx) else 0L
-        val total = if (totalIdx >= 0) cursor.getLong(totalIdx) else -1L
-        val localUri = if (localUriIdx >= 0) cursor.getString(localUriIdx) else null
-        val reason = if (reasonIdx >= 0) cursor.getString(reasonIdx) ?: "" else ""
-        return DownloadProgress(
-            downloadId = downloadId,
-            status = status,
-            bytesDownloaded = bytes,
-            totalBytes = if (total >= 0) total else 0L,
-            localUri = localUri,
-            reason = reason
-        )
     }
 
     fun compareVersions(a: String, b: String): Int {

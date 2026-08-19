@@ -118,8 +118,6 @@ val LocalQuiddityDarkMode = compositionLocalOf { false }
 
 @Composable
 @ReadOnlyComposable
-fun isQuiddityDarkMode(): Boolean = LocalQuiddityDarkMode.current
-
 // ===== 配色（top-level 避免每次重组重新构造） =====
 
 private val QuiddityLightColors = lightColorScheme(

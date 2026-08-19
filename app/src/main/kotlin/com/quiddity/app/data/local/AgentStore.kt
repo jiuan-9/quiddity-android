@@ -373,8 +373,6 @@ class AgentStore(private val context: Context) {
             return if (next.size > AUDIT_LIMIT) next.takeLast(AUDIT_LIMIT) else next
         }
 
-        fun clearedAudit(): List<AgentAuditEntry> = emptyList()
-
         /** 应用权限管控程度；未知值回退 ASK。 */
         fun applyPermissionControl(
             settings: AgentSettings,
@@ -472,15 +470,6 @@ class AgentStore(private val context: Context) {
         writeMutex.withLock {
             val current = _settings.value
             val next = current.copy(audit = cappedAudit(current.audit, entry))
-            writePrefs(next)
-            _settings.value = next
-        }
-    }
-
-    suspend fun clearAudit() = withContext(Dispatchers.IO) {
-        writeMutex.withLock {
-            val current = _settings.value
-            val next = current.copy(audit = clearedAudit())
             writePrefs(next)
             _settings.value = next
         }

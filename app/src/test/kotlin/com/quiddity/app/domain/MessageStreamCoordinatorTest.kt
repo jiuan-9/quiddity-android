@@ -912,43 +912,6 @@ class MessageStreamCoordinatorTest {
     }
 
     @Test
-    fun `server reasoning ignored and local thinking attaches to first reply`() {
-        val coord = MessageStreamCoordinator(
-            "conv1", "run1", singleMessageTokens = 1000,
-            thinking = "用户想了解代码"
-        )
-        coord.acceptReasoning("用户想要一段代码，")
-        coord.acceptReasoning("先分析需求。")
-        coord.accept("好的，代码是：")
-        coord.accept("println 1。")
-        coord.finalize()
-        val snap = coord.snapshot()
-        assertEquals(1, snap.size, "reasoning 被忽略，不生成独立思考消息")
-        assertEquals("好的，代码是：println 1。", snap.first().content)
-        assertTrue(snap.first().isThinking.not())
-        assertEquals(
-            "用户想了解代码",
-            snap.first().thinking,
-            "本地思考附着在首条回复上"
-        )
-    }
-
-    @Test
-    fun `reasoning streamed word by word is ignored`() {
-        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
-        coord.acceptReasoning("The ")
-        coord.acceptReasoning("user ")
-        coord.acceptReasoning("just ")
-        coord.acceptReasoning("said hi. ")
-        coord.accept("最终回复。")
-        coord.finalize()
-        val snap = coord.snapshot()
-        assertEquals(1, snap.size)
-        assertEquals("最终回复。", snap.first().content)
-        assertTrue(snap.first().thinking.isBlank(), "reasoning 兜底已移除，不再附着到消息")
-    }
-
-    @Test
     fun `appendThinking merges post tool reflection onto next message`() {
         val coord = MessageStreamCoordinator(
             "conv1", "run1", singleMessageTokens = 1000,
@@ -960,38 +923,6 @@ class MessageStreamCoordinatorTest {
         val snap = coord.snapshot()
         assertEquals(1, snap.size)
         assertEquals("pre thinking\npost tool thinking", snap.first().thinking)
-    }
-
-    @Test
-    fun `reasoning only without content produces no message`() {
-        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
-        coord.acceptReasoning("只思考没有回复。")
-        val signals = coord.finalize()
-        val snap = coord.snapshot()
-        assertEquals(0, snap.size, "仅有服务端 reasoning 时不再产生任何消息")
-        assertTrue(signals.none { it is StreamCoordinator.Signal.New })
-    }
-
-    @Test
-    fun `thinking message ids never collide with content ids`() {
-        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
-        coord.acceptReasoning("思考内容。")
-        coord.accept("回复内容。")
-        coord.finalize()
-        val ids = coord.snapshot().map { it.id }
-        assertEquals(ids.size, ids.toSet().size, "思考与回复消息 id 必须互不冲突")
-    }
-
-    @Test
-    fun `reasoning after content started is ignored`() {
-        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
-        coord.accept("正常回复。")
-        coord.acceptReasoning("迟到的思考被忽略。")
-        coord.finalize()
-        val snap = coord.snapshot()
-        assertEquals(1, snap.size)
-        assertEquals("正常回复。", snap.first().content)
-        assertTrue(snap.first().isThinking.not())
     }
 
     // ============================================================

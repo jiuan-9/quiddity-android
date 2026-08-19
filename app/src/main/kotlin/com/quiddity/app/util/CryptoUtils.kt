@@ -221,10 +221,6 @@ object CryptoUtils {
         }
     }
 
-    /** 供测试使用的旧版加密入口（与生产迁移路径对应）。 */
-    internal fun encryptLegacy(plain: String): String =
-        if (plain.isEmpty()) "" else encryptWith(legacyKey, plain)
-
     private fun encryptWith(key: SecretKey, plain: String): String {
         val cipher = Cipher.getInstance(TRANSFORMATION)
         // 关键修复：Android Keystore 的 AES-GCM 密钥禁止调用方提供 IV

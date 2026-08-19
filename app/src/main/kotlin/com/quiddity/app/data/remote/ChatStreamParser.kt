@@ -94,12 +94,6 @@ class ChatStreamParser {
     private val toolCallAccumulators = mutableMapOf<Int, ToolCallAccumulator>()
 
     /**
-     * 解析单行 SSE data。
-     * 返回内容片段；`[DONE]` 返回 null 表示结束；解析失败返回空字符串。
-     */
-    fun parseDelta(dataLine: String): String? = parseChunk(dataLine)?.content
-
-    /**
      * 解析单行 SSE data（内容 + 工具调用增量分片）。
      * `[DONE]` 返回 null 表示结束；解析失败返回空内容分片。
      */

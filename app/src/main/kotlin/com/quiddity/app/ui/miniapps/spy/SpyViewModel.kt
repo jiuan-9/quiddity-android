@@ -95,10 +95,6 @@ class SpyViewModel(
 
     // ============ 配置 ============
 
-    fun addLlmCharacter(character: Character) {
-        reselectLlmFrom(character)
-    }
-
     fun removeLlmCharacter(characterId: String) {
         val setup = _uiState.value.setup
         _uiState.update {
