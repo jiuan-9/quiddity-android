@@ -89,7 +89,12 @@ class ReplyOverlayService : Service(), ReplyOverlayView.Listener {
                 layoutWindow()
             }
             else -> {
-                overlayView.showStatusText(statusText)
+                if (statusText.isBlank()) {
+                    // 无进行中会话 / 无状态文本：隐藏气泡，避免出现空白药丸
+                    overlayView.hideBubble()
+                } else {
+                    overlayView.showStatusText(statusText)
+                }
                 layoutWindow()
             }
         }

@@ -468,9 +468,9 @@ internal class ToolRoundRunner(
                 if (!finalRound.isCompleteReply || isActionOnlyReply(snapshotText)) {
                     // 上限轮后的最终回复为空 / 被截断：同样走自动续写与空回复兜底
                     val recovered = recoverNoToolRound(
-                    api, apiUrl, apiKey, currentRequest, coordinator, conv, onEvent, contentTransform,
-                    thinkingActive, budget.totalRounds, lastResolved, lastError, recordFailure,
-                    finalRound, isActionOnlyReply(snapshotText)
+                        api, apiUrl, apiKey, currentRequest, coordinator, conv, onEvent, contentTransform,
+                        thinkingActive, budget.totalRounds, lastResolved, lastError, recordFailure,
+                        finalRound, isActionOnlyReply(snapshotText)
                     )
                     when (recovered) {
                         is NoToolRoundResult.Completed -> Unit
@@ -629,7 +629,9 @@ internal class ToolRoundRunner(
                 return NoToolRoundResult.WithToolCalls(retried, current)
             }
             round = retried
-            val retriedText = coordinator.snapshot().joinToString("") { it.content }
+            val retriedText = coordinator.snapshot()
+                .filterNot { it.isThinking || it.isNotice }
+                .joinToString("") { it.content }
             if (retried.hasContent && !retried.truncated && !isActionOnlyReply(retriedText)) {
                 return NoToolRoundResult.Completed
             }

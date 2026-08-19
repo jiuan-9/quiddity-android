@@ -40,6 +40,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.quiddity.app.data.model.Character
 import com.quiddity.app.data.model.Conversation
+import com.quiddity.app.data.model.hasPersonaContent
 import com.quiddity.app.di.ServiceLocator
 import com.quiddity.app.ui.chat.ChatViewModel
 import com.quiddity.app.ui.components.AiAvatar
@@ -254,12 +255,8 @@ internal fun characterHasContent(c: com.quiddity.app.data.model.Character): Bool
 }
 
 internal fun conversationHasContent(conv: Conversation): Boolean {
-    val p = conv.persona
-    val u = conv.userPersona
-    return p.name.isNotBlank() || p.desired.isNotBlank() || p.persona.isNotBlank() ||
-        p.character.isNotBlank() || p.appearance.isNotBlank() || p.worldBackground.isNotBlank() ||
-        u.name.isNotBlank() || u.identity.isNotBlank() || u.gender.isNotBlank() ||
-        u.age.isNotBlank() || u.appearance.isNotBlank() || conv.memory.isNotBlank()
+    // 与全站统一口径：AI 人设 / 用户人设 / 记忆任一非空才算有角色卡（场景单独设置不算）
+    return conv.hasPersonaContent
 }
 
 internal fun characterNameMatches(

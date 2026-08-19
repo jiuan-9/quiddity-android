@@ -336,8 +336,12 @@ internal class ReplyOverlayView(
                 listener.onUserInteraction()
                 downRawX = event.rawX
                 downRawY = event.rawY
-                downX = (event.rawX - (v.parent as View).x).toInt()
-                downY = (event.rawY - (v.parent as View).y).toInt()
+                // 根视图的 parent 是 ViewRootImpl（非 View），不能强转；
+                // 子视图的 parent 是悬浮窗根布局（x/y 恒为 0），两者统一按 0 锚定即可
+                val anchorX = (v.parent as? View)?.x ?: 0f
+                val anchorY = (v.parent as? View)?.y ?: 0f
+                downX = (event.rawX - anchorX).toInt()
+                downY = (event.rawY - anchorY).toInt()
                 dragging = false
                 return true
             }

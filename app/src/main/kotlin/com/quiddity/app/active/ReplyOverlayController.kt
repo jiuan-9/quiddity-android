@@ -127,11 +127,20 @@ object ReplyOverlayController {
     fun onServiceStopped(instance: ReplyOverlayService) {
         if (service === instance) service = null
         inputModeActive = false
-        // 窗口停止时消费当前气泡并清空展示记录，避免同一消息下次离屏时重播
-        showingBubble = false
-        lastBubbleText = null
-        lastBubbleConversation = null
-        machine.consumeBubble()
+        if (showingBubble) {
+            // 气泡正在展示时窗口被停止（应用回前台 / 系统回收）：用户已看到该消息，
+            // 消费并清空展示记录，避免同一消息下次离屏时重播
+            showingBubble = false
+            lastBubbleText = null
+            lastBubbleConversation = null
+            machine.consumeBubble()
+        } else {
+            // 气泡尚未展示（应用在前台时回复完成入队）：保留气泡，
+            // 下次离屏时继续展示
+            showingBubble = false
+            lastBubbleText = null
+            lastBubbleConversation = null
+        }
     }
 
     fun dismissWindow() {

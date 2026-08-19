@@ -346,7 +346,7 @@ data class Conversation(
 )
 
 /**
- * 会话是否拥有角色卡内容（AI 人设 / 用户人设 / 场景 / 记忆任一非空）。
+ * 会话是否拥有角色卡内容（AI 人设 / 用户人设 / 记忆任一非空；场景单独设置不构成角色卡）。
  *
  * 无角色卡的会话（新建后未做任何设定）不弹用户名弹窗，也不被群聊 / Agent
  * 角色选择等「按内容检测」的入口拾取。
@@ -358,8 +358,7 @@ val Conversation.hasPersonaContent: Boolean
         return p.name.isNotBlank() || p.desired.isNotBlank() || p.persona.isNotBlank() ||
             p.character.isNotBlank() || p.appearance.isNotBlank() || p.worldBackground.isNotBlank() ||
             u.name.isNotBlank() || u.identity.isNotBlank() || u.gender.isNotBlank() ||
-            u.age.isNotBlank() || u.appearance.isNotBlank() || memory.isNotBlank() ||
-            scene.isNotBlank()
+            u.age.isNotBlank() || u.appearance.isNotBlank() || memory.isNotBlank()
     }
 
 /**
