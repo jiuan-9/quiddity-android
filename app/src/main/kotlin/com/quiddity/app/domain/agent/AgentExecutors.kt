@@ -18,6 +18,7 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import com.quiddity.app.MainActivity
 import com.quiddity.app.R
+import com.quiddity.app.active.NotificationChannels
 import com.quiddity.app.data.model.Conversation
 import com.quiddity.app.data.repo.SettingsRepository
 import com.quiddity.app.domain.ApiCatalogManager
@@ -528,6 +529,12 @@ class AgentExecutors(
     fun notifySelf(title: String?, text: String): String =
         runCatching {
             val channelId = "agent_notify"
+            NotificationChannels.ensure(
+                context,
+                channelId,
+                "Agent 提醒",
+                NotificationManager.IMPORTANCE_DEFAULT
+            )
             val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             val intent = Intent(context, MainActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)

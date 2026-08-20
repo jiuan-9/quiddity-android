@@ -95,6 +95,12 @@ class AgentTaskService : Service() {
     }
 
     private fun ensureNotificationChannel() {
+        NotificationChannels.ensure(
+            this,
+            CHANNEL_ID,
+            "Agent 任务",
+            NotificationManager.IMPORTANCE_LOW
+        )
     }
 
     private fun buildNotification(): Notification =

@@ -91,7 +91,10 @@ open class ChatApi {
     /** 部分新一代模型使用 max_completion_tokens（含思考 token），与 max_tokens 互斥。 */
     private fun ChatCompletionRequest.adaptTokensFor(apiUrl: String): ChatCompletionRequest =
         if (QuiddityConstants.isXiaomiMimoUrl(apiUrl)) {
-            copy(max_tokens = null, max_completion_tokens = max_tokens)
+            // 幂等转换：调用方已按目标协议设置 max_completion_tokens 时直接保留，
+            // 否则把 max_tokens 迁移过去——避免上层预置字段被二次转换清空
+            if (max_completion_tokens != null) copy(max_tokens = null)
+            else copy(max_tokens = null, max_completion_tokens = max_tokens)
         } else {
             this
         }
@@ -99,7 +102,9 @@ open class ChatApi {
     /** 视觉请求同样按服务商切换输出上限字段。 */
     private fun VisionCompletionRequest.adaptTokensFor(apiUrl: String): VisionCompletionRequest =
         if (QuiddityConstants.isXiaomiMimoUrl(apiUrl)) {
-            copy(max_tokens = null, max_completion_tokens = max_tokens)
+            // 幂等转换：与 ChatCompletionRequest 同规则，避免已设字段被二次转换清空
+            if (max_completion_tokens != null) copy(max_tokens = null)
+            else copy(max_tokens = null, max_completion_tokens = max_tokens)
         } else {
             this
         }

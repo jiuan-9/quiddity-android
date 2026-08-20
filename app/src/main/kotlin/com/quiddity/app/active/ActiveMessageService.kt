@@ -115,6 +115,12 @@ class ActiveMessageService : Service() {
     }
 
     private fun ensureNotificationChannel() {
+        NotificationChannels.ensure(
+            this,
+            CHANNEL_ID,
+            "主动消息",
+            NotificationManager.IMPORTANCE_LOW
+        )
     }
 
     private fun buildNotification(): Notification =

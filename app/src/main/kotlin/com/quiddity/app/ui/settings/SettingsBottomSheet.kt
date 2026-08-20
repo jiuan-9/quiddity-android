@@ -631,12 +631,9 @@ fun SettingsBottomSheet(
                                 onCheckedChange = { viewModel.setEnterToSend(it) }
                             )
                         // ===== 延迟设置入口 =====
-                            val delayOverall = settings.typingDelayEnabled || settings.sendDelayEnabled
-                            val delaySubtitle = remember(
-                                delayOverall, settings.typingDelayMsPerChar, settings.sendDelaySeconds
-                            ) {
-                                if (delayOverall) {
-                                    "已启用 · 打字机 ${settings.typingDelayMsPerChar}ms/字 · 发送延迟 ${settings.sendDelaySeconds}s"
+                            val delaySubtitle = remember(settings.sendDelaySeconds) {
+                                if (settings.sendDelayEnabled) {
+                                    "已启用 · 发送延迟 ${settings.sendDelaySeconds}s"
                                 } else {
                                     "已关闭（点击展开启用总开关）"
                                 }
@@ -649,12 +646,8 @@ fun SettingsBottomSheet(
                             )
                         if (showDelayEditor) {
                                 DelaySettingsPanel(
-                                    typingDelayEnabled = settings.typingDelayEnabled,
-                                    typingDelayMsPerChar = settings.typingDelayMsPerChar,
                                     sendDelayEnabled = settings.sendDelayEnabled,
                                     sendDelaySeconds = settings.sendDelaySeconds,
-                                    onTypingDelayEnabledChange = { viewModel.setTypingDelayEnabled(it) },
-                                    onTypingDelayMsPerCharChange = { viewModel.setTypingDelayMsPerChar(it) },
                                     onSendDelayEnabledChange = { viewModel.setSendDelayEnabled(it) },
                                     onSendDelaySecondsChange = { viewModel.setSendDelaySeconds(it) },
                                     modifier = Modifier

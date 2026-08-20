@@ -60,8 +60,6 @@ internal class StreamController(
     private val toolTraces get() = state.toolTraces
     private var lastCompletedAiMessage get() = state.lastCompletedAiMessage; set(value) { state.lastCompletedAiMessage = value }
     private var streamJob get() = state.streamJob; set(value) { state.streamJob = value }
-    private var replyRunStart get() = state.replyRunStart; set(value) { state.replyRunStart = value }
-    private var replyRunChars get() = state.replyRunChars; set(value) { state.replyRunChars = value }
     private var groupStreamJob get() = state.groupStreamJob; set(value) { state.groupStreamJob = value }
     private var sendDelayJob get() = state.sendDelayJob; set(value) { state.sendDelayJob = value }
     private var lastInputEditAt get() = state.lastInputEditAt; set(value) { state.lastInputEditAt = value }
@@ -258,8 +256,6 @@ internal class StreamController(
                 )
             }
             try {
-                replyRunStart = System.currentTimeMillis()
-                replyRunChars = 0
                 val history = _messages.value
                 // 思考由提示词引导模型输出【思考】/【回答】标记，客户端拆分展示；
                 // 本地不再拼接模板思考，关闭思考开关时提示词也不带引导，自然无思考内容。
@@ -403,10 +399,18 @@ internal class StreamController(
                 // 去同判定：新回复与上一版核心内容高度相似（bigram 相似度 ≥ 阈值）时，
                 // 擦掉本次结果并用更强约束重写一次；上限 REGENERATE_MAX_ATTEMPTS。
                 if (similarityReference == null || attempt >= REGENERATE_MAX_ATTEMPTS) break
-                val produced = _messages.value.lastOrNull {
+                // 读同步的完成消息缓存，而非 _messages（flow 异步更新可能仍是旧列表，
+                // 会把刚生成的新内容误判为与上一版相同，导致重说结果被无谓重试/保留）
+                val produced = lastCompletedAiMessage?.takeIf {
                     it.role == Role.ASSISTANT && !it.isNotice && !it.isThinking &&
                         it.content.isNotBlank() && !it.isError
                 }?.content.orEmpty()
+                    .ifBlank {
+                        _messages.value.lastOrNull {
+                            it.role == Role.ASSISTANT && !it.isNotice && !it.isThinking &&
+                                it.content.isNotBlank() && !it.isError
+                        }?.content.orEmpty()
+                    }
                 if (produced.isBlank()) break
                 if (com.quiddity.app.data.repo.replySimilarityRatio(
                         similarityReference, produced
@@ -414,7 +418,8 @@ internal class StreamController(
                 ) {
                     break
                 }
-                hint = buildRegenerateRetryHint(previousReplies ?: similarityReference)
+                // 重试提示以「刚生成的内容」为对照基准：模型必须避开自己刚写的这句
+                hint = buildRegenerateRetryHint(produced)
             }
         }
     }
@@ -527,8 +532,6 @@ internal class StreamController(
         streamJob?.cancel()
         _isGenerating.value = true
         markReplyStarted()
-        replyRunStart = System.currentTimeMillis()
-        replyRunChars = 0
         streamJob = viewModelScope.launch {
             val selfJob = kotlin.coroutines.coroutineContext[kotlinx.coroutines.Job]
             // 防御性：清理可能残留的 streaming 状态
@@ -660,7 +663,7 @@ internal class StreamController(
     internal suspend fun settleInterruptedStreams() = eventProcessor.settleInterruptedStreams()
 
     private companion object {
-        /** 重说去同自动重试上限（首次 + 最多 1 次换表达重写）。 */
-        const val REGENERATE_MAX_ATTEMPTS = 2
+        /** 重说去同自动重试上限（首次 + 最多 2 次换表达重写）。 */
+        const val REGENERATE_MAX_ATTEMPTS = 3
     }
 }

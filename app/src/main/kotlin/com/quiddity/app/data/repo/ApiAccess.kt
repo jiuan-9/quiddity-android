@@ -178,10 +178,26 @@ sealed class ApiAccess {
                 apiKey = apiKey,
                 model = entry.apiModel,
                 providerId = entry.providerId,
-                maxTemperature = entry.maxTemperature
-                    ?: com.quiddity.app.util.QuiddityConstants.MAX_TEMPERATURE
+                maxTemperature = resolveMaxTemperature(entry)
             )
         }
+    }
+
+}
+
+/**
+ * 解析条目支持的最高采样温度：条目显式配置时优先；
+ * 未配置时按接口 URL 推断常见厂商限制（智谱 GLM 仅支持 [0,1]，
+ * 未识别厂商按全局上限 2.0）。重说会在此基础上 +0.3，
+ * 若不按厂商钳制，超限请求会被服务端 400 拒绝。
+ */
+private fun resolveMaxTemperature(entry: ApiCatalogEntry): Double {
+    entry.maxTemperature?.let { return it }
+    val url = entry.apiUrl.lowercase()
+    return when {
+        // 智谱开放平台：temperature 参数限制数值范围 [0,1]
+        url.contains("bigmodel.cn") -> 1.0
+        else -> com.quiddity.app.util.QuiddityConstants.MAX_TEMPERATURE
     }
 }
 

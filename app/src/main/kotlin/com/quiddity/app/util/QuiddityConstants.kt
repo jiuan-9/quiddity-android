@@ -210,14 +210,6 @@ object QuiddityConstants {
     /** 基础级（BASIC）默认上下文记忆轮数（默认压缩轮数同此值）。 */
     const val TIER_BASIC_CONTEXT_LIMIT = 6
 
-    // ===== 延迟输出（打字机效果） =====
-    /** 延迟输出默认开启。 */
-    const val DEFAULT_TYPING_DELAY_ENABLED = true
-    /** 每个字符延迟毫秒数（营造真人打字感）。 */
-    const val DEFAULT_TYPING_DELAY_MS_PER_CHAR = 20
-    const val MIN_TYPING_DELAY_MS_PER_CHAR = 0
-    const val MAX_TYPING_DELAY_MS_PER_CHAR = 200
-
     // ===== 发送延迟 =====
     /** 发送延迟默认开启。 */
     const val DEFAULT_SEND_DELAY_ENABLED = true

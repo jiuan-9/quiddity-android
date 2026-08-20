@@ -15,23 +15,25 @@ Quiddity Android 是 Quiddity 移动端的独立产品（与 Quiddity-Chat、Qui
 
 ### 核心特性
 
-- **11 家 AI 服务商**，60+ 模型可选（基础级 / 进阶级 / 完整级 / 视觉级）
+- **9 家内置 AI 服务商 + 自定义**，42 个内置模型（基础级 / 进阶级 / 完整级）
+- **独立视觉 OCR 名册**：识图不走聊天模型档位，qwen-vl / GLM-4V / 豆包视觉 / DeepSeek-OCR 等单独配置
 - **模型分配方案**：按场景自动匹配最优模型（写作 / 编程 / 翻译 / 视觉…）
 - **多轮对话 + 上下文记忆**：可配置上下文轮数（1-200）
 - **会话压缩（记忆库）**：进阶级模型默认每 20 轮自动压缩一次，节省 token
 - **角色卡 / System Prompt**：完全自定义 AI 身份与人设
 - **Markdown 渲染 + 代码高亮**：内置语法高亮与数学公式
-- **图像识别（Vision 模型）**：上传图片自动调用多模态模型
+- **图像识别（Vision 模型）**：上传图片自动调用多模态模型，纯文本模型可开启 OCR 兜底
+- **AI 回复悬浮窗**：应用切后台时气泡展示回复进度，支持快捷回复与拖动收起
 - **暗黑 / 浅色主题**：跟随系统或手动切换
 - **离线草稿 / 消息搜索 / 会话导出 / 一键分享**
-- **本地加密存储**：API Key 与对话记录使用 EncryptedFile 加密保存
+- **本地存储**：API Key 使用 AES-GCM（Android Keystore）加密保存；对话记录仅存本地 JSON，不上传
 - **继续说 / 延迟发送 / 重新生成 / 撤回消息** 等完备的发送控制
 
 ## 下载
 
 前往官网 [https://quiddity-3by.pages.dev/](https://quiddity-3by.pages.dev/) 下载最新版本。
 
-或直接下载：[`quiddity-1.5.2.apk`](https://github.com/jiuan-9/Quiddity-website/releases/download/v1.5.2/quiddity-1.5.2.apk)
+最新 APK 以官网下载页为准（当前版本 1.6.0）。
 
 ## 系统要求
 
@@ -44,18 +46,18 @@ Quiddity Android 是 Quiddity 移动端的独立产品（与 Quiddity-Chat、Qui
 ## 技术栈
 
 - **语言**：Kotlin 2.0.21
-- **UI**：Jetpack Compose（BOM 2024.10.00，Material 3）
+- **UI**：Jetpack Compose（BOM 2024.10.01，Material 3）
 - **架构**：MVVM + Repository + ServiceLocator 手动依赖注入
 - **数据持久化**：
   - DataStore Preferences（设置项）
-  - EncryptedFile（API Key、敏感数据）
+  - AES-256-GCM（Android Keystore 密钥，API Key 加密）
   - 自有 JSON 持久化（对话与消息；不依赖 Room）
 - **网络**：OkHttp 4.12 + okhttp-sse（流式响应）
 - **图片加载**：Coil 2.7
 - **协程**：kotlinx-coroutines 1.9
 - **序列化**：kotlinx-serialization-json
 - **导航**：Navigation Compose 2.8
-- **构建工具**：Gradle 8.9 + AGP 8.7 + KSP 2.0.21
+- **构建工具**：Gradle 8.9 + AGP 8.6 + KSP 2.0.21
 
 ## 项目结构
 
@@ -109,8 +111,8 @@ Quiddity-android/
 
 ### 环境要求
 
-- **JDK 17**（建议 `D:\开发工具\jdk-17`）
-- **Android SDK 34**（建议 `D:\开发工具\android-sdk`）
+- **JDK 17**（`gradle.properties` 已预设 `org.gradle.java.home=D:\jdk-17`）
+- **Android SDK 34**（`local.properties` 指向 `D:\android-sdk`）
 - **Gradle 8.9**（通过 wrapper 自动下载）
 - **Kotlin 2.0.21**
 - 系统已在 `gradle.properties` 中预设 `org.gradle.java.home`
@@ -191,7 +193,7 @@ keyPassword=xxx
 - **网络**：[`data/remote/`](app/src/main/kotlin/com/quiddity/app/data/remote/)（OkHttp + okhttp-sse）
 - **协议**：兼容 OpenAI Chat Completions API 规范
 - **流式**：通过 SSE（Server-Sent Events）实时接收增量内容
-- **多模型支持**：通过 `ApiCatalogManager` 统一管理 60+ 模型
+- **多模型支持**：通过 `ApiCatalogManager` 统一管理 42 个内置模型与自定义条目
 
 ### 2. 会话压缩（记忆库）
 
@@ -210,10 +212,11 @@ keyPassword=xxx
 
 | 档位 | 默认上下文 | 压缩频率 | 典型模型 |
 |---|---|---|---|
-| 基础级（BASIC） | 6 轮 | 每 6 轮 | GPT-3.5、Qwen Turbo、Doubao Lite |
-| 进阶级（ADVANCED） | 20 轮 | 每 20 轮 | GPT-4、Qwen Max、Kimi、DeepSeek |
-| 完整级（FULL） | 40 轮 | 每 40 轮 | Claude 4、Gemini 2.5 Pro |
-| 视觉级（VISION） | 8 轮 | 每 8 轮 | GPT-4V、Gemini Vision、Qwen-VL |
+| 基础级（BASIC） | 6 轮 | 每 6 轮 | kimi-k2.7-code-highspeed、spark-x、glm-4-flash 等 |
+| 进阶级（ADVANCED） | 20 轮 | 每 20 轮 | glm-5.1、kimi-k2.6、spark-x2、MiniMax-M2.5 等 |
+| 完整级（FULL） | 40 轮 | 每 40 轮 | deepseek-v4-pro、kimi-k3、glm-5.3、hy3、ernie-5.1 等 |
+
+图片识图不占用模型档位：发送图片时当前对话模型自带视觉则直接识图，否则走独立「视觉 OCR」名册兜底（qwen-vl / GLM-4V / 豆包视觉 / DeepSeek-OCR 等）。
 
 ### 5. 小应用框架
 
@@ -241,10 +244,10 @@ Agent 会话支持工具调用闭环：`AgentToolRegistry` 注册 56 个工具�
 
 ```
 /data/data/com.quiddity.app/
-├── files/
-│   ├── api_key.enc              # API Key（EncryptedFile 加密）
-│   ├── settings.json           # 应用设置（明文）
-│   └── ...
+├── files/quiddity-data/
+│   ├── conversations.json      # 会话列表
+│   ├── messages_<会话id>.json  # 各会话消息
+│   └── settings.json           # 应用设置（明文）
 ├── datastore/
 │   └── settings.preferences_pb # DataStore Preferences
 └── ...
@@ -273,7 +276,7 @@ Agent 会话支持工具调用闭环：`AgentToolRegistry` 注册 56 个工具�
 - [x] 1.4.0：小应用框架上线（骰子 / 间谍游戏 / 拆弹 / 棋盘），版本号递增（versionCode 11 → 12）
 - [x] 1.5.0：会话多选 / 导出长图 / 发送延迟 / 群聊点名回复与记忆压缩，版本号递增（versionCode 12 → 13）
 - [x] 1.5.x：联网搜索细化与稳定性修复（versionCode 13 → 14）
-- [x] 1.6.0：Agent 模式（工具调用 / 无障碍读屏 / 主动消息），版本号递增（versionCode 14 → 15）
+- [x] 1.6.0：Agent 模式（工具调用 / 无障碍读屏 / 主动消息 / 56 个工具），版本号递增（versionCode 14 → 16，含修复版）
 - [ ] 1.7.0：插件系统
 - [ ] 2.0.0：端侧模型（llama.cpp / MediaPipe）
 

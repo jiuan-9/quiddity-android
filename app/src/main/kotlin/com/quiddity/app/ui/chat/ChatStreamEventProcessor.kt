@@ -36,9 +36,6 @@ internal class StreamEventProcessor(
     private val conversation get() = state.conversation
     private val toolTraces get() = state.toolTraces
     private var lastCompletedAiMessage get() = state.lastCompletedAiMessage; set(value) { state.lastCompletedAiMessage = value }
-    private var replyRunStart get() = state.replyRunStart; set(value) { state.replyRunStart = value }
-    private var replyRunChars get() = state.replyRunChars; set(value) { state.replyRunChars = value }
-
     /** 本次回复累计内容（仅用于悬浮窗最终气泡，不落库）。 */
     private val replyRunAccumulator = StringBuilder()
 
@@ -55,8 +52,11 @@ internal class StreamEventProcessor(
                 if (!conversationRepository.updateMessage(event.message)) raiseStorageError()
                 // 合并模式（工具轮正文单条化）下，后续轮次正文以 Update 追加到同一条消息，
                 // 缓存最新合并结果——Done 固化工具痕迹时必须以最新 content 为准，
-                // 否则会用旧对象覆盖持久化消息导致正文丢失（只剩工具痕迹）
-                if (event.message.role == Role.ASSISTANT && !event.message.isNotice && !event.message.isThinking) {
+                // 否则会用旧对象覆盖持久化消息导致正文丢失（只剩工具痕迹）。
+                // 空内容 Update 是协调器的删除标记（半截残留消息回收），不得污染缓存。
+                if (event.message.role == Role.ASSISTANT && !event.message.isNotice &&
+                    !event.message.isThinking && event.message.content.isNotBlank()
+                ) {
                     lastCompletedAiMessage = event.message
                     // 实时段边界：流式过程中工具痕迹立即穿插在正文段间（不依赖 flow 延迟）
                     _activeSegmentEnds.value = event.message.toolSegmentEnds
@@ -75,30 +75,9 @@ internal class StreamEventProcessor(
                 // 缓存本次流式最后一条完成消息：Done 事件固化工具痕迹时，
                 // _messages 的 flow 更新可能有异步延迟，直接取不到刚完成的消息
                 lastCompletedAiMessage = target
-                // 1.5.0 延迟输出：加载动画时长 = 累计回复字数 × 每字毫秒数。
-                // 流式文字自然显示（MessageBubble 不再逐字停顿），消息保持
-                // streaming 状态直到该时长结束（气泡光标 / 群聊头像三点不提前停止）。
-                // 思考消息不计入打字延迟（思考单独一条消息，不应拖慢回复动画）
-                if (!target.isThinking) {
-                    replyRunChars += target.content.length
-                }
-                val settings = settingsRepository.currentSnapshot()
-                if (settings.typingDelayEnabled && settings.typingDelayMsPerChar > 0 &&
-                    replyRunStart > 0 && target.content.isNotEmpty()
-                ) {
-                    val targetDuration = replyRunChars.toLong() * settings.typingDelayMsPerChar
-                    val elapsed = System.currentTimeMillis() - replyRunStart
-                    val remainder = targetDuration - elapsed
-                    if (remainder > 0) {
-                        try {
-                            kotlinx.coroutines.delay(remainder)
-                        } catch (c: kotlinx.coroutines.CancellationException) {
-                            // 停止生成：先把消息落盘为完成态，避免加载光标卡住，再继续取消
-                            if (!conversationRepository.updateMessage(target)) raiseStorageError()
-                            throw c
-                        }
-                    }
-                }
+                // 消息文本流式完毕即落盘为完成态，不再按字数保持 streaming 假状态：
+                // 旧的「打字延迟」保持会让光标在文本已显示完后继续闪烁数秒，
+                // 并阻塞流式消费造成突发渲染（气泡闪动主因）。
                 if (!conversationRepository.updateMessage(target)) raiseStorageError()
                 // AI 消息完成时累加 token 用量
                 settingsController.accumulateTokenUsage(target.tokenCount)

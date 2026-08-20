@@ -181,9 +181,12 @@ internal fun ColumnScope.ChatMessageListArea(
                         }
                         // 当前会话是否启用思考（内部思考任意模型可用，思考期间动画气泡显示"思考中"）
                         val thinkingActive = conversation?.thinkingEnabled == true
-                        // 群聊用头像栏三点表示正在回复，不显示私聊的思考气泡
+                        // 思考气泡只在「本轮回复尚未产出任何 AI 内容」时显示：
+                        // 最后一条消息是 AI 内容（无论 streaming 与否）即视为已在输出，
+                        // 不再随 isStreaming 在每条消息完成瞬间闪入闪出。
                         val showThinking = !isGroupChat && (isGenerating || overlayReplying) &&
-                            (lastMsg == null || !(lastMsg.role == Role.ASSISTANT && lastMsg.isStreaming))
+                            (lastMsg == null || lastMsg.role != Role.ASSISTANT ||
+                                lastMsg.isThinking || lastMsg.isNotice)
                         LazyColumn(
                             state = listState,
                             modifier = Modifier.fillMaxSize(),
@@ -302,8 +305,6 @@ internal fun ColumnScope.ChatMessageListArea(
                                                 } else null,
                                                 bracketGrayEnabled = settings.bracketGrayEnabled,
                                                 markdownEnabled = settings.markdownEnabled,
-                                                typingDelayEnabled = settings.typingDelayEnabled,
-                                                typingDelayMsPerChar = settings.typingDelayMsPerChar,
                                                 isSelected = selectedMessageIds.contains(message.id),
                                                 isHighlighted = highlightMessageId == message.id,
                                                 isWithdrawing = expandedActionId == message.id,

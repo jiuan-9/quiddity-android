@@ -55,6 +55,12 @@ object OverlayReplyBridge {
                     ReplyOverlayController.showTransientStatus("已发送")
                     return@launch
                 }
+                // 该会话已有回复在进行（应用内流式或悬浮窗流式）：不再并发起第二条流，
+                // 否则两条流交替写消息会产生内容交叉 / 重复两条同时出现。
+                if (conversationId in ReplyOverlayController.activeReplies.value) {
+                    ReplyOverlayController.showTransientStatus("正在回复中，请稍候")
+                    return@launch
+                }
                 ReplyOverlayController.startReply(conv.id, type)
                 val history = convRepo.observeMessages(conv.id).value
                 replyAccumulator.setLength(0)
@@ -96,6 +102,14 @@ object OverlayReplyBridge {
             is ChatRepository.Event.UpdateMessage ->
                 convRepo.updateMessage(event.message)
             is ChatRepository.Event.CompleteMessage -> {
+                // 空内容 Complete 是协调器的删除标记（半截残留消息回收）：
+                // 与聊天页事件处理器一致，直接移除该条消息，避免留下空气泡
+                if (event.message.content.isBlank() && !event.message.isNotice &&
+                    !event.message.isThinking
+                ) {
+                    convRepo.deleteMessage(conv.id, event.message.id)
+                    return
+                }
                 convRepo.updateMessage(event.message)
                 replyAccumulator.append(event.message.content)
             }

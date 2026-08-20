@@ -1,5 +1,6 @@
 package com.quiddity.app.domain
 
+import com.quiddity.app.data.model.Message
 import com.quiddity.app.data.model.Role
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -105,6 +106,51 @@ class MessageStreamCoordinatorTest {
             listOf("我好想你。（轻轻抱住你）"),
             coord.snapshot().map { it.content },
             "快照中不应再有独立的悬空动作消息"
+        )
+    }
+
+    @Test
+    fun `streamed half bracket then stream end removes leftover half message`() {
+        // 根因回归：括号跨分片到达（先流式发出半截「（轻轻抱」，再收到闭括号）后流直接结束。
+        // 收尾把括号合并进上一条消息时，必须同步移除已发出的半截流式消息，
+        // 否则界面残留「我好想你。（轻轻抱住你）」+「（轻轻抱」两条 AI 消息（同时说两条）。
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        val emitted = mutableListOf<Message>()
+        fun apply(signals: List<StreamCoordinator.Signal>) {
+            signals.forEach { s ->
+                when (s) {
+                    is StreamCoordinator.Signal.New -> emitted.add(s.message)
+                    is StreamCoordinator.Signal.Update -> {
+                        val idx = emitted.indexOfFirst { it.id == s.message.id }
+                        if (idx >= 0) emitted[idx] = s.message
+                    }
+                    is StreamCoordinator.Signal.Complete -> {
+                        // 事件层语义：空内容 Complete 为删除标记，直接移除该条消息
+                        if (s.message.content.isBlank()) {
+                            emitted.removeAll { it.id == s.message.id }
+                        }
+                    }
+                }
+            }
+        }
+        apply(coord.accept("我好想你。"))
+        apply(coord.accept("（轻轻抱"))
+        assertEquals(
+            listOf("我好想你。", "（轻轻抱"),
+            emitted.map { it.content },
+            "半截括号应先以流式消息存在"
+        )
+        apply(coord.accept("住你）"))
+        apply(coord.finalize())
+        assertEquals(
+            listOf("我好想你。（轻轻抱住你）"),
+            emitted.map { it.content },
+            "收尾合并后不得残留半截括号消息：$emitted"
+        )
+        assertEquals(
+            listOf("我好想你。（轻轻抱住你）"),
+            coord.snapshot().map { it.content },
+            "快照中同样不得残留半截消息"
         )
     }
 
@@ -230,7 +276,13 @@ class MessageStreamCoordinatorTest {
     @Test
     fun `multiple sentences split independently`() {
         val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
-        coord.accept("第一句。第二句！第三句？")
+        val signals = coord.accept("第一句。第二句！第三句？")
+        val news = signals.filterIsInstance<StreamCoordinator.Signal.New>()
+        assertEquals(
+            1,
+            news.size,
+            "同一网络分片不得为下一句新建流式消息（下一条留到后续批次，避免两条同框出现）"
+        )
         val snap = coord.snapshot()
         assertEquals(
             listOf("第一句。", "第二句！第三句？"),
@@ -243,13 +295,12 @@ class MessageStreamCoordinatorTest {
     fun `ascii punctuation also triggers split`() {
         val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
         coord.accept("Hello!How are you?I am fine.")
-        // 末尾单个 '.' 可能是省略号开头，调用 finalize 强制收尾
         coord.finalize()
         val snap = coord.snapshot()
         assertEquals(
-            listOf("Hello!", "How are you?", "I am fine."),
+            listOf("Hello!", "How are you?I am fine."),
             snap.map { it.content },
-            "收尾时剩余句子应按句末标点继续切分，而不是合并成一条"
+            "同批只完成一条，收尾剩余内容作为一条消息完成（不批量弹出多条）"
         )
     }
 
@@ -593,15 +644,15 @@ class MessageStreamCoordinatorTest {
     }
 
     @Test
-    fun `remaining sentences flush on finalize without losing content`() {
+    fun `finalize completes remaining buffer as single message without losing content`() {
         val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
         coord.accept("第一句。第二句！第三句？")
         coord.finalize()
         val snap = coord.snapshot()
         assertEquals(
-            listOf("第一句。", "第二句！", "第三句？"),
+            listOf("第一句。", "第二句！第三句？"),
             snap.map { it.content },
-            "finalize 收尾按句切分，不得丢字、不得把多句合并成一条"
+            "finalize 收尾把剩余内容作为一条消息完成，不丢字、不批量弹出多条"
         )
     }
 
@@ -658,13 +709,16 @@ class MessageStreamCoordinatorTest {
     @Test
     fun `newline separates messages when split enabled`() {
         val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
-        coord.accept("第一行\n第二行\n第三行")
+        // 换行是流式过程中的消息边界：逐行到达时逐行完成；收尾剩余行作为一条消息
+        coord.accept("第一行\n")
+        coord.accept("第二行\n")
+        coord.accept("第三行")
         coord.finalize()
         val snap = coord.snapshot().map { it.content }
         assertEquals(
             listOf("第一行", "第二行", "第三行"),
             snap,
-            "换行是消息边界，应按行切分为多条：$snap"
+            "换行是消息边界，逐行到达时按行切分：$snap"
         )
     }
 

@@ -1,7 +1,6 @@
 package com.quiddity.app.active
 
 import android.app.Activity
-import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
@@ -26,7 +25,6 @@ import com.quiddity.app.R
  *
  * 权限：需要「通知」权限（Android 13+ 运行时申请，App 已声明 POST_NOTIFICATIONS）。
  */
-// ????????? MainActivity attach/detach ???onDestroy ??????????
 @android.annotation.SuppressLint("StaticFieldLeak")
 object OperationNotifyController {
 
@@ -127,7 +125,12 @@ object OperationNotifyController {
                 }
                 return@post
             }
-            ensureChannel(manager)
+            NotificationChannels.ensure(
+                context,
+                CHANNEL_ID,
+                "Agent 行动弹窗",
+                NotificationManager.IMPORTANCE_HIGH
+            )
             // 每一步都是新的通知弹窗：先撤掉上一步，再以新 ID 弹出，触发新的 heads-up
             lastId?.let { runCatching { manager.cancel(it) } }
             val id = NOTIFY_ID_BASE + seq
@@ -165,9 +168,6 @@ object OperationNotifyController {
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-    }
-
-    private fun ensureChannel(manager: NotificationManager) {
     }
 
     private fun notificationManager(): NotificationManager? {

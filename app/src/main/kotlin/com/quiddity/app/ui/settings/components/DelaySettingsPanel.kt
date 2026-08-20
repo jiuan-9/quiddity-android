@@ -57,21 +57,16 @@ import com.quiddity.app.util.QuiddityConstants
  */
 
 
-// 当前规则：母项总开关统一管控两个子项，子项不可单独关闭；左侧色条+缩进标识从属关系。
+// 当前规则：发送延迟独立设置（打字机延迟已移除——流式期间保持 streaming 假状态
+// 会让光标在文本显示完后继续闪烁，造成界面闪动，加载动画改为随流式自然结束）。
 @Composable
 fun DelaySettingsPanel(
-    typingDelayEnabled: Boolean,
-    typingDelayMsPerChar: Int,
     sendDelayEnabled: Boolean,
     sendDelaySeconds: Int,
-    onTypingDelayEnabledChange: (Boolean) -> Unit,
-    onTypingDelayMsPerCharChange: (Int) -> Unit,
     onSendDelayEnabledChange: (Boolean) -> Unit,
     onSendDelaySecondsChange: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val overallEnabled = typingDelayEnabled || sendDelayEnabled
-
     // ===== 三条开发规范（位于文件中间位置） =====
     // 1. 问题修复规范：所有代码问题修复必须采用系统性解决方案，严禁使用临时性补丁或 hack 手段。
     //    修复内容需完全融入现有代码架构，确保代码逻辑的连贯性、可维护性和可扩展性。
@@ -120,104 +115,34 @@ fun DelaySettingsPanel(
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-text = "统一管控加载动画时长与发送延迟，关闭则所有延迟功能停用",
+                            text = "点击发送后等待的秒数，期间继续输入则重置计时",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                         )
                     }
                     QuiddityToggleSwitch(
-                        checked = overallEnabled,
-                        onCheckedChange = { enabled ->
-                            onTypingDelayEnabledChange(enabled)
-                            onSendDelayEnabledChange(enabled)
-                        }
+                        checked = sendDelayEnabled,
+                        onCheckedChange = onSendDelayEnabledChange
                     )
                 }
-
-                // ===== 母/子分隔线 =====
                 Spacer(modifier = Modifier.size(14.dp))
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(1.dp)
-                        .background(
-                            androidx.compose.ui.graphics.Brush.horizontalGradient(
-                                colors = listOf(
-                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
-                                    MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.15f)
-                                )
-                            )
-                        )
+
+                // ===== 发送延迟滑杆 =====
+                DelaySliderRow(
+                    label = "发送延迟",
+                    value = sendDelaySeconds.toFloat(),
+                    valueRange = QuiddityConstants.MIN_SEND_DELAY_SECONDS.toFloat()..
+                        QuiddityConstants.MAX_SEND_DELAY_SECONDS.toFloat(),
+                    steps = QuiddityConstants.MAX_SEND_DELAY_SECONDS -
+                        QuiddityConstants.MIN_SEND_DELAY_SECONDS - 1,
+                    enabled = sendDelayEnabled,
+                    explanation = "点击发送后，应用等待的秒数。期间若你继续输入，" +
+                        "计时会重置，直到你停止输入才真正发出请求。" +
+                        "这样能避免连续输入时发出多个请求，节省 Token 消耗。" +
+                        "设为 0 秒即关闭本功能。",
+                    valueFormatter = { "${it}s" },
+                    onCommit = { onSendDelaySecondsChange(it) }
                 )
-                Spacer(modifier = Modifier.size(14.dp))
-
-                // ===== 子设置项容器：左侧色条 + 水平缩进 =====
-                Row(
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .width(4.dp)
-                            .height(220.dp),
-                        verticalArrangement = Arrangement.spacedBy(0.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(4.dp)
-                                .background(
-                                    MaterialTheme.colorScheme.primary,
-                                    RoundedCornerShape(2.dp)
-                                )
-                        )
-                        Box(
-                            modifier = Modifier
-                                .width(4.dp)
-                                .weight(1f)
-                                .background(
-                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
-                                    RoundedCornerShape(2.dp)
-                                )
-                        )
-                    }
-                    Spacer(modifier = Modifier.size(14.dp))
-
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        // ===== 子项 1：延迟输出 =====
-                        DelaySliderRow(
-                            label = "延迟输出（加载动画）",
-                            value = typingDelayMsPerChar.toFloat(),
-                            valueRange = QuiddityConstants.MIN_TYPING_DELAY_MS_PER_CHAR.toFloat()..
-                                QuiddityConstants.MAX_TYPING_DELAY_MS_PER_CHAR.toFloat(),
-                            steps = QuiddityConstants.MAX_TYPING_DELAY_MS_PER_CHAR - 1,
-                            enabled = overallEnabled,
-                            explanation = "按 AI 回复字数决定加载动画时长（约 字数 × 每字毫秒数）。" +
-                                "流式输出本身不受影响；网络快时加载动画也不会提前结束。" +
-                                "设为 0 则关闭，加载动画随流式自然结束。",
-                            valueFormatter = { "${it}ms" },
-                            onCommit = { onTypingDelayMsPerCharChange(it) }
-                        )
-
-                        // ===== 子项 2：发送延迟 =====
-                        DelaySliderRow(
-                            label = "发送延迟",
-                            value = sendDelaySeconds.toFloat(),
-                            valueRange = QuiddityConstants.MIN_SEND_DELAY_SECONDS.toFloat()..
-                                QuiddityConstants.MAX_SEND_DELAY_SECONDS.toFloat(),
-                            steps = QuiddityConstants.MAX_SEND_DELAY_SECONDS -
-                                QuiddityConstants.MIN_SEND_DELAY_SECONDS - 1,
-                            enabled = overallEnabled,
-                            explanation = "点击发送后，应用等待的秒数。期间若你继续输入，" +
-                                "计时会重置，直到你停止输入才真正发出请求。" +
-                                "这样能避免连续输入时发出多个请求，节省 Token 消耗。" +
-                                "设为 0 秒即关闭本功能。",
-                            valueFormatter = { "${it}s" },
-                            onCommit = { onSendDelaySecondsChange(it) }
-                        )
-                    }
-                }
             }
         }
     }

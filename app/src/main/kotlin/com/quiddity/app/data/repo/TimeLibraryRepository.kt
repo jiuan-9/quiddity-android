@@ -9,6 +9,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.quiddity.app.R
 import com.quiddity.app.active.AlarmScheduler
+import com.quiddity.app.active.NotificationChannels
 import com.quiddity.app.data.model.Conversation
 import com.quiddity.app.data.model.ConversationType
 import com.quiddity.app.data.model.Message
@@ -434,6 +435,12 @@ class TimeLibraryRepository(
     private fun postSentNotification(conv: Conversation, content: String) {
         try {
             val channelId = "active_message_sent"
+            NotificationChannels.ensure(
+                context,
+                channelId,
+                "主动消息",
+                NotificationManager.IMPORTANCE_DEFAULT
+            )
             val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             val aiName = conv.persona.name.ifBlank { conv.title }
             val intent = com.quiddity.app.MainActivity.conversationIntent(context, conv.id, conv.type)

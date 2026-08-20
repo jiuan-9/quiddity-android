@@ -178,19 +178,6 @@ class SettingsRepository(private val store: SettingsStore) {
         it.copy(listWallpaperDarken = value.coerceIn(0f, 1f))
     }
 
-    suspend fun setTypingDelayEnabled(enabled: Boolean) = update {
-        it.copy(typingDelayEnabled = enabled)
-    }
-
-    suspend fun setTypingDelayMsPerChar(value: Int) = update {
-        it.copy(
-            typingDelayMsPerChar = value.coerceIn(
-                com.quiddity.app.util.QuiddityConstants.MIN_TYPING_DELAY_MS_PER_CHAR,
-                com.quiddity.app.util.QuiddityConstants.MAX_TYPING_DELAY_MS_PER_CHAR
-            )
-        )
-    }
-
     suspend fun setSendDelayEnabled(enabled: Boolean) = update {
         it.copy(sendDelayEnabled = enabled)
     }

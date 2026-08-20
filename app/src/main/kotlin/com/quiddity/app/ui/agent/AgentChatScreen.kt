@@ -618,10 +618,13 @@ fun AgentChatScreen(
                                 )
                             }
                         }
-                        // 生成中且尚无流式内容时，底部显示打字指示（紧贴输入栏）
+                        // 生成中且本轮尚未产出任何 AI 内容时，底部显示打字指示（紧贴输入栏）。
+                        // 最后一条消息是 AI 内容即视为已在输出，不再随 isStreaming
+                        // 在每条消息完成瞬间闪入闪出。
                         val lastMsg = messages.lastOrNull { !it.isNotice }
                         val showTyping = isGenerating &&
-                            (lastMsg == null || !(lastMsg.role == Role.ASSISTANT && lastMsg.isStreaming))
+                            (lastMsg == null || lastMsg.role != Role.ASSISTANT ||
+                                lastMsg.isThinking || lastMsg.isNotice)
                         item(key = "agent_typing", contentType = { "typing" }) {
                             Column(modifier = Modifier.fillMaxWidth()) {
                                 AnimatedVisibility(

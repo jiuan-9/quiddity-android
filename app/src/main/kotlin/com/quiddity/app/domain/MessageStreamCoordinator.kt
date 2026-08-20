@@ -312,10 +312,11 @@ class MessageStreamCoordinator(
             break
         }
 
-        // 单条更新（当前 buffer 内容）：buffer 为空白时不发出（避免空消息/纯空白气泡）
-        // 本批即使已发出完成消息，剩余内容也立即以新气泡流式显示：
-        // 多句同批到达时下一句会立刻开始流式输入，而不是等收尾被合并成一条
-        if (buffer.isNotBlank() &&
+        // 单条更新（当前 buffer 内容）：buffer 为空白时不发出（避免空消息/纯空白气泡）。
+        // 本批已发出完成消息时不再发流式 New：同一网络分片只完成一条消息，
+        // 下一句等下一个 delta 到达（或 finalize 收尾）再开始，保证同一时刻
+        // 只有一条消息处于流式输入中——避免「两条同时出现 + 多光标闪烁」。
+        if (buffer.isNotBlank() && signals.none { it is StreamCoordinator.Signal.Complete } &&
             (mergeWithPrevious || pendingBrackets.isEmpty()) &&
             !(!mergeWithPrevious && isDuplicateOfLast(buffer.toString())) &&
             // 独立的「0」结束标记不流式发出（收尾会丢弃；提前发出会留下半截孤儿消息）
@@ -455,6 +456,17 @@ class MessageStreamCoordinator(
                     )
                     completed[lastIdx] = merged
                     signals += StreamCoordinator.Signal.Update(merged)
+                    // 半截括号曾以流式消息发出（id 已登记）时，必须同步移除该残留消息：
+                    // 否则界面会留下「完整消息 + 半截括号」两条 AI 消息（同时说两条）。
+                    // 空内容 Complete 由事件层识别为删除标记，直接移除该条消息。
+                    val halfId = buildMessageFromContentAt(
+                        firstReservedIndex, trailing, streaming = false
+                    ).id
+                    if (halfId in knownIds) {
+                        val blank = merged.copy(id = halfId, content = "")
+                        signals += StreamCoordinator.Signal.Update(blank)
+                        signals += StreamCoordinator.Signal.Complete(blank)
+                    }
                 }
                 else -> {
                     // 整条回复只有括号段：用首个预留索引产出最终消息。
@@ -494,18 +506,9 @@ class MessageStreamCoordinator(
         buffer.setLength(0)
         buffer.append(cleaned)
         if (buffer.isBlank()) return signals
-        // 切分开关开启：收尾时把剩余 buffer 按句子继续切分为多条消息，
-        // 修复「多消息切分」在整段多句同批到达时被合并成一条的问题
-        if (splitEnabled && !mergeWithPrevious) {
-            while (true) {
-                val seg = findNextCompleteSegment(buffer) ?: break
-                consumeFromBuffer(seg.consumeEnd)
-                if (seg.emit && seg.text.isNotBlank()) {
-                    emitCompleted(signals, seg.text)
-                }
-            }
-            if (buffer.isBlank()) return signals
-        }
+        // 收尾不再按句子批量切分：剩余 buffer 作为当前消息的最终内容一次性完成。
+        // 多句在同批到达时逐句切分发生在流式 accept 阶段（每个 delta 只完成一条），
+        // 收尾批量切分会把整段尾巴同时弹出（两条消息同框出现）。
         val finalMsg = buildMessage(streaming = false)
         // 收尾残留若与最后一条已发消息近重复（模型复述）：
         // - 尚未以流式消息发出（id 未登记）→ 直接丢弃，不产生任何消息；

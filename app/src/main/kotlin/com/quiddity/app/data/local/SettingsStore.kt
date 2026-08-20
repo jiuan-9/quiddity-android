@@ -102,8 +102,6 @@ class SettingsStore(private val context: Context) {
         val MARKDOWN_ENABLED = booleanPreferencesKey("markdown_enabled")
         val LIST_WALLPAPER_URI = stringPreferencesKey("list_wallpaper_uri")
         val LIST_WALLPAPER_DARKEN = floatPreferencesKey("list_wallpaper_darken")
-        val TYPING_DELAY_ENABLED = booleanPreferencesKey("typing_delay_enabled")
-        val TYPING_DELAY_MS_PER_CHAR = intPreferencesKey("typing_delay_ms_per_char")
         val SEND_DELAY_ENABLED = booleanPreferencesKey("send_delay_enabled")
         val SEND_DELAY_SECONDS = intPreferencesKey("send_delay_seconds")
         val FOLLOW_SYSTEM_FONT = booleanPreferencesKey("follow_system_font")
@@ -140,8 +138,6 @@ class SettingsStore(private val context: Context) {
                 markdownEnabled = this[Keys.MARKDOWN_ENABLED] ?: d.markdownEnabled,
                 listWallpaperUri = this[Keys.LIST_WALLPAPER_URI] ?: d.listWallpaperUri,
                 listWallpaperDarken = this[Keys.LIST_WALLPAPER_DARKEN] ?: d.listWallpaperDarken,
-                typingDelayEnabled = this[Keys.TYPING_DELAY_ENABLED] ?: d.typingDelayEnabled,
-                typingDelayMsPerChar = this[Keys.TYPING_DELAY_MS_PER_CHAR] ?: d.typingDelayMsPerChar,
                 sendDelayEnabled = this[Keys.SEND_DELAY_ENABLED] ?: d.sendDelayEnabled,
                 sendDelaySeconds = this[Keys.SEND_DELAY_SECONDS] ?: d.sendDelaySeconds,
                 followSystemFont = this[Keys.FOLLOW_SYSTEM_FONT] ?: d.followSystemFont,
@@ -206,8 +202,6 @@ class SettingsStore(private val context: Context) {
                 prefs[Keys.MARKDOWN_ENABLED] = next.markdownEnabled
                 next.listWallpaperUri?.let { prefs[Keys.LIST_WALLPAPER_URI] = it } ?: prefs.remove(Keys.LIST_WALLPAPER_URI)
                 prefs[Keys.LIST_WALLPAPER_DARKEN] = next.listWallpaperDarken
-                prefs[Keys.TYPING_DELAY_ENABLED] = next.typingDelayEnabled
-                prefs[Keys.TYPING_DELAY_MS_PER_CHAR] = next.typingDelayMsPerChar
                 prefs[Keys.SEND_DELAY_ENABLED] = next.sendDelayEnabled
                 prefs[Keys.SEND_DELAY_SECONDS] = next.sendDelaySeconds
                 prefs[Keys.FOLLOW_SYSTEM_FONT] = next.followSystemFont

@@ -33,8 +33,6 @@ internal class GroupController(
     private val _groupQueue get() = state._groupQueue
     private val conversation get() = state.conversation
     private val messages get() = state.messages
-    private var replyRunStart get() = state.replyRunStart; set(value) { state.replyRunStart = value }
-    private var replyRunChars get() = state.replyRunChars; set(value) { state.replyRunChars = value }
     private var groupStreamJob get() = state.groupStreamJob; set(value) { state.groupStreamJob = value }
     private var sendDelayJob get() = state.sendDelayJob; set(value) { state.sendDelayJob = value }
     private val groupQueueEngine get() = state.groupQueueEngine
@@ -138,8 +136,6 @@ internal class GroupController(
                 .filter { it.role == Role.ASSISTANT && it.senderId == item.memberId }
                 .map { it.id }
                 .toSet()
-            replyRunStart = System.currentTimeMillis()
-            replyRunChars = 0
             try {
                 chatRepository.streamGroupMemberReply(
                     member = member,

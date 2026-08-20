@@ -542,17 +542,6 @@ data class AppSettings(
      */
     val listWallpaperDarken: Float = QuiddityConstants.DEFAULT_WALLPAPER_DARKEN,
     /**
-     * - true = 根据 AI 输出字数延迟显示，营造真人打字感
-     * - 每个字符延迟 [typingDelayMsPerChar] 毫秒
-     * - 默认 [QuiddityConstants.DEFAULT_TYPING_DELAY_ENABLED]
-     */
-    val typingDelayEnabled: Boolean = QuiddityConstants.DEFAULT_TYPING_DELAY_ENABLED,
-    /**
-     * - 范围 [QuiddityConstants.MIN_TYPING_DELAY_MS_PER_CHAR] - [QuiddityConstants.MAX_TYPING_DELAY_MS_PER_CHAR]
-     * - 默认 [QuiddityConstants.DEFAULT_TYPING_DELAY_MS_PER_CHAR]（20ms）
-     */
-    val typingDelayMsPerChar: Int = QuiddityConstants.DEFAULT_TYPING_DELAY_MS_PER_CHAR,
-    /**
      * - true = 发送消息后等待 [sendDelaySeconds] 秒再发出 API 请求
      * - 若等待期间输入框仍不为空，暂停请求直到输入框清空
      * - 可有效节省 Token 消耗（用户连续输入时合并请求）

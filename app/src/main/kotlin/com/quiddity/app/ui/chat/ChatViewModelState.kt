@@ -166,20 +166,6 @@ internal class ChatViewModelState(
     var streamJob: Job? = null
 
     /**
-     * 1.5.0 延迟输出：加载动画时长 = 回复字数 × 每字毫秒数。
-     * [replyRunStart] 当前回复运行开始时间；[replyRunChars] 累计字数（含切分消息）。
-     */
-
-
-    /**
-     * 1.5.0 延迟输出：加载动画时长 = 回复字数 × 每字毫秒数。
-     * [replyRunStart] 当前回复运行开始时间；[replyRunChars] 累计字数（含切分消息）。
-     */
-    var replyRunStart = 0L
-
-    var replyRunChars = 0
-
-    /**
      * 全量会话的成员名字 / 头像映射（预计算一次，消息气泡直接查表，
      * 避免每条消息渲染时重复扫描仓库并在组合中订阅 conversations 状态）。
      */

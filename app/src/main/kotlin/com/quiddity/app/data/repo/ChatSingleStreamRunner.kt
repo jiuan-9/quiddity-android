@@ -66,10 +66,8 @@ internal class SingleStreamRunner(
         var truncated = false
         val contentLenBefore = coordinator.snapshot().sumOf { it.content.length }
         try {
-            // 打字机延迟已在 UI 层（MessageBubble）按字渲染实现，
-            // 此处不再阻塞流式消费——避免大 delta 时 API 缓冲区堆积、
-            // 网络层超时，以及"逐字渲染无感"的问题（旧实现按 delta 整段延迟，
-            // delta 较大时用户看到的是整段跳出而非逐字浮现）。
+            // 加载动画由流式事件驱动（气泡光标随内容实时出现/停止），
+            // 此处不阻塞流式消费——避免大 delta 时 API 缓冲区堆积与网络层超时。
             val stream = when (request) {
                 is ChatRoundRequest.Completions -> api.streamChat(apiUrl, apiKey, request.request)
                 is ChatRoundRequest.Responses -> api.streamResponses(apiUrl, apiKey, request.request)

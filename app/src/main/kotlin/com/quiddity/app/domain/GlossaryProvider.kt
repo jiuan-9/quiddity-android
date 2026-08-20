@@ -281,13 +281,6 @@ class GlossaryProvider {
             category = "交互功能"
         ),
         Term(
-            name = "延迟输出",
-            pinyin = "yanchishuchu",
-            explanation = "根据 AI 输出字数延迟显示，营造对面是真人打字的感觉。" +
-                "默认每个字延迟 20ms。可在「总设置」中关闭。",
-            category = "交互功能"
-        ),
-        Term(
             name = "发送延迟",
             pinyin = "fasongyanchi",
             explanation = "发送消息后等待 N 秒再发出 API 请求。" +

@@ -5,7 +5,7 @@
 ## 项目位置与环境
 
 - 项目根目录：`D:\Quiddity-android`（所有窗口统一使用此路径）
-- 当前版本：1.6.0（versionCode 15），主页为私聊/群聊双 Tab
+- 当前版本：1.6.0（versionCode 16），主页为私聊/群聊/Agent 三 Tab
 - 构建：`D:\Quiddity-android\gradlew.bat :app:assembleDebug`（调试）/
   `:app:assembleRelease`（发布，自动签名）
 - APK 输出只允许放在标准路径：

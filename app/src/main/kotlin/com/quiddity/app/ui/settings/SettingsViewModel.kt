@@ -161,14 +161,6 @@ class SettingsViewModel(
         )
     }
 
-    fun setTypingDelayEnabled(enabled: Boolean) = viewModelScope.launch {
-        settingsRepository.setTypingDelayEnabled(enabled)
-    }
-
-    fun setTypingDelayMsPerChar(value: Int) = viewModelScope.launch {
-        settingsRepository.setTypingDelayMsPerChar(value)
-    }
-
     fun setSendDelayEnabled(enabled: Boolean) = viewModelScope.launch {
         settingsRepository.setSendDelayEnabled(enabled)
     }

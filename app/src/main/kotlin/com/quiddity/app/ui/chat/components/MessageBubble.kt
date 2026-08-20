@@ -159,9 +159,6 @@ fun MessageBubble(
     // 新消息入场动画：仅对"本会话打开后新到达"的消息播放淡入上浮；
     // 历史消息滚动回来时不重放，避免整屏反复闪动
     animateEntry: Boolean = true,
-    // 打字机效果：UI 层逐字渲染（仅对 streaming AI 消息生效）
-    typingDelayEnabled: Boolean = false,
-    typingDelayMsPerChar: Int = 0,
     // ===== 多选模式 =====
     multiSelectMode: Boolean = false,
     isSelected: Boolean = false,
@@ -198,8 +195,7 @@ fun MessageBubble(
     val grayColor = remember(textColor) { textColor.copy(alpha = 0.55f) }
 
     val avatarUri = if (isUser) userAvatarUri else (senderAvatarUri ?: aiAvatarUri)
-    // ===== 1.5.0 延迟输出定义：不再逐字停顿流式文字，回复内容自然流式显示；
-    // 加载动画时长由 ViewModel 按回复字数 × 每字毫秒数控制（isStreaming 状态持续） =====
+    // ===== 加载动画：流式文字自然显示，光标随 isStreaming 实时出现/停止 =====
     val fullContent = message.content
     val content = fullContent
 
