@@ -136,9 +136,12 @@ class MessageStreamCoordinatorTest {
     fun `trailing zero after newline or punctuation is stripped`() {
         val coord1 = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
         coord1.accept("想你了\n0")
-        assertEquals("想你了", coord1.finalize().mapNotNull {
-            (it as? StreamCoordinator.Signal.Complete)?.message
-        }.firstOrNull()?.content)
+        coord1.finalize()
+        assertEquals(
+            listOf("想你了"),
+            coord1.snapshot().map { it.content },
+            "末尾独立 0 应剥离且不产生孤儿消息"
+        )
 
         val coord2 = MessageStreamCoordinator("conv1", "run2", singleMessageTokens = 1000)
         coord2.accept("想你了。0")
@@ -650,6 +653,33 @@ class MessageStreamCoordinatorTest {
         coord.finalize()
         val snap = coord.snapshot().map { it.content }
         assertEquals(listOf("（轻笑）你好"), snap, "流结束时括号应在前、正文在后合成一条：$snap")
+    }
+
+    @Test
+    fun `newline separates messages when split enabled`() {
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("第一行\n第二行\n第三行")
+        coord.finalize()
+        val snap = coord.snapshot().map { it.content }
+        assertEquals(
+            listOf("第一行", "第二行", "第三行"),
+            snap,
+            "换行是消息边界，应按行切分为多条：$snap"
+        )
+    }
+
+    @Test
+    fun `speaker label newline is not a split point`() {
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("小A：\n你好呀。")
+        coord.finalize()
+        val snap = coord.snapshot().map { it.content }
+        assertEquals(
+            1,
+            snap.size,
+            "说话人冒号后的换行不应被拆成独立消息：$snap"
+        )
+        assertTrue(snap[0].contains("你好呀。"), "内容应完整保留：$snap")
     }
 
     @Test

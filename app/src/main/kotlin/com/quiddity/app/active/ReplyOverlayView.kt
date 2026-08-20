@@ -91,7 +91,8 @@ internal class ReplyOverlayView(
         setTextColor(Color.WHITE)
         textSize = 12f
         setPadding(dp(10), dp(6), dp(10), dp(6))
-        maxWidth = dp(220)
+        maxWidth = dp(280)
+        maxHeight = dp(360)
         minHeight = dp(32)
         gravity = Gravity.CENTER_VERTICAL
         background = GradientDrawable().apply {

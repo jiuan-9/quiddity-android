@@ -6,8 +6,10 @@ import com.quiddity.app.data.model.Message
 import com.quiddity.app.data.remote.ChatCompletionRequest
 import com.quiddity.app.data.remote.DeepSeekResponsesRequest
 import com.quiddity.app.data.remote.ResponsesTool
+import com.quiddity.app.data.remote.ThinkingMode
 import com.quiddity.app.data.repo.ApiAccess
 import com.quiddity.app.data.repo.toChatException
+import com.quiddity.app.util.QuiddityConstants
 
 /*
  * ============================================================================
@@ -88,6 +90,8 @@ object GroupReplyPlanner {
         userName: String? = null,
         webSearchResponsesUrl: String? = null,
         thinkingDepth: String? = null,
+        /** 会话级思考开关（小米 MiMo / 星火 X2 的 thinking.type 适配）。 */
+        thinkingEnabled: Boolean? = null,
         regeneratePreviousReply: String? = null
     ): Result<Plan> {
         val access = ApiAccess.resolve(settings, member)
@@ -120,14 +124,22 @@ object GroupReplyPlanner {
         )
         // 方案六.3：基础级只带最近 N 条；进阶级/完整级可自行用工具检索完整群聊消息。
         val useSearchTool = tier != ApiCatalogManager.ModelTier.BASIC
+        val isXiaomi = access.providerId == QuiddityConstants.XIAOMI_MIMO_PROVIDER_ID ||
+            QuiddityConstants.isXiaomiMimoUrl(access.apiUrl)
         val request = ChatCompletionRequest(
             model = access.model,
             messages = apiMessages,
-            max_tokens = maxTokens,
+            max_tokens = if (isXiaomi) null else maxTokens,
+            max_completion_tokens = if (isXiaomi) maxTokens else null,
             temperature = temperature,
             stream = true,
             reasoning_effort = if (access.model.contains("deepseek", ignoreCase = true)) {
                 com.quiddity.app.util.QuiddityConstants.reasoningEffortForDepth(thinkingDepth)
+            } else {
+                null
+            },
+            thinking = if (isXiaomi && thinkingEnabled != null) {
+                ThinkingMode(if (thinkingEnabled) "enabled" else "disabled")
             } else {
                 null
             },

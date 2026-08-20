@@ -53,6 +53,44 @@ private const val EMPTY_REPLY_NUDGE =
 private const val ACTION_ONLY_REPLY_NUDGE =
     "（你刚才只输出了动作/神态描写，没有说出任何实际台词。请直接说出完整台词，不要重复动作描写。）"
 
+/**
+ * 风控降级请求：把 system 消息替换为基础设定，并关闭工具调用。
+ * 人设/记忆/角色扮演框架是模型审核（high risk / content_filter）的高频触发源，
+ * 降级后仅保留最小身份与对话要求；工具声明也一并移除，避免工具描述触发审核。
+ */
+private fun buildContentSafeRequest(request: ChatRoundRequest, conv: Conversation): ChatRoundRequest {
+    val safeSystem = PromptBuilder.buildContentSafeSystemPrompt(conv)
+    return when (request) {
+        is ChatRoundRequest.Completions -> {
+            val messages = request.request.messages.toMutableList()
+            val systemIndex = messages.indexOfFirst { it.role == "system" }
+            if (systemIndex >= 0) {
+                messages[systemIndex] = messages[systemIndex].copy(content = safeSystem)
+            } else {
+                messages.add(0, ChatMessage(role = "system", content = safeSystem))
+            }
+            ChatRoundRequest.Completions(
+                request.request.copy(
+                    messages = messages,
+                    tools = null,
+                    tool_choice = null
+                ),
+                request.apiUrl
+            )
+        }
+        is ChatRoundRequest.Responses -> {
+            ChatRoundRequest.Responses(
+                request.request.copy(
+                    instructions = safeSystem,
+                    tools = null,
+                    tool_choice = null
+                ),
+                request.apiUrl
+            )
+        }
+    }
+}
+
 internal class ToolRoundRunner(
     private val api: ChatApi,
     private val settingsRepo: SettingsRepository,
@@ -152,6 +190,7 @@ internal class ToolRoundRunner(
                 } else {
                     null
                 },
+                thinkingEnabled = conv.thinkingEnabled,
                 tools = agentTools ?: if (toolStrategyActive) {
                     listOf(
                         PromptBuilder.buildReadMemoryTool(),
@@ -261,6 +300,7 @@ internal class ToolRoundRunner(
                 } else {
                     null
                 },
+                thinkingEnabled = conv.thinkingEnabled,
                 tools = agentTools ?: if (toolStrategyActive) {
                     listOf(
                         PromptBuilder.buildReadMemoryTool(),
@@ -335,12 +375,38 @@ internal class ToolRoundRunner(
                 onFailure = recordFailure
             )
             if (round == null) {
+                // 模型风控拦截（high risk / content_filter / 421）：自动降级重试一次，
+                // 用基础设定替换人设/记忆等可能触发审核的内容，而不是直接报错。
+                // 首次请求（totalRounds==0）才降级；后续轮失败照常走错误处理。
+                if (budget.totalRounds == 0 && isContentFilterRejection(lastError)) {
+                    currentRequest = buildContentSafeRequest(currentRequest, conv)
+                    val degraded = singleStreamRunner.runSingleStream(
+                        api, apiUrl, apiKey, currentRequest, coordinator, onEvent,
+                        contentTransform, thinkingActive, onFailure = recordFailure
+                    )
+                    if (degraded == null || !degraded.hasContent) {
+                        singleStreamRunner.appendFailureMessage(
+                            conv, coordinator, onEvent,
+                            "模型风控拦截了本次回复（内容被判定为高风险）。已自动用基础设定重试仍被拦截，" +
+                                "请调整输入内容或更换模型后重试。"
+                        )
+                        return false
+                    }
+                    round = degraded
+                    lastError = null
+                    onEvent(
+                        ChatRepository.Event.Notice(
+                            "模型风控拦截了原请求，已自动切换为基础设定继续回复"
+                        )
+                    )
+                } else {
                 val recovered = handleToolRoundFailure(
                     api, apiUrl, apiKey, currentRequest, coordinator, conv, onEvent, contentTransform,
                     thinkingActive, budget.totalRounds, lastResolved, lastError, recordFailure
                 )
                 if (!recovered) return false
                 break
+                }
             }
             if (round.reasoningText.isNotBlank()) reasoningText = round.reasoningText
             var calls = round.toolCalls

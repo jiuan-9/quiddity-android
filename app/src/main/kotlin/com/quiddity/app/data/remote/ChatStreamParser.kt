@@ -104,9 +104,11 @@ class ChatStreamParser {
             val chunk = json.decodeFromString(ChatStreamChunk.serializer(), dataLine)
             val choice = chunk.choices.firstOrNull()
             val delta = choice?.delta
+            // 流式 chunk 走 delta；兼容网关整包返回时走 choices[0].message / 顶层 message
+            val message = choice?.message ?: chunk.message
             ParsedChunk(
-                content = delta?.content,
-                reasoning = delta?.reasoning_content,
+                content = delta?.content ?: message?.content,
+                reasoning = delta?.reasoning_content ?: message?.reasoning_content,
                 toolCalls = delta?.tool_calls.orEmpty().map { tc ->
                     ToolCallFragment(
                         index = tc.index,

@@ -85,6 +85,9 @@ internal class StreamController(
     /** 悬浮窗：标记本会话回复开始（应用不可见时由控制器决定是否显示窗口）。 */
     internal fun markReplyStarted() {
         val conv = conversation.value ?: return
+        if (::eventProcessor.isInitialized) {
+            eventProcessor.startReplyRun()
+        }
         com.quiddity.app.active.ReplyOverlayController.startReply(conv.id, conv.type)
     }
 

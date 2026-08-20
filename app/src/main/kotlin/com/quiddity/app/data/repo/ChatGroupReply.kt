@@ -78,6 +78,7 @@ internal class GroupReplyRunner(
             userName = member.userPersona.name.takeIf { it.isNotBlank() },
             webSearchResponsesUrl = toolResultBuilder.resolveWebSearch(settings, member),
             thinkingDepth = if (member.thinkingEnabled) member.thinkingDepth else null,
+            thinkingEnabled = member.thinkingEnabled,
             regeneratePreviousReply = regeneratePreviousReply
         )
         // 模型有时会误输出「名字：」前缀（如回复开头带其他成员名），

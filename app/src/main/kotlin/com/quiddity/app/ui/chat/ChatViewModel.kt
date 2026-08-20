@@ -14,6 +14,7 @@ import com.quiddity.app.domain.ApiCatalogManager
 import com.quiddity.app.domain.VisionOcrService
 import com.quiddity.app.util.QuiddityConstants
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 
@@ -26,6 +27,11 @@ class ChatViewModel(
     private val conversationId: String,
     private val onIdle: ((String) -> Unit)? = null
 ) : ViewModel() {
+
+    /** 全局正在回复的会话（含悬浮窗/后台桥接触发的回复，不局限于本 ViewModel）。 */
+    val overlayActiveReplies: StateFlow<List<String>> =
+        com.quiddity.app.active.ReplyOverlayController.activeReplies
+
     private val state = ChatViewModelState(conversationRepository, viewModelScope, conversationId)
 
     private val personaController = PersonaController(

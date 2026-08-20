@@ -51,6 +51,16 @@ class ReplyOverlayStateMachine {
         active.keys.toList()
     }
 
+    /** 指定会话当前的工具动作文案（null = 该会话无工具动作）。 */
+    fun currentToolActionFor(conversationId: String): String? = synchronized(lock) {
+        toolActions[conversationId]
+    }
+
+    /** 指定会话的回复类型（用于跳转会话）。 */
+    fun conversationTypeOf(conversationId: String): ConversationType? = synchronized(lock) {
+        active[conversationId]?.conversationType
+    }
+
     fun startReply(conversationId: String, type: ConversationType) {
         synchronized(lock) {
             if (!active.containsKey(conversationId)) {

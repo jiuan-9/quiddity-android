@@ -403,6 +403,20 @@ object PromptBuilder {
     }
 
     /**
+     * 风控降级用的基础系统提示词：去掉人设、记忆、角色扮演框架等
+     * 可能触发模型内容审核的内容，仅保留最小身份与对话要求。
+     * 用于请求被模型风控拦截（high risk / content_filter / 421）后的自动重试。
+     */
+    fun buildContentSafeSystemPrompt(conv: Conversation): String {
+        val aiName = conv.persona.name.ifBlank { "AI" }
+        val userName = conv.userPersona.name.ifBlank { "用户" }
+        return buildString {
+            append("你是「").append(aiName).append("」，一位AI助手，对话伙伴是「").append(userName).append("」。")
+            append("请直接、自然地用中文与用户对话，如实回答问题，不编造事实。")
+        }
+    }
+
+    /**
      * 区 A：身份认知 + 人设锚点（开头最高权重区）。
      * 顺序：角色与对话双方 → AI 人设 → 用户信息 → 世界与场景 → 记忆。
      */

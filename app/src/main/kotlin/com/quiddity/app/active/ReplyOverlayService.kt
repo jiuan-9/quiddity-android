@@ -235,7 +235,8 @@ class ReplyOverlayService : Service(), ReplyOverlayView.Listener {
     }
 
     override fun onAvatarClicked() {
-        ReplyOverlayController.openApp()
+        // 点击头像进入正在执行任务的会话（无任务时打开应用首页）
+        ReplyOverlayController.openActiveConversation()
     }
 
     override fun onBubbleClicked() {

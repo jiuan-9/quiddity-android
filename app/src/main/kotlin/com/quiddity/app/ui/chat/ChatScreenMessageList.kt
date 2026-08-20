@@ -55,6 +55,7 @@ internal fun ColumnScope.ChatMessageListArea(
     messages: List<Message>,
     isLoading: Boolean,
     isGenerating: Boolean,
+    overlayReplying: Boolean,
     isGroupChat: Boolean,
     searchActive: Boolean,
     searchQuery: String,
@@ -181,7 +182,7 @@ internal fun ColumnScope.ChatMessageListArea(
                         // 当前会话是否启用思考（内部思考任意模型可用，思考期间动画气泡显示"思考中"）
                         val thinkingActive = conversation?.thinkingEnabled == true
                         // 群聊用头像栏三点表示正在回复，不显示私聊的思考气泡
-                        val showThinking = !isGroupChat && isGenerating &&
+                        val showThinking = !isGroupChat && (isGenerating || overlayReplying) &&
                             (lastMsg == null || !(lastMsg.role == Role.ASSISTANT && lastMsg.isStreaming))
                         LazyColumn(
                             state = listState,

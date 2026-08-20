@@ -1,13 +1,25 @@
 package com.quiddity.app.active
 
+import android.Manifest
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
+import com.quiddity.app.R
 import com.quiddity.app.MainActivity
 import com.quiddity.app.data.model.ConversationType
 import com.quiddity.app.di.ServiceLocator
 import com.quiddity.app.util.CrashLogger
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * 回复悬浮窗全局控制器（进程内单例）。
@@ -30,6 +42,10 @@ object ReplyOverlayController {
 
     private val machine = ReplyOverlayStateMachine()
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    /** 全局「正在回复的会话」状态（驱动聊天页加载提示与悬浮窗展示）。 */
+    private val _activeReplies = MutableStateFlow<List<String>>(emptyList())
+    val activeReplies: StateFlow<List<String>> = _activeReplies.asStateFlow()
 
     @Volatile
     private var service: ReplyOverlayService? = null
@@ -101,6 +117,7 @@ object ReplyOverlayController {
         enabled = value
         if (!value) {
             machine.clearAll()
+            syncActiveReplies()
             showingBubble = false
             inputModeActive = false
             dismissWindow()
@@ -118,12 +135,22 @@ object ReplyOverlayController {
 
     fun startReply(conversationId: String, type: ConversationType) {
         overlayDismissed = false
+        val alreadyActive = machine.activeConversationIds()
         machine.startReply(conversationId, type)
+        syncActiveReplies()
+        // 已有其他会话在回复且应用不在前台：弹出提示，避免用户不知道第二个任务在跑
+        if (alreadyActive.isNotEmpty() && alreadyActive.firstOrNull() != conversationId && !appVisible) {
+            val name = ServiceLocator.conversationRepository.getConversation(conversationId)
+                ?.persona?.name?.takeIf { it.isNotBlank() }
+                ?: "新会话"
+            notifyAnotherConversationReplying(name)
+        }
         refreshWindow()
     }
 
     fun endReply(conversationId: String) {
         machine.endReply(conversationId)
+        syncActiveReplies()
         refreshWindow()
     }
 
@@ -152,11 +179,11 @@ object ReplyOverlayController {
         conversationId: String,
         conversationType: ConversationType
     ) {
-        // 截断集中在这里：悬浮窗只展示一条短气泡，超长内容统一补「…」
-        val display = text.trim().let {
-            if (it.length > MAX_BUBBLE_CHARS) it.take(MAX_BUBBLE_CHARS).trimEnd() + "…" else it
-        }
-        machine.enqueueBubble(display, conversationId, conversationType)
+        // 一刀切：悬浮窗只展示一个会话的内容，其他会话的回复气泡不显示
+        val firstActive = machine.activeConversationIds().firstOrNull()
+        if (firstActive != null && firstActive != conversationId) return
+        // 完整展示回复内容（气泡高度有上限，超出部分在会话内查看）
+        machine.enqueueBubble(text.trim(), conversationId, conversationType)
         refreshWindow()
     }
 
@@ -196,6 +223,7 @@ object ReplyOverlayController {
         mainHandler.post {
             overlayDismissed = true
             machine.clearAll()
+            syncActiveReplies()
             showingBubble = false
             bubbleTimerArmed = false
             lastBubbleText = null
@@ -244,7 +272,8 @@ object ReplyOverlayController {
         val svc = service ?: return
         // 输入模式打开期间不渲染气泡/状态，避免覆盖输入框
         if (inputModeActive) return
-        val tool = machine.currentToolAction()
+        val displayedId = machine.activeConversationIds().firstOrNull()
+        val tool = displayedId?.let { machine.currentToolActionFor(it) }
         // 工具动作刚结束：保持当前工具气泡可见到最小展示时长，避免一闪而过
         if (tool == null && System.currentTimeMillis() < toolHoldUntil) {
             mainHandler.postDelayed(
@@ -298,16 +327,17 @@ object ReplyOverlayController {
         svc.render(count, status, null)
     }
 
-    /** 人性化状态文案：单个会话显示「名字」正在回复，多个会话聚合计数。 */
+    /** 人性化状态文案：只展示第一个会话（悬浮窗一刀切显示一个会话）。 */
     private fun buildStatusText(count: Int): String {
         if (count == 0) return ""
-        if (count == 1) {
-            val id = machine.activeConversationIds().firstOrNull() ?: return "正在回复…"
-            val name = ServiceLocator.conversationRepository.getConversation(id)
-                ?.persona?.name?.takeIf { it.isNotBlank() }
-            return if (name != null) "「$name」正在回复…" else "正在回复…"
-        }
-        return "$count 个对话正在回复…"
+        val id = machine.activeConversationIds().firstOrNull() ?: return "正在回复…"
+        val name = ServiceLocator.conversationRepository.getConversation(id)
+            ?.persona?.name?.takeIf { it.isNotBlank() }
+        return if (name != null) "「$name」正在回复…" else "正在回复…"
+    }
+
+    private fun syncActiveReplies() {
+        _activeReplies.value = machine.activeConversationIds()
     }
 
     /** 气泡展示完成（Service 回调）→ 消费队首并渲染下一条。 */
@@ -328,6 +358,52 @@ object ReplyOverlayController {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
         )
+    }
+
+    /** 点击悬浮窗头像 → 打开正在执行任务的会话（无任务时打开应用首页）。 */
+    fun openActiveConversation() {
+        val id = machine.activeConversationIds().firstOrNull()
+        val context = ServiceLocator.applicationContext
+        if (id == null) {
+            openApp()
+            return
+        }
+        val type = machine.conversationTypeOf(id) ?: ConversationType.SOLO
+        context.startActivity(MainActivity.conversationIntent(context, id, type))
+    }
+
+    /** 第二个会话在后台开始回复：系统通知提示用户。 */
+    private fun notifyAnotherConversationReplying(name: String) {
+        val context = ServiceLocator.applicationContext
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    NOTIFY_CHANNEL_ID,
+                    "回复进行中",
+                    NotificationManager.IMPORTANCE_HIGH
+                )
+            )
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+        val notification = NotificationCompat.Builder(context, NOTIFY_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("另有会话正在回复")
+            .setContentText("「$name」也在回复中，可回到应用查看")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .build()
+        runCatching {
+            NotificationManagerCompat.from(context).notify(NOTIFY_NOTIFICATION_ID, notification)
+        }
     }
 
     /** 点击气泡 → 消费该消息并进入输入模式（有会话上下文时）。 */
@@ -377,7 +453,8 @@ object ReplyOverlayController {
     /** 悬浮窗是否应当保持显示（设置开启 && 应用不可见）。Service 自启/重建时调用。 */
     fun keepWindowVisible(): Boolean = enabled && !appVisible
 
-    private const val MAX_BUBBLE_CHARS = 80
     private const val TRANSIENT_STATUS_MS = 2_500L
     private const val MIN_TOOL_DISPLAY_MS = 800L
+    private const val NOTIFY_CHANNEL_ID = "overlay_second_reply"
+    private const val NOTIFY_NOTIFICATION_ID = 3001
 }

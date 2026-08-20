@@ -317,7 +317,9 @@ class MessageStreamCoordinator(
         // 多句同批到达时下一句会立刻开始流式输入，而不是等收尾被合并成一条
         if (buffer.isNotBlank() &&
             (mergeWithPrevious || pendingBrackets.isEmpty()) &&
-            !(!mergeWithPrevious && isDuplicateOfLast(buffer.toString()))
+            !(!mergeWithPrevious && isDuplicateOfLast(buffer.toString())) &&
+            // 独立的「0」结束标记不流式发出（收尾会丢弃；提前发出会留下半截孤儿消息）
+            !(buffer.toString().trim() == "0" && completed.isNotEmpty())
         ) {
             val current = if (mergeWithPrevious && completed.isNotEmpty()) {
                 // 合并模式：已发段落（completed 内容）+ 当前 buffer 拼装为流式内容。
@@ -773,6 +775,16 @@ class MessageStreamCoordinator(
                 val hasContent = seg.any { c -> !c.isWhitespace() && !isSentenceEnder(c) }
                 return Segment(text = seg, consumeEnd = end, emit = hasContent)
             } else {
+                // 换行是天然的消息边界（多消息切分）；「说话人：」后的换行除外
+                if (ch == '\n') {
+                    var p = i - 1
+                    while (p >= 0 && text[p].isWhitespace()) p--
+                    val speakerPrefix = p >= 0 && (text[p] == '：' || text[p] == ':')
+                    if (!speakerPrefix) {
+                        val seg = text.subSequence(0, i).toString().trim()
+                        return Segment(text = seg, consumeEnd = i + 1, emit = seg.isNotBlank())
+                    }
+                }
                 i++
             }
         }

@@ -57,11 +57,14 @@ sealed class ApiAccess {
      * - [apiUrl]：完整 chat/completions URL（已规范化为非空）。
      * - [apiKey]：解密的明文 API Key（可能为空字符串表示未配置 Key 的服务）。
      * - [model]：当前会话选用的模型 id。
+     * - [providerId]：所属服务商 id（用于按服务商适配认证头 / 请求体等协议差异）。
      */
     data class Resolved(
         val apiUrl: String,
         val apiKey: String,
         val model: String,
+        /** 服务商 id（默认 custom，兼容直接构造的场景）。 */
+        val providerId: String = "custom",
         /**
          * 该模型支持的最高采样温度（来自 [ApiCatalogEntry.maxTemperature]，
          * 未配置时按全局 [com.quiddity.app.util.QuiddityConstants.MAX_TEMPERATURE]）。
@@ -174,6 +177,7 @@ sealed class ApiAccess {
                 apiUrl = entry.apiUrl,
                 apiKey = apiKey,
                 model = entry.apiModel,
+                providerId = entry.providerId,
                 maxTemperature = entry.maxTemperature
                     ?: com.quiddity.app.util.QuiddityConstants.MAX_TEMPERATURE
             )

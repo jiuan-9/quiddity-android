@@ -3,6 +3,7 @@ package com.quiddity.app.active
 import com.quiddity.app.data.model.Conversation
 import com.quiddity.app.data.model.ConversationType
 import com.quiddity.app.data.model.Message
+import com.quiddity.app.data.model.MessageToolTrace
 import com.quiddity.app.data.model.Role
 import com.quiddity.app.data.repo.ChatRepository
 import com.quiddity.app.di.ServiceLocator
@@ -26,6 +27,9 @@ object OverlayReplyBridge {
 
     @Volatile
     private var sending = false
+
+    /** 本次回复累计内容（悬浮窗最终气泡用，不落库）。 */
+    private val replyAccumulator = StringBuilder()
 
     fun send(conversationId: String, type: ConversationType, text: String) {
         val content = text.trim()
@@ -53,6 +57,7 @@ object OverlayReplyBridge {
                 }
                 ReplyOverlayController.startReply(conv.id, type)
                 val history = convRepo.observeMessages(conv.id).value
+                replyAccumulator.setLength(0)
                 ServiceLocator.chatRepository.streamAssistantReply(
                     conv = conv,
                     history = history,
@@ -92,22 +97,15 @@ object OverlayReplyBridge {
                 convRepo.updateMessage(event.message)
             is ChatRepository.Event.CompleteMessage -> {
                 convRepo.updateMessage(event.message)
+                replyAccumulator.append(event.message.content)
             }
             is ChatRepository.Event.ToolConfirmBatch ->
                 // 悬浮窗无确认 UI：一律拒绝需要确认的工具操作（安全兜底）
                 event.resume(false)
             is ChatRepository.Event.Done -> {
-                // 回复结束：整条回复（本轮全部 AI 内容）作为最终气泡展示
-                val currentMessages = convRepo.observeMessages(conv.id).value
-                val lastUserIdx = currentMessages.indexOfLast { it.role == Role.USER }
-                val fullReply = currentMessages
-                    .subList((lastUserIdx + 1).coerceAtMost(currentMessages.size), currentMessages.size)
-                    .filter {
-                        it.role == Role.ASSISTANT && !it.isNotice && !it.isThinking &&
-                            !it.isError && it.content.isNotBlank()
-                    }
-                    .joinToString("") { it.content }
-                    .trim()
+                // 回复结束：本轮累计的完整回复作为最终气泡展示
+                val fullReply = replyAccumulator.toString().trim()
+                replyAccumulator.setLength(0)
                 if (fullReply.isNotBlank()) {
                     ReplyOverlayController.enqueueBubble(
                         text = fullReply,
@@ -117,15 +115,57 @@ object OverlayReplyBridge {
                 }
                 ReplyOverlayController.endReply(conv.id)
             }
-            is ChatRepository.Event.Error ->
+            is ChatRepository.Event.Error -> {
+                replyAccumulator.setLength(0)
                 ReplyOverlayController.endReply(conv.id)
-            is ChatRepository.Event.Truncated ->
+            }
+            is ChatRepository.Event.Truncated -> {
+                replyAccumulator.setLength(0)
                 ReplyOverlayController.endReply(conv.id)
+            }
             is ChatRepository.Event.Notice -> Unit
-            is ChatRepository.Event.ToolUse -> Unit
-            is ChatRepository.Event.ToolResult -> Unit
+            is ChatRepository.Event.ToolUse ->
+                attachToolTrace(conv, MessageToolTrace(event.toolName, ok = false, summary = null))
+            is ChatRepository.Event.ToolResult ->
+                updateToolTrace(conv, event.toolName, event.ok, event.summary)
             is ChatRepository.Event.AgentRoundEffects -> Unit
         }
+    }
+
+    /** 工具开始：把「运行中」痕迹实时挂到当前 AI 消息上（悬浮窗桥接路径）。 */
+    private suspend fun attachToolTrace(conv: Conversation, trace: MessageToolTrace) {
+        val msgs = ServiceLocator.conversationRepository.observeMessages(conv.id).value
+        val idx = msgs.indexOfLast {
+            it.role == Role.ASSISTANT && !it.isNotice && !it.isThinking
+        }
+        if (idx < 0) return
+        val target = msgs[idx]
+        ServiceLocator.conversationRepository.updateMessage(
+            target.copy(toolTraces = target.toolTraces + trace)
+        )
+    }
+
+    /** 工具结束：更新对应痕迹的结果状态。 */
+    private suspend fun updateToolTrace(
+        conv: Conversation,
+        name: String,
+        ok: Boolean,
+        summary: String?
+    ) {
+        val msgs = ServiceLocator.conversationRepository.observeMessages(conv.id).value
+        val idx = msgs.indexOfLast {
+            it.role == Role.ASSISTANT && !it.isNotice && !it.isThinking
+        }
+        if (idx < 0) return
+        val target = msgs[idx]
+        val traces = target.toolTraces.toMutableList()
+        val traceIdx = traces.indexOfLast { it.name == name }
+        if (traceIdx >= 0) {
+            traces[traceIdx] = MessageToolTrace(name, ok, summary)
+        } else {
+            traces += MessageToolTrace(name, ok, summary)
+        }
+        ServiceLocator.conversationRepository.updateMessage(target.copy(toolTraces = traces))
     }
 
 }

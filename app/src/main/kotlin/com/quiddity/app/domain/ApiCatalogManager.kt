@@ -86,7 +86,7 @@ class ApiCatalogManager(
     /**
      * 内置模型能力分级表。
      *
-     * 以 provider 模型 ID 为键，覆盖 [providers] 中全部 54 个内置模型。
+     * 以 provider 模型 ID 为键，覆盖 [providers] 中全部内置模型。
      * 单表维护可避免三个独立 set 出现遗漏或重复，并确保“应用内支持的模型
      * 与分级表完全一致”。
      *
@@ -110,6 +110,12 @@ class ApiCatalogManager(
         "kimi-k3" to ModelTier.FULL,
         "deepseek-v4-pro" to ModelTier.FULL,
         "deepseek-v4-flash" to ModelTier.FULL, // 便宜且主流
+        "qwen3.8-max" to ModelTier.FULL, // 通义千问最新旗舰（2.4T MoE，多模态输入）
+        "Qwen/Qwen3.8-2.4T-A95B" to ModelTier.FULL, // Qwen3.8 Max 开源版
+        "glm-5.3" to ModelTier.FULL, // 智谱最新旗舰（与 GLM-5.2 同基座，后训练大幅提升）
+        "hy3" to ModelTier.FULL, // 腾讯混元 Hy3 正式版旗舰
+        "mimo-v2.5-pro" to ModelTier.FULL, // 小米最新旗舰（1T 总参数，全球开源综合第一）
+        "mimo-v2.5" to ModelTier.FULL, // 小米主流模型（全模态理解，降价后成本友好）
         "doubao-seed-2-1-turbo-260628" to ModelTier.FULL,
         "ernie-5.1" to ModelTier.FULL,
         "glm-5.2" to ModelTier.FULL,
@@ -130,6 +136,7 @@ class ApiCatalogManager(
         "kimi-k2.6" to ModelTier.ADVANCED,
         "tencent/Hy3" to ModelTier.ADVANCED,
         "qwen3.7-plus" to ModelTier.ADVANCED,
+        "spark-x2" to ModelTier.ADVANCED, // 讯飞星火最新深度推理模型
         "zai-org/GLM-5" to ModelTier.ADVANCED,
         "4.0Ultra" to ModelTier.ADVANCED,
         "MiniMax-M2.7" to ModelTier.ADVANCED,
@@ -150,6 +157,7 @@ class ApiCatalogManager(
         "kimi-k2.7-code-highspeed" to ModelTier.BASIC,
         "qwen3.6-flash" to ModelTier.BASIC,
         "spark-x" to ModelTier.BASIC,
+        "spark-x2-flash" to ModelTier.BASIC, // 星火 X2 快速版（Agent 高频场景）
         "step-3.7-flash" to ModelTier.BASIC,
         "glm-4-air" to ModelTier.BASIC,
         "step-3.5-flash" to ModelTier.BASIC,
@@ -197,10 +205,16 @@ class ApiCatalogManager(
         // 字节豆包视觉
         "doubao-seed-1-6-vision-250815", "doubao-1.5-thinking-vision-pro",
         "doubao-1.5-vision-pro", "doubao-1.5-vision-lite",
+        // 豆包 Seed 2.1（官方多模态理解，图片/视频输入）
+        "doubao-seed-2-1-pro-260628", "doubao-seed-2-1-turbo-260628",
         // 百度文心 ERNIE-VL
         "ernie-4.5-turbo-vl", "ernie-4.5-turbo-vl-32k",
         // MiniMax 多模态
         "MiniMax-M3", "MiniMaxAI/MiniMax-M3",
+        // 小米 MiMo（mimo-v2.5 官方全模态理解；pro 为纯文本旗舰）
+        "mimo-v2.5",
+        // 通义千问最新旗舰（官方支持文本/图像/视频多模态输入）
+        "qwen3.8-max",
         // 硅基流动 OCR / 视觉专用模型
         "deepseek-ai/DeepSeek-OCR", "PaddlePaddle/PaddleOCR-VL"
     )
@@ -312,7 +326,10 @@ class ApiCatalogManager(
     private val knownTemperatureCaps: Map<String, Double> = mapOf(
         "claude-sonnet-4-6" to 1.0,
         "claude-sonnet-4-5" to 1.0,
-        "claude-opus-4-8" to 1.0
+        "claude-opus-4-8" to 1.0,
+        // 小米 MiMo 官方文档：temperature 取值范围 [0, 1.5]
+        QuiddityConstants.MIMO_MODEL_PRO to 1.5,
+        QuiddityConstants.MIMO_MODEL to 1.5
     )
 
     /** 返回已知模型的温度上限；未知模型返回 null（按 2.0 不限制）。 */
@@ -362,6 +379,7 @@ class ApiCatalogManager(
             listOf(
                 "qwen3.7-max",
                 "qwen3.7-plus",
+                "qwen3.8-max",
                 "qwen3.6-flash",
                 "qwen3.6-35b-a3b",
                 "qwen-plus",
@@ -387,6 +405,7 @@ class ApiCatalogManager(
             listOf(
                 "deepseek-ai/DeepSeek-V4-Pro",
                 "deepseek-ai/DeepSeek-V4-Flash",
+                "Qwen/Qwen3.8-2.4T-A95B",
                 "zai-org/GLM-5.2",
                 "zai-org/GLM-5.1",
                 "zai-org/GLM-5",
@@ -414,6 +433,8 @@ class ApiCatalogManager(
             "https://xinghuo.xfyun.cn",
             listOf(
                 "4.0Ultra",
+                "spark-x2",
+                "spark-x2-flash",
                 "spark-x",
                 "generalv3.5",
                 "pro-128k",
@@ -447,6 +468,7 @@ class ApiCatalogManager(
             "https://console.cloud.tencent.com/hunyuan",
             listOf(
                 "hy3-preview",
+                "hy3",
                 "hunyuan-role-latest"
             )
         ),
@@ -480,11 +502,21 @@ class ApiCatalogManager(
             "https://open.bigmodel.cn",
             listOf(
                 "glm-5.2",
+                "glm-5.3",
                 "glm-5.1",
                 "glm-5",
                 "glm-4-plus",
                 "glm-4-air",
                 "glm-4-flash"
+            )
+        ),
+        Provider(
+            "xiaomi", "小米 MiMo",
+            "https://api.xiaomimimo.com/v1/chat/completions",
+            "https://mimo.mi.com",
+            listOf(
+                "mimo-v2.5-pro",
+                "mimo-v2.5"
             )
         ),
         Provider("custom", "自定义", "", "", emptyList())

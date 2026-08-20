@@ -128,4 +128,27 @@ class ChatModelsTest {
         assertTrue(text.contains("\"name\":\"read_memory\""))
         assertTrue(text.contains("\"description\":\"检索记忆\""))
     }
+
+    @Test
+    fun `xiaomi mimo request serializes thinking and max_completion_tokens`() {
+        val json = Json {
+            explicitNulls = false
+            encodeDefaults = true
+        }
+        val request = ChatCompletionRequest(
+            model = "mimo-v2.5-pro",
+            messages = emptyList(),
+            max_completion_tokens = 4096,
+            thinking = ThinkingMode("enabled")
+        )
+        val text = json.encodeToString(ChatCompletionRequest.serializer(), request)
+        assertTrue(text.contains("\"thinking\":{\"type\":\"enabled\"}"), "MiMo 必须携带 thinking.type")
+        assertTrue(text.contains("\"max_completion_tokens\":4096"), "MiMo 使用 max_completion_tokens")
+        assertFalse(text.contains("\"max_tokens\""), "未设置 max_tokens 时不得编码该字段")
+
+        val plain = ChatCompletionRequest(model = "qwen3.7-max", messages = emptyList())
+        val plainText = json.encodeToString(ChatCompletionRequest.serializer(), plain)
+        assertFalse(plainText.contains("thinking"), "其他服务商不携带 thinking 字段")
+        assertFalse(plainText.contains("max_completion_tokens"), "其他服务商不携带 max_completion_tokens")
+    }
 }

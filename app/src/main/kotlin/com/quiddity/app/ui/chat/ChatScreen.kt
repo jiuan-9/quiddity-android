@@ -182,6 +182,7 @@ fun ChatScreen(
     val messages by viewModel.messages.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val isGenerating by viewModel.isGenerating.collectAsStateWithLifecycle()
+    val overlayActiveReplies by viewModel.overlayActiveReplies.collectAsStateWithLifecycle()
     val compressionState by viewModel.compressionState.collectAsStateWithLifecycle()
     val errorEvent by viewModel.errorEvent.collectAsStateWithLifecycle()
     val chatError by viewModel.chatError.collectAsStateWithLifecycle()
@@ -680,6 +681,8 @@ fun ChatScreen(
     }
 
     val isCompressing = compressionState is CompressionState.Compressing
+    // 悬浮窗/后台触发的回复在本 ViewModel 外运行：只要有进行中回复就显示加载提示
+    val overlayReplying = conversation?.id in overlayActiveReplies
     // swipeEnabled 不含 !showHamburger：菜单打开时手势保持 enabled，由 ChatDragController
     // 根据 menuOpen 状态区分"右滑关菜单"与"右滑返回"。否则菜单打开后无法滑动关闭，只能系统返回键（卡死根因）。
     // 多选模式下禁用横滑，避免误触退出会话。
@@ -790,6 +793,7 @@ fun ChatScreen(
                 messages = messages,
                 isLoading = isLoading,
                 isGenerating = isGenerating,
+                overlayReplying = overlayReplying,
                 isGroupChat = isGroupChat,
                 searchActive = searchActive,
                 searchQuery = searchQuery,

@@ -110,7 +110,13 @@ internal class SingleStreamRunner(
             // 用户停止 / 页面销毁：不当作错误，向上传播取消，由上层收尾半截消息
             throw c
         } catch (t: Throwable) {
-            toolResultBuilder.emitError(onEvent, t, coordinator.snapshot().joinToString("\n") { it.content })
+            // 风控拦截类错误不直接报错：由上层（ToolRoundRunner）自动降级重试，
+            // 避免用户先看到一条错误再看到重试成功的回复（两段体验割裂）
+            if (isContentFilterRejection(t)) {
+                android.util.Log.w("ChatRepository", "流式请求被风控拦截，准备降级重试：${t.message}")
+            } else {
+                toolResultBuilder.emitError(onEvent, t, coordinator.snapshot().joinToString("\n") { it.content })
+            }
             onFailure?.invoke(t)
             return null
         }

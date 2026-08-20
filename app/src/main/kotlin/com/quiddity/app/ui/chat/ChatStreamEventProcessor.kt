@@ -38,6 +38,14 @@ internal class StreamEventProcessor(
     private var lastCompletedAiMessage get() = state.lastCompletedAiMessage; set(value) { state.lastCompletedAiMessage = value }
     private var replyRunStart get() = state.replyRunStart; set(value) { state.replyRunStart = value }
     private var replyRunChars get() = state.replyRunChars; set(value) { state.replyRunChars = value }
+
+    /** 本次回复累计内容（仅用于悬浮窗最终气泡，不落库）。 */
+    private val replyRunAccumulator = StringBuilder()
+
+    /** 新一轮回复开始：清空累计器（悬浮窗气泡只展示本轮内容）。 */
+    fun startReplyRun() {
+        replyRunAccumulator.setLength(0)
+    }
     suspend fun handle(event: ChatRepository.Event) {
         when (event) {
             is ChatRepository.Event.NewMessage -> {
@@ -94,8 +102,8 @@ internal class StreamEventProcessor(
                 if (!conversationRepository.updateMessage(target)) raiseStorageError()
                 // AI 消息完成时累加 token 用量
                 settingsController.accumulateTokenUsage(target.tokenCount)
-                // 悬浮窗气泡改为「回复结束」统一入队（见 Done 分支）：
-                // 流式过程中不再逐段弹气泡，避免气泡闪动/被分段内容反复替换
+                // 累计本轮回复内容：悬浮窗最终气泡只展示本轮，不把历史对话堆进去
+                replyRunAccumulator.append(target.content)
             }
             is ChatRepository.Event.ToolUse -> {
                 _toolTraces.value = _toolTraces.value + ToolTrace(event.toolName, "running", null)
@@ -169,18 +177,9 @@ internal class StreamEventProcessor(
                 _pendingToolConfirm.value = null
                 // 任务结束兜底清理行动通知弹窗（正常流程每一步的完成弹窗会自动消失）
                 com.quiddity.app.active.OperationNotifyController.dismiss()
-                // 悬浮窗：回复结束，把本轮全部 AI 内容合并为一条最终气泡展示，
-                // 避免多段回复只显示最后一段、或气泡一闪而过又回到「正在回复」
-                val messagesNow = _messages.value
-                val lastUserIdx = messagesNow.indexOfLast { it.role == Role.USER }
-                val fullReply = messagesNow
-                    .subList((lastUserIdx + 1).coerceAtMost(messagesNow.size), messagesNow.size)
-                    .filter {
-                        it.role == Role.ASSISTANT && !it.isNotice && !it.isThinking &&
-                            !it.isError && it.content.isNotBlank()
-                    }
-                    .joinToString("") { it.content }
-                    .trim()
+                // 悬浮窗：回复结束，把本轮累计的完整回复作为最终气泡展示
+                val fullReply = replyRunAccumulator.toString().trim()
+                replyRunAccumulator.setLength(0)
                 if (fullReply.isNotBlank()) {
                     com.quiddity.app.active.ReplyOverlayController.enqueueBubble(
                         text = fullReply,
@@ -192,6 +191,7 @@ internal class StreamEventProcessor(
                 com.quiddity.app.active.ReplyOverlayController.endReply(conversationId)
             }
             is ChatRepository.Event.Truncated -> {
+                replyRunAccumulator.setLength(0)
                 // 回复被截断：不静默吞掉——群聊插入可见提示气泡，私聊弹提示
                 if (group.isGroup()) {
                     val memberName = conversationRepository.observeMessages(conversationId).value
@@ -219,6 +219,7 @@ internal class StreamEventProcessor(
                 _errorEvent.value = event.text
             }
             is ChatRepository.Event.Error -> {
+                replyRunAccumulator.setLength(0)
                 _toolTraces.value = emptyList()
                 _pendingToolConfirm.value = null
                 com.quiddity.app.active.OperationNotifyController.dismiss()

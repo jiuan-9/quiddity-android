@@ -12,6 +12,7 @@ import com.quiddity.app.data.remote.ChatMessage
 import com.quiddity.app.data.remote.DeepSeekResponsesRequest
 import com.quiddity.app.data.remote.ResponsesInputItem
 import com.quiddity.app.data.remote.ResponsesTool
+import com.quiddity.app.data.remote.ThinkingMode
 import com.quiddity.app.data.remote.ToolDefinition
 import com.quiddity.app.data.repo.ConversationRepository
 import com.quiddity.app.data.repo.SettingsRepository
@@ -25,6 +26,7 @@ import com.quiddity.app.domain.agent.AgentToolRegistry
 import com.quiddity.app.domain.agent.AgentWorkflowController
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import com.quiddity.app.util.QuiddityConstants
 
 
 /*
@@ -82,6 +84,22 @@ internal fun looksTruncated(content: String): Boolean {
     if (trimmed.isEmpty()) return false
     val last = trimmed.last()
     return last == '（' || last == '(' || last == '“' || last == '「' || last == '『'
+}
+
+/**
+ * 判定异常是否为模型风控拦截（内容被判定为高风险 / content_filter / 421）。
+ *
+ * 小米 MiMo 等平台的审核较严格：角色扮演类人设、记忆内容可能触发
+ * "The request was rejected because it was considered high risk" 拒绝。
+ * 命中后由流式驱动走「基础设定降级重试」，而不是直接报错。
+ */
+internal fun isContentFilterRejection(t: Throwable?): Boolean {
+    val msg = t?.message?.lowercase() ?: return false
+    return msg.contains("high risk") ||
+        msg.contains("content_filter") ||
+        msg.contains("内容拦截") ||
+        msg.contains("risk control") ||
+        msg.contains("421")
 }
 
 /**
@@ -221,18 +239,31 @@ internal fun buildChatRound(
     temperature: Double,
     responsesUrl: String?,
     reasoningEffort: String?,
+    /**
+     * 会话级思考开关（小米 MiMo / 星火 X2 使用 thinking.type=enabled/disabled；
+     * null = 不携带该字段，沿用服务端默认）。
+     */
+    thinkingEnabled: Boolean? = null,
     tools: List<ToolDefinition>?,
     tool_choice: String?
 ): ChatRoundRequest {
+    val isXiaomi = access.providerId == QuiddityConstants.XIAOMI_MIMO_PROVIDER_ID ||
+        QuiddityConstants.isXiaomiMimoUrl(access.apiUrl)
     if (responsesUrl.isNullOrBlank()) {
         return ChatRoundRequest.Completions(
             ChatCompletionRequest(
                 model = access.model,
                 messages = apiMessages,
-                max_tokens = maxTokens,
+                max_tokens = if (isXiaomi) null else maxTokens,
+                max_completion_tokens = if (isXiaomi) maxTokens else null,
                 temperature = temperature,
                 stream = true,
                 reasoning_effort = reasoningEffort,
+                thinking = if (isXiaomi && thinkingEnabled != null) {
+                    ThinkingMode(if (thinkingEnabled) "enabled" else "disabled")
+                } else {
+                    null
+                },
                 tools = tools,
                 tool_choice = tool_choice
             ),
