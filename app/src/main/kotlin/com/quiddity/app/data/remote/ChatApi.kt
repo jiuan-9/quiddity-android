@@ -76,8 +76,8 @@ open class ChatApi {
     private val mediaType = "application/json; charset=utf-8".toMediaType()
 
     /**
-     * 按服务商写入认证头：小米 MiMo 官方要求 `api-key` 头（非 Bearer），
-     * 其余服务商统一 `Authorization: Bearer`。
+     * 按服务商写入认证头：部分官方端点（如 api.xiaomimimo.com）要求 `api-key` 头
+     * （非 Bearer），其余服务商统一 `Authorization: Bearer`。
      */
     private fun Request.Builder.applyAuthHeader(apiUrl: String, apiKey: String): Request.Builder {
         if (apiKey.isEmpty()) return this
@@ -88,7 +88,7 @@ open class ChatApi {
         }
     }
 
-    /** 小米 MiMo 使用 max_completion_tokens（含思考 token），与 max_tokens 互斥。 */
+    /** 部分新一代模型使用 max_completion_tokens（含思考 token），与 max_tokens 互斥。 */
     private fun ChatCompletionRequest.adaptTokensFor(apiUrl: String): ChatCompletionRequest =
         if (QuiddityConstants.isXiaomiMimoUrl(apiUrl)) {
             copy(max_tokens = null, max_completion_tokens = max_tokens)
@@ -204,7 +204,7 @@ open class ChatApi {
                     safeClose()
                     return
                 }
-                // MiMo 检测到复读时以 repetition_truncation 结束：同样视为被截断，
+                // 部分网关检测到复读时以 repetition_truncation 结束：同样视为被截断，
                 // 走"从断点续写且不要重复"的兜底，正好化解复读类回复
                 if (parsed.finishReason == "length" ||
                     parsed.finishReason == "repetition_truncation"

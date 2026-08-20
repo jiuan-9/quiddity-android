@@ -132,9 +132,9 @@ class ApiCatalogManagerTest {
     }
 
     @Test
-    fun `supported model count is exactly 62`() {
+    fun `supported model count is exactly 42`() {
         val total = manager.tieredModels().values.sumOf { it.size }
-        assertEquals(62, total, "应用内置支持的模型总数应为 62")
+        assertEquals(42, total, "应用内置支持的模型总数应为 42")
     }
 
     @Test
@@ -213,9 +213,9 @@ class ApiCatalogManagerTest {
             apiModel = "deepseek-v4-flash", apiKey = "k"
         )
         val other = manager.buildEntry(
-            id = null, name = "Qwen", providerId = "alibaba",
-            apiUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-            apiModel = "qwen-plus", apiKey = "k"
+            id = null, name = "GLM", providerId = "zhipu",
+            apiUrl = "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+            apiModel = "glm-5.2", apiKey = "k"
         )
         assertEquals(QuiddityConstants.DEEPSEEK_RESPONSES_URL, manager.responsesApiUrl(deepseek))
         assertNull(manager.responsesApiUrl(other), "无官方 Responses 端点时应返回 null")
@@ -255,22 +255,16 @@ class ApiCatalogManagerTest {
         assertTrue(manager.isVisionModel("kimi-k3", "moonshot"), "Kimi K3 原生视觉")
         assertTrue(manager.isVisionModel("kimi-k2.6", "moonshot"), "Kimi K2.6 原生视觉")
         assertTrue(manager.isVisionModel("MiniMax-M3", "minimax"), "MiniMax M3 原生多模态")
-        assertTrue(manager.isVisionModel("qwen-vl-max", "alibaba"), "通义千问 VL")
+        assertTrue(manager.isVisionModel("qwen-vl-max", "alibaba"), "通义千问 VL（视觉 OCR 保留）")
+        assertTrue(manager.isVisionModel("doubao-seed-1-6-vision-250815", "bytedance"), "豆包视觉（视觉 OCR 保留）")
+        assertTrue(manager.isVisionModel("mimo-v2.5", "xiaomi"), "小米 MiMo 全模态（自定义条目识图）")
         assertTrue(manager.isVisionModel("glm-4.1v-thinking-flash", "zhipu"), "智谱 GLM-4.1V-Thinking-Flash")
         assertTrue(manager.isVisionModel("glm-4.6v-flash", "zhipu"), "智谱 GLM 视觉")
         assertTrue(manager.isVisionModel("gemini-2.5-flash", "google"), "Gemini 全系多模态")
         assertTrue(manager.isVisionModel("gpt-5.4", "openai"), "GPT-5 系列支持视觉")
-        assertTrue(manager.isVisionModel("mimo-v2.5", "xiaomi"), "小米 MiMo v2.5 全模态理解")
-        assertTrue(manager.isVisionModel("qwen3.8-max", "alibaba"), "Qwen3.8 Max 官方多模态输入")
-        assertTrue(
-            manager.isVisionModel("doubao-seed-2-1-pro-260628", "bytedance"),
-            "豆包 Seed 2.1 Pro 官方多模态理解"
-        )
 
         assertFalse(manager.isVisionModel("deepseek-v4-flash", "deepseek"), "DeepSeek 纯文本")
-        assertFalse(manager.isVisionModel("qwen-plus", "alibaba"), "通义千问文本模型")
         assertFalse(manager.isVisionModel("glm-5.2", "zhipu"), "GLM 文本模型")
-        assertFalse(manager.isVisionModel("mimo-v2.5-pro", "xiaomi"), "MiMo V2.5 Pro 为纯文本旗舰")
         assertFalse(manager.isVisionModel("kimi-k3", "custom"), "自定义服务商一律按纯文本处理")
     }
 
@@ -323,29 +317,12 @@ class ApiCatalogManagerTest {
     fun `defaultMaxTemperature caps known models and leaves others unlimited`() {
         assertEquals(1.0, manager.defaultMaxTemperature("claude-sonnet-4-6"), "Claude 温度上限 1.0")
         assertEquals(1.0, manager.defaultMaxTemperature("claude-opus-4-8"), "Claude 温度上限 1.0")
-        assertEquals(1.5, manager.defaultMaxTemperature("mimo-v2.5-pro"), "MiMo V2.5 Pro 温度上限 1.5")
-        assertEquals(1.5, manager.defaultMaxTemperature("mimo-v2.5"), "MiMo V2.5 温度上限 1.5")
         assertNull(manager.defaultMaxTemperature("deepseek-v4-flash"), "未知模型不限制")
         assertNull(manager.defaultMaxTemperature("gpt-4o-mini"), "未知模型不限制")
     }
 
     @Test
-    fun `xiaomi mimo models are full tier`() {
-        assertEquals(
-            ApiCatalogManager.ModelTier.FULL,
-            manager.getModelTier("mimo-v2.5-pro", "xiaomi"),
-            "MiMo V2.5 Pro 应归完整级"
-        )
-        assertEquals(
-            ApiCatalogManager.ModelTier.FULL,
-            manager.getModelTier("mimo-v2.5", "xiaomi"),
-            "MiMo V2.5 应归完整级"
-        )
-    }
-
-    @Test
     fun `newest flagship models are classified by capability`() {
-        assertEquals(ApiCatalogManager.ModelTier.FULL, manager.getModelTier("qwen3.8-max", "alibaba"))
         assertEquals(ApiCatalogManager.ModelTier.FULL, manager.getModelTier("glm-5.3", "zhipu"))
         assertEquals(ApiCatalogManager.ModelTier.FULL, manager.getModelTier("hy3", "tencent"))
         assertEquals(ApiCatalogManager.ModelTier.ADVANCED, manager.getModelTier("spark-x2", "iflytek"))

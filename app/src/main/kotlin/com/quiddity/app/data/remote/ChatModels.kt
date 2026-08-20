@@ -42,7 +42,7 @@ data class ChatCompletionRequest(
     val messages: List<ChatMessage>,
     val max_tokens: Int? = null,
     /**
-     * 小米 MiMo 等新一代模型使用 max_completion_tokens 作为输出上限
+     * 星火 X2 等新一代模型使用 max_completion_tokens 作为输出上限
      * （包含思考 token 与最终答案；与 max_tokens 互斥，按服务商二选一携带）。
      */
     val max_completion_tokens: Int? = null,
@@ -54,7 +54,7 @@ data class ChatCompletionRequest(
      */
     val reasoning_effort: String? = null,
     /**
-     * 深度思考开关（MiMo / 星火 X2 系列使用 thinking.type=enabled/disabled，
+     * 深度思考开关（星火 X2 系列使用 thinking.type=enabled/disabled，
      * 默认 enabled；其他服务商不识别该字段时自动忽略）。
      */
     val thinking: ThinkingMode? = null,
@@ -68,7 +68,7 @@ data class ChatCompletionRequest(
     val tool_choice: String? = null
 )
 
-/** 深度思考模式参数（OpenAI 兼容接口的扩展字段，如 MiMo 的 thinking.type）。 */
+/** 深度思考模式参数（OpenAI 兼容接口的扩展字段，如星火 X2 的 thinking.type）。 */
 @Serializable
 data class ThinkingMode(
     val type: String
@@ -157,7 +157,7 @@ data class ChatMessage(
  * 视觉识图请求体（OpenAI 兼容多模态格式）。
  *
  * 与 [ChatCompletionRequest] 的区别：content 为内容块数组，图片以
- * `data:image/jpeg;base64,...` 形式内嵌，适配 OpenAI / Qwen-VL / GLM-4V /
+ * `data:image/jpeg;base64,...` 形式内嵌，适配 OpenAI / GLM-4V /
  * Gemini（OpenAI 兼容端点）等主流视觉模型接口。
  */
 @Serializable
@@ -165,7 +165,7 @@ data class VisionCompletionRequest(
     val model: String,
     val messages: List<VisionChatMessage>,
     val max_tokens: Int? = null,
-    /** 小米 MiMo 视觉请求的输出上限字段（与 max_tokens 互斥）。 */
+    /** 思考型视觉模型的输出上限字段（与 max_tokens 互斥）。 */
     val max_completion_tokens: Int? = null,
     val temperature: Double = 0.2,
     val stream: Boolean = false
@@ -237,7 +237,7 @@ data class ChatStreamChunk(
 data class ChatStreamChunkMessage(
     val role: String? = null,
     val content: String? = null,
-    /** 非流式响应中的思考内容（如 MiMo / 星火 X2）。 */
+    /** 非流式响应中的思考内容（如星火 X2）。 */
     val reasoning_content: String? = null
 )
 

@@ -89,7 +89,7 @@ internal fun looksTruncated(content: String): Boolean {
 /**
  * 判定异常是否为模型风控拦截（内容被判定为高风险 / content_filter / 421）。
  *
- * 小米 MiMo 等平台的审核较严格：角色扮演类人设、记忆内容可能触发
+ * 部分平台（如豆包、千问、MiMo）的审核较严格：角色扮演类人设、记忆内容可能触发
  * "The request was rejected because it was considered high risk" 拒绝。
  * 命中后由流式驱动走「基础设定降级重试」，而不是直接报错。
  */
@@ -240,15 +240,15 @@ internal fun buildChatRound(
     responsesUrl: String?,
     reasoningEffort: String?,
     /**
-     * 会话级思考开关（小米 MiMo / 星火 X2 使用 thinking.type=enabled/disabled；
+     * 会话级思考开关（星火 X2 等使用 thinking.type=enabled/disabled；
      * null = 不携带该字段，沿用服务端默认）。
      */
     thinkingEnabled: Boolean? = null,
     tools: List<ToolDefinition>?,
     tool_choice: String?
 ): ChatRoundRequest {
-    val isXiaomi = access.providerId == QuiddityConstants.XIAOMI_MIMO_PROVIDER_ID ||
-        QuiddityConstants.isXiaomiMimoUrl(access.apiUrl)
+    // 按 URL 识别（内置名册已移除 MiMo，自定义条目填官方 URL 时同样适配）
+    val isXiaomi = QuiddityConstants.isXiaomiMimoUrl(access.apiUrl)
     if (responsesUrl.isNullOrBlank()) {
         return ChatRoundRequest.Completions(
             ChatCompletionRequest(

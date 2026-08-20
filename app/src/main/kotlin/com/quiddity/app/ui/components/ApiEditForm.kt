@@ -914,10 +914,6 @@ private data class AcquisitionInfo(val steps: List<String>, val url: String)
 
 private object ApiKeyAcquisitionInfo {
     fun forProvider(id: String): AcquisitionInfo = when (id) {
-        "alibaba" -> AcquisitionInfo(
-            listOf("访问阿里云百炼/灵积控制台", "登录阿里云账号", "在 API-KEY 管理页面创建新密钥", "将 Key 粘贴到上方输入框即可"),
-            "https://dashscope.aliyun.com"
-        )
         "baidu" -> AcquisitionInfo(
             listOf("访问百度智能云千帆平台", "登录百度账号", "进入应用接入并创建应用", "在应用详情页获取 API Key"),
             "https://qianfan.cloud.baidu.com"
@@ -949,10 +945,6 @@ private object ApiKeyAcquisitionInfo {
         "moonshot" -> AcquisitionInfo(
             listOf("访问 Moonshot AI 开放平台", "注册/登录账号", "进入 API Key 管理", "创建 API Key 并复制"),
             "https://platform.moonshot.cn"
-        )
-        "bytedance" -> AcquisitionInfo(
-            listOf("访问火山引擎方舟控制台", "登录火山引擎账号", "进入 API Key 管理", "创建并复制 API Key"),
-            "https://console.volcengine.com/ark"
         )
         "zhipu" -> AcquisitionInfo(
             listOf("访问智谱 AI 开放平台", "注册/登录账号", "进入 API Keys 页面", "添加新 API Key 并复制"),

@@ -90,7 +90,7 @@ object GroupReplyPlanner {
         userName: String? = null,
         webSearchResponsesUrl: String? = null,
         thinkingDepth: String? = null,
-        /** 会话级思考开关（小米 MiMo / 星火 X2 的 thinking.type 适配）。 */
+        /** 会话级思考开关（星火 X2 等使用 thinking.type 的模型适配）。 */
         thinkingEnabled: Boolean? = null,
         regeneratePreviousReply: String? = null
     ): Result<Plan> {
@@ -124,8 +124,8 @@ object GroupReplyPlanner {
         )
         // 方案六.3：基础级只带最近 N 条；进阶级/完整级可自行用工具检索完整群聊消息。
         val useSearchTool = tier != ApiCatalogManager.ModelTier.BASIC
-        val isXiaomi = access.providerId == QuiddityConstants.XIAOMI_MIMO_PROVIDER_ID ||
-            QuiddityConstants.isXiaomiMimoUrl(access.apiUrl)
+        // 按 URL 识别（内置名册已移除 MiMo，自定义条目填官方 URL 时同样适配）
+        val isXiaomi = QuiddityConstants.isXiaomiMimoUrl(access.apiUrl)
         val request = ChatCompletionRequest(
             model = access.model,
             messages = apiMessages,

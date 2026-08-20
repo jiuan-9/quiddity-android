@@ -70,14 +70,9 @@ object QuiddityConstants {
     /** DeepSeek 官方 Responses API 端点（服务端执行 web_search）。 */
     const val DEEPSEEK_RESPONSES_URL = "https://api.deepseek.com/responses"
 
-    // ===== 小米 MiMo =====
-    /** 小米 MiMo 官方服务商 id（Provider 预设）。 */
-    const val XIAOMI_MIMO_PROVIDER_ID = "xiaomi"
-    /** 小米 MiMo 官方 OpenAI 兼容端点主机（认证头为 api-key，而非 Authorization: Bearer）。 */
+    // ===== api-key 认证端点（自定义条目兜底） =====
+    /** 使用 api-key 认证头的官方端点主机（如小米 MiMo；内置名册已移除，自定义条目仍可用）。 */
     const val XIAOMI_MIMO_API_HOST = "api.xiaomimimo.com"
-    /** 小米 MiMo 官方模型（OpenAI Chat Completions 兼容，2026-04 发布）。 */
-    const val MIMO_MODEL_PRO = "mimo-v2.5-pro"
-    const val MIMO_MODEL = "mimo-v2.5"
 
     /** 判定 URL 是否指向小米 MiMo 官方端点（自定义条目填官方 URL 时同样生效）。 */
     fun isXiaomiMimoUrl(url: String): Boolean = url.contains(XIAOMI_MIMO_API_HOST)

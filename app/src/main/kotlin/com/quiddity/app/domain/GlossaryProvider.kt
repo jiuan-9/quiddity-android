@@ -69,7 +69,7 @@ class GlossaryProvider {
             name = "模型",
             pinyin = "moxing",
             explanation = "AI 的「大脑」。不同的模型有不同的能力、速度和价格。" +
-                "比如通义千问、文心一言、DeepSeek、GPT 等都是不同的模型。" +
+                "比如Kimi、文心一言、DeepSeek、GPT 等都是不同的模型。" +
                 "你可以在「模型配置」中添加自己常用的模型。",
             category = "基础概念"
         ),

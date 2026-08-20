@@ -103,7 +103,7 @@ class DocsProvider(
 
 五、模型配置怎么填
 在设置或会话菜单里进入"管理模型配置"，点新增：
-1. 选择服务商，比如 DeepSeek、智谱、通义千问。选好后接口地址和模型名会自动填好。
+1. 选择服务商，比如 DeepSeek、智谱、Kimi。选好后接口地址和模型名会自动填好。
 2. 填 API 密钥。密钥去服务商官网的密钥页面创建，具体步骤看文档里的"API-KEY 获取方式"。
 3. 保存后把这个配置设为当前使用。
 如果服务商列表里没有你用的，选"自定义"，接口地址、模型名、密钥全部自己填。
@@ -152,12 +152,6 @@ class DocsProvider(
             }
 
     private fun stepsForProvider(id: String): List<String> = when (id) {
-        "alibaba" -> listOf(
-            "访问阿里云百炼/灵积控制台",
-            "登录阿里云账号",
-            "在 API-KEY 管理页面创建新密钥",
-            "将 Key 粘贴到上方输入框即可"
-        )
         "baidu" -> listOf(
             "访问百度智能云千帆平台",
             "登录百度账号",
@@ -205,12 +199,6 @@ class DocsProvider(
             "注册/登录账号",
             "进入 API Key 管理",
             "创建 API Key 并复制"
-        )
-        "bytedance" -> listOf(
-            "访问火山引擎方舟控制台",
-            "登录火山引擎账号",
-            "进入 API Key 管理",
-            "创建并复制 API Key"
         )
         "zhipu" -> listOf(
             "访问智谱 AI 开放平台",
