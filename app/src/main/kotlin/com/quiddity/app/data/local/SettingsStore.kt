@@ -91,6 +91,8 @@ class SettingsStore(private val context: Context) {
         val GLOBAL_MAX_TOKENS = intPreferencesKey("global_max_tokens")
         val GLOBAL_SINGLE_MSG_TOKENS = intPreferencesKey("global_single_msg_tokens")
         val GLOBAL_CONTEXT_LIMIT = intPreferencesKey("global_context_limit")
+        val GLOBAL_TEMPERATURE = floatPreferencesKey("global_temperature")
+        val QUICK_SETUP_TEMPERATURE = floatPreferencesKey("quick_setup_temperature")
         val MULTILINE_SPLIT = booleanPreferencesKey("multiline_split")
         val ENTER_TO_SEND = booleanPreferencesKey("enter_to_send")
         val ACTIVE_CATALOG_ID = stringPreferencesKey("active_catalog_id")
@@ -109,6 +111,7 @@ class SettingsStore(private val context: Context) {
         val PROACTIVE_MESSAGE_ENABLED = booleanPreferencesKey("proactive_message_enabled")
         val PROACTIVE_MESSAGE_LAST_RESET_DATE = stringPreferencesKey("proactive_message_last_reset_date")
         val GROUP_TUTORIAL_SEEN = booleanPreferencesKey("group_tutorial_seen")
+        val AGENT_TUTORIAL_SEEN = booleanPreferencesKey("agent_tutorial_seen")
         val SOLO_CHAT_COUNTER = intPreferencesKey("solo_chat_counter")
         val GROUP_CHAT_COUNTER = intPreferencesKey("group_chat_counter")
         val OVERLAY_ENABLED = booleanPreferencesKey("overlay_enabled")
@@ -126,6 +129,8 @@ class SettingsStore(private val context: Context) {
                 globalMaxTokens = this[Keys.GLOBAL_MAX_TOKENS] ?: d.globalMaxTokens,
                 globalSingleMessageTokens = this[Keys.GLOBAL_SINGLE_MSG_TOKENS] ?: d.globalSingleMessageTokens,
                 globalContextLimit = this[Keys.GLOBAL_CONTEXT_LIMIT] ?: d.globalContextLimit,
+                globalTemperature = this[Keys.GLOBAL_TEMPERATURE]?.toDouble() ?: d.globalTemperature,
+                quickSetupTemperature = this[Keys.QUICK_SETUP_TEMPERATURE]?.toDouble() ?: d.quickSetupTemperature,
                 multilineAutoSplit = this[Keys.MULTILINE_SPLIT] ?: d.multilineAutoSplit,
                 enterToSend = this[Keys.ENTER_TO_SEND] ?: d.enterToSend,
                 activeCatalogId = this[Keys.ACTIVE_CATALOG_ID] ?: d.activeCatalogId,
@@ -146,6 +151,7 @@ class SettingsStore(private val context: Context) {
                 proactiveMessageLastResetDate =
                     this[Keys.PROACTIVE_MESSAGE_LAST_RESET_DATE] ?: d.proactiveMessageLastResetDate,
                 groupTutorialSeen = this[Keys.GROUP_TUTORIAL_SEEN] ?: d.groupTutorialSeen,
+                agentTutorialSeen = this[Keys.AGENT_TUTORIAL_SEEN] ?: d.agentTutorialSeen,
                 soloChatCounter = this[Keys.SOLO_CHAT_COUNTER] ?: d.soloChatCounter,
                 groupChatCounter = this[Keys.GROUP_CHAT_COUNTER] ?: d.groupChatCounter,
                 overlayEnabled = this[Keys.OVERLAY_ENABLED] ?: d.overlayEnabled,
@@ -191,6 +197,8 @@ class SettingsStore(private val context: Context) {
                 prefs[Keys.GLOBAL_MAX_TOKENS] = next.globalMaxTokens
                 prefs[Keys.GLOBAL_SINGLE_MSG_TOKENS] = next.globalSingleMessageTokens
                 prefs[Keys.GLOBAL_CONTEXT_LIMIT] = next.globalContextLimit
+                prefs[Keys.GLOBAL_TEMPERATURE] = next.globalTemperature.toFloat()
+                prefs[Keys.QUICK_SETUP_TEMPERATURE] = next.quickSetupTemperature.toFloat()
                 prefs[Keys.MULTILINE_SPLIT] = next.multilineAutoSplit
                 prefs[Keys.ENTER_TO_SEND] = next.enterToSend
                 next.activeCatalogId?.let { prefs[Keys.ACTIVE_CATALOG_ID] = it } ?: prefs.remove(Keys.ACTIVE_CATALOG_ID)
@@ -209,6 +217,7 @@ class SettingsStore(private val context: Context) {
                 prefs[Keys.PROACTIVE_MESSAGE_ENABLED] = next.proactiveMessageEnabled
                 prefs[Keys.PROACTIVE_MESSAGE_LAST_RESET_DATE] = next.proactiveMessageLastResetDate
                 prefs[Keys.GROUP_TUTORIAL_SEEN] = next.groupTutorialSeen
+                prefs[Keys.AGENT_TUTORIAL_SEEN] = next.agentTutorialSeen
                 prefs[Keys.SOLO_CHAT_COUNTER] = next.soloChatCounter
                 prefs[Keys.GROUP_CHAT_COUNTER] = next.groupChatCounter
                 prefs[Keys.OVERLAY_ENABLED] = next.overlayEnabled

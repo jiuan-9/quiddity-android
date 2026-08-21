@@ -84,7 +84,7 @@ class MiniAppInviteManager(
      * 对手人设：以会话内实时人设优先，字段为空时回退角色库主档，保证
      * 对局中的对手与私聊里看到的是同一个人。
      */
-    private fun buildPersonaText(character: Character, conversation: Conversation?): String {
+    fun buildPersonaText(character: Character, conversation: Conversation?): String {
         val live = conversation?.persona
         fun pick(conversationValue: String, characterValue: String): String? {
             val value = conversationValue.ifBlank { characterValue }.trim()

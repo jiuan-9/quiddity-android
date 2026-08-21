@@ -234,20 +234,22 @@ fun RewriteBottomSheet(
 
                     Spacer(modifier = Modifier.size(8.dp))
 
+                    // 有实际改动（非空且与原文不同）才允许保存，未改动时按钮置灰禁用
                     val canSave = textFieldValue.text.isNotBlank() && textFieldValue.text != initialText
                     Box(
                         modifier = Modifier
                             .size(40.dp)
                             .clip(CircleShape)
                             .background(
-                                if (textFieldValue.text.isNotBlank()) MaterialTheme.colorScheme.primary
+                                if (canSave) MaterialTheme.colorScheme.primary
                                 else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
                             )
                             .clickable(
+                                enabled = canSave,
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null
                             ) {
-                                if (textFieldValue.text.isNotBlank()) {
+                                if (canSave) {
                                     val saved = textFieldValue.text
                                     closeWithAction { onSave(saved) }
                                 }
@@ -257,7 +259,7 @@ fun RewriteBottomSheet(
                         Icon(
                             imageVector = Icons.Filled.Check,
                             contentDescription = "保存改写",
-                            tint = if (textFieldValue.text.isNotBlank()) MaterialTheme.colorScheme.onPrimary
+                            tint = if (canSave) MaterialTheme.colorScheme.onPrimary
                             else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                             modifier = Modifier.size(20.dp)
                         )

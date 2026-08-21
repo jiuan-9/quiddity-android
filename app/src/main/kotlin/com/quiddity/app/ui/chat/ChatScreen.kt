@@ -6,7 +6,6 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Rect
-import android.net.Uri
 import android.os.Build
 import android.widget.Toast
 import android.view.ViewTreeObserver
@@ -130,7 +129,6 @@ import com.quiddity.app.ui.chat.gesture.detectNativeHorizontalSwipe
 import com.quiddity.app.ui.theme.Motion
 import com.quiddity.app.util.ChatImageExporter
 import com.quiddity.app.util.DateUtils
-import com.quiddity.app.util.ImageUtils
 import com.quiddity.app.util.QuiddityConstants
 import com.quiddity.app.util.WallpaperContrast
 import kotlin.math.roundToInt
@@ -197,28 +195,8 @@ fun ChatScreen(
     val context = LocalContext.current
 
     // ===== 图片发送：选择图片 → 复制到内部存储（规避临时授权丢失） → 挂载待发送 =====
-    val imagePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        if (uri != null) {
-            val copied = runCatching {
-                ImageUtils.copyToInternalStorage(context, uri, "chat_images")
-            }.getOrNull()
-            if (copied != null) {
-                viewModel.setPendingImage(copied.toString())
-            } else {
-                Toast.makeText(context, "图片读取失败，请重新选择", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-    // 待发送图片清除（发送成功 / 用户移除）后回收内部临时文件
-    var lastAttachedImageUri by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(pendingImageUri) {
-        val previous = lastAttachedImageUri
-        lastAttachedImageUri = pendingImageUri
-        if (pendingImageUri == null && previous != null) {
-            ImageUtils.deleteTempFile(Uri.parse(previous))
-        }
+    val imagePickerLauncher = rememberChatImagePicker(context, pendingImageUri) { uri ->
+        viewModel.setPendingImage(uri)
     }
 
     var showHamburger by rememberSaveable { mutableStateOf(false) }
@@ -478,7 +456,9 @@ fun ChatScreen(
             if (!initialScrollDone) {
                 listState.scrollToItem(0)
                 initialScrollDone = true
-            } else {
+            } else if (isAtBottom) {
+                // 用户正在底部时新消息才自动跟随到最底；已上滑浏览历史时
+                // 不强制回底，避免后台/定时回复追加消息把阅读位置拽回底部。
                 withFrameNanos { }
                 listState.animateScrollToItem(0)
             }

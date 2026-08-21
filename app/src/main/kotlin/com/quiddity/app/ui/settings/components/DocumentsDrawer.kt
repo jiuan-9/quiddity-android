@@ -212,7 +212,7 @@ fun DocumentsDrawer(
                         catalogManager = catalogManager,
                         selectedDocIndex = selectedDocIndex,
                         searchQuery = searchQuery,
-                        onCopyUrl = { url -> copyToClipboard(context, url) },
+                        onCopyUrl = { url -> copyToClipboard(context, url, "链接已复制") },
                         modifier = Modifier.fillMaxSize()
                     )
                 }
@@ -805,8 +805,8 @@ private fun BackupDoc(docsProvider: DocsProvider) {
     }
 }
 
-private fun copyToClipboard(context: Context, text: String) {
+internal fun copyToClipboard(context: Context, text: String, toastLabel: String) {
     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    clipboard.setPrimaryClip(ClipData.newPlainText("文档链接", text))
-    Toast.makeText(context, "链接已复制", Toast.LENGTH_SHORT).show()
+    clipboard.setPrimaryClip(ClipData.newPlainText("链接", text))
+    Toast.makeText(context, toastLabel, Toast.LENGTH_SHORT).show()
 }

@@ -142,14 +142,21 @@ class ChatDragController(
         }
 
         if (menuOpen) {
-            // 菜单已打开：右滑判定关菜单，左滑/无位移保持打开
+            // 菜单已打开：右滑判定关菜单；左滑/无位移也用阈值判定是否回弹关闭，
+            // 避免轻微左滑（刚过 touchSlop）就弹出菜单（此前 menuOpen 被提前置 true，
+            // 使 menuOpenThresholdFraction 这一段成为死代码）。
             when {
                 totalDx > 0f -> {
                     val shouldClose = totalDx > backThresholdPx ||
                         (velocityCommit && velocityDx > 0f)
                     animateMenuTo(open = !shouldClose)
                 }
-                else -> animateMenuTo(open = true)
+                else -> {
+                    val absDx = -totalDx
+                    val shouldOpen = absDx > menuOpenThresholdPx ||
+                        (velocityCommit && velocityDx < 0f)
+                    animateMenuTo(open = shouldOpen)
+                }
             }
             return
         }

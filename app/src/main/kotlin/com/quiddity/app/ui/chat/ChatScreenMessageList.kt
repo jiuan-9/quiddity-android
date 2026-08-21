@@ -173,7 +173,7 @@ internal fun ColumnScope.ChatMessageListArea(
                         }
                     }
                     else -> {
-                        val lastMsg = messages.lastOrNull()
+                        val lastMsg = messages.lastOrNull { !it.isNotice }
                         // 性能：asReversed + filterNot 每次重组都会新建整份列表，流式输出时 O(n) 分配拖累动画，
                         // 这里按 messages 实例缓存，仅内容变化时重算。
                         val displayMessages = remember(messages) {

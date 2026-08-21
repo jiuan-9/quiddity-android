@@ -5,6 +5,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableFloatState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
@@ -99,7 +100,8 @@ onUserNameConfirm()
                 onDismiss = onDismissRewrite
             )
         } else {
-            onDismissRewrite()
+            // 目标消息不存在（已删除等）：延迟到组合结束后再关闭，避免组合期副作用写状态
+            LaunchedEffect(rewritingMessageId) { onDismissRewrite() }
         }
     }
 
@@ -117,7 +119,8 @@ onUserNameConfirm()
                 onDismiss = onDismissReeditSheet
             )
         } else {
-            onDismissReeditSheet()
+            // 待重编辑内容已不存在：延迟到组合结束后再关闭，避免组合期副作用写状态
+            LaunchedEffect(pendingReedit) { onDismissReeditSheet() }
         }
     }
 }

@@ -1,6 +1,10 @@
 package com.quiddity.app.ui.chat
 
 import android.content.Context
+import android.net.Uri
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.ActivityResultLauncher
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
@@ -40,8 +44,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -70,6 +76,7 @@ import com.quiddity.app.data.model.Role
 import com.quiddity.app.domain.ChatRecordSearch
 import com.quiddity.app.domain.GroupReplyQueue
 import com.quiddity.app.ui.theme.Motion
+import com.quiddity.app.util.ImageUtils
 import com.quiddity.app.ui.chat.ChatViewModel
 import com.quiddity.app.ui.chat.components.ChatInputBar
 import com.quiddity.app.ui.chat.components.GameLogBubble
@@ -78,6 +85,41 @@ import com.quiddity.app.ui.chat.components.MiniAppInviteCard
 import com.quiddity.app.ui.chat.components.NoticeBubble
 import com.quiddity.app.ui.chat.components.ReeditNoticeBubble
 import kotlinx.coroutines.launch
+
+/**
+ * 共享发图状态：选图 → 复制到内部存储（规避临时授权丢失） → 挂载待发送；
+ * 待发送图片清除后回收内部临时文件。返回可供输入条调用的取图 launcher。
+ */
+@Composable
+internal fun rememberChatImagePicker(
+    context: Context,
+    pendingImageUri: String?,
+    onPickImage: (String) -> Unit
+): ActivityResultLauncher<String> {
+    val launcher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            val copied = runCatching {
+                ImageUtils.copyToInternalStorage(context, uri, "chat_images")
+            }.getOrNull()
+            if (copied != null) {
+                onPickImage(copied.toString())
+            } else {
+                Toast.makeText(context, "图片读取失败，请重新选择", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+    var lastAttachedImageUri by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(pendingImageUri) {
+        val previous = lastAttachedImageUri
+        lastAttachedImageUri = pendingImageUri
+        if (pendingImageUri == null && previous != null) {
+            ImageUtils.deleteTempFile(Uri.parse(previous))
+        }
+    }
+    return launcher
+}
 
 @Composable
 internal fun ChatWallpaperLayer(wallpaperUri: String?, wallpaperScrim: Color) {
@@ -343,6 +385,7 @@ internal fun ChatInputBarArea(
                         enabled = !showHamburger,
                         transparent = wallpaperUri != null,
                         onTextChange = { text -> viewModel.updateInputText(text) },
+                        initialText = viewModel.inputBarText.value,
                         isCompressing = isCompressing,
                         onPickImage = { imagePickerLauncher.launch("image/*") },
                         pendingImageUri = pendingImageUri,

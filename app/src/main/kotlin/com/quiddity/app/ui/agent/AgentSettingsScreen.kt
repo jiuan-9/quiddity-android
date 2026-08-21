@@ -1,10 +1,8 @@
 package com.quiddity.app.ui.agent
 
-import android.app.AppOpsManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.os.Process
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -119,6 +117,7 @@ import com.quiddity.app.data.local.AgentAuditEntry
 import com.quiddity.app.data.local.AgentPermissionControl
 import com.quiddity.app.data.local.AgentToolSwitches
 import com.quiddity.app.di.ServiceLocator
+import com.quiddity.app.domain.agent.AgentExecutors
 import com.quiddity.app.domain.agent.AgentToolCategory
 import com.quiddity.app.domain.agent.AgentToolRegistry
 import com.quiddity.app.ui.settings.ClickableRow
@@ -199,7 +198,7 @@ fun AgentSettingsScreen(
 
     val accessibilityEnabled = remember(refreshTick) { ScreenReaderService.isServiceEnabled(context) }
     val notificationEnabled = remember(refreshTick) { NotificationBridge.isServiceEnabled(context) }
-    val usageEnabled = remember(refreshTick) { hasUsageAccess(context) }
+    val usageEnabled = remember(refreshTick) { AgentExecutors.hasUsageAccess(context) }
     val shizukuClient = ServiceLocator.shizukuClient
     var shizukuStatus by remember(refreshTick) { mutableStateOf(shizukuClient.status()) }
     // Shizuku 已授权并配对：写入类与全局日志等工具的开关才可操作
@@ -1094,7 +1093,7 @@ private fun toolGateInfo(
     "click", "long_press", "click_text", "scroll", "global_action", "input_text",
     "click_id", "click_desc", "drag", "scroll_to_text", "lock_screen" ->
         accessibilityEnabled to (if (accessibilityEnabled) null else "无障碍服务")
-    else -> true to null
+    else -> false to "Shizuku 授权"
 }
 
 /** 添加黑名单弹窗：应用包名 或 文件/目录路径（默认全应用权限，命中即拒绝 AI 查看/更改/删除）。 */
@@ -1261,16 +1260,6 @@ private fun AgentSheetGrabBar(
         }
     }
 }
-
-private fun hasUsageAccess(context: Context): Boolean = runCatching {
-    val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
-    @Suppress("DEPRECATION")
-    appOps.checkOpNoThrow(
-        AppOpsManager.OPSTR_GET_USAGE_STATS,
-        Process.myUid(),
-        context.packageName
-    ) == AppOpsManager.MODE_ALLOWED
-}.getOrDefault(false)
 
 /** 直接跳转系统对应设置页（无障碍 / 通知使用权 / 使用情况访问）。 */
 private fun openSystemSettings(context: Context, action: String) {

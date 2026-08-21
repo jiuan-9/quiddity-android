@@ -48,13 +48,19 @@ class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
         val pendingResult = goAsync()
+        // goAsync 窗口内只做轻量本地操作：加载会话 + 每日重置 + 重注册闹钟，
+        // 避免等待网络型 LLM 的当天库补齐，确保 finish() 不被系统回收打断
         CoroutineScope(Dispatchers.Default).launch {
             try {
                 ServiceLocator.conversationRepository.loadAll()
-                ServiceLocator.timeLibraryRepository.onAppStart()
+                ServiceLocator.timeLibraryRepository.onAppStartLight()
             } finally {
                 pendingResult.finish()
             }
+        }
+        // 需要网络/耗时的当天库补齐：放到不占用 goAsync 窗口的独立协程执行
+        CoroutineScope(Dispatchers.Default).launch {
+            ServiceLocator.timeLibraryRepository.refreshLibrariesForEnabledSessions()
         }
     }
 }

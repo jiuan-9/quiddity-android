@@ -402,8 +402,10 @@ class ConversationRepository(
     ) {
         when (mode) {
             ImportMode.REPLACE -> {
-                characterRepository?.replaceCharacters(characters)
+                // write conversations/messages first (store.replaceAll has .bak backup+rollback), then characters;
+                // if conversation write fails, characters untouched -> both stay consistent.
                 store.replaceAll(conversations, messages)
+                characterRepository?.replaceCharacters(characters)
                 syncAllSoloCharacters()
             }
             ImportMode.MERGE -> {

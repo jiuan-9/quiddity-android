@@ -5,6 +5,20 @@ import com.quiddity.app.data.local.AgentToolSwitches
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
+/** 工具结果失败语义关键词（与 ChatToolResultBuilder.isToolResultSuccess 共用同一集合）。 */
+internal val TOOL_RESULT_FAILURE_MARKERS: List<String> = listOf(
+    "失败", "未启用", "未找到", "未获得", "取消", "超时", "不存在",
+    "需要先开启", "尚未接入", "【工具返回异常】", "无效", "缺少"
+)
+
+/** 工具结果是否失败：仅取首行头子句（冒号前）判断，避免正文/路径含关键词被误判。 */
+internal fun isToolResultFailure(text: String): Boolean {
+    val head = text.substringBefore('\n').trim()
+    if (head.isEmpty()) return false
+    val clause = head.substringBefore('：')
+    return TOOL_RESULT_FAILURE_MARKERS.any { clause.contains(it) }
+}
+
 /*
  * ============================================================================
  * 开发规范 (Development Specifications)
@@ -108,10 +122,10 @@ object AgentSecurity {
 
     /**
      * 工具开关门控：v2 起为每工具独立开关（[AgentToolSwitches.isEnabled]），
-     * 工具注册表 enabledByDefault 仅用于旧数据迁移兜底。
+     * 工具注册表 enabledByDefault 作为开关未显式设置时的默认值来源。
      */
     fun isSwitchEnabled(tool: AgentTool, switches: AgentToolSwitches): Boolean =
-        switches.isEnabled(tool.name)
+        switches.isEnabled(tool.name, default = tool.enabledByDefault)
 
     /**
      * 参数校验。
@@ -415,16 +429,8 @@ object AgentSecurity {
         tool.confirm == AgentConfirmPolicy.ALWAYS_CONFIRM ||
             (tool.category != AgentToolCategory.READ && tool.category != AgentToolCategory.OCR)
 
-    /** 行动结果是否成功（结果文案含失败语义即视为失败）。 */
-    private fun isActionSuccess(result: String): Boolean =
-        !result.contains("失败") &&
-            !result.contains("未启用") &&
-            !result.contains("未找到") &&
-            !result.contains("未获得") &&
-            !result.contains("取消") &&
-            !result.contains("超时") &&
-            !result.contains("不存在") &&
-            !result.contains("需要先开启")
+    /** 行动结果是否成功（首行头子句含失败语义即视为失败）。 */
+    private fun isActionSuccess(result: String): Boolean = !isToolResultFailure(result)
 
     private fun withConfirmed(args: JsonObject): JsonObject {
         val map = args.toMutableMap()

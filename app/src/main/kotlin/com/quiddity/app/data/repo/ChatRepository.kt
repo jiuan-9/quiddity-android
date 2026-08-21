@@ -112,15 +112,15 @@ internal fun isContentFilterRejection(t: Throwable?): Boolean {
 internal fun isActionOnlyReply(content: String): Boolean {
     val text = content.trim()
     if (text.isEmpty()) return false
-    if (text.none { isOpenBracket(it) }) return false
+    if (text.none { isOpenBracketChar(it) }) return false
     val stack = ArrayDeque<Char>()
     var meaningfulChars = 0
     var i = 0
     while (i < text.length) {
         val ch = text[i]
         when {
-            isOpenBracket(ch) -> stack.addLast(ch)
-            isCloseBracket(ch) -> {
+            isOpenBracketChar(ch) -> stack.addLast(ch)
+            isCloseBracketChar(ch) -> {
                 if (stack.isNotEmpty() && bracketMatches(stack.last(), ch)) stack.removeLast()
             }
             ch.isWhitespace() || ch in ACTION_ONLY_PUNCTUATION -> Unit
@@ -131,16 +131,7 @@ internal fun isActionOnlyReply(content: String): Boolean {
     return meaningfulChars == 0 && stack.isEmpty()
 }
 
-private fun isOpenBracket(ch: Char): Boolean = when (ch) {
-    '(', '（', '[', '【', '{', '<' -> true
-    else -> false
-}
-
-private fun isCloseBracket(ch: Char): Boolean = when (ch) {
-    ')', '）', ']', '】', '}', '>' -> true
-    else -> false
-}
-
+// ===== 括号字符判定：与 stripBracketsAndPunctuation 共用同一组 isOpenBracketChar/isCloseBracketChar =====
 private fun bracketMatches(open: Char, close: Char): Boolean = when (open) {
     '(' -> close == ')'
     '（' -> close == '）'
@@ -452,12 +443,6 @@ class ChatRepository(
         regeneratePreviousReply: String? = null,
         onEvent: suspend (Event) -> Unit
     ) = groupReplyRunner.streamGroupMemberReply(member, group, transcript, senderId, regeneratePreviousReply, onEvent)
-    suspend fun decideGroupResponder(
-        members: List<Conversation>,
-        transcript: List<Message>,
-        message: Message
-    ): String = groupReplyRunner.decideGroupResponder(members, transcript, message)
-
 }
 
 internal class GroupReplyPrefixSanitizer(names: List<String>) {

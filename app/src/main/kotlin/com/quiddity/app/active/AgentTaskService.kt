@@ -9,9 +9,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
-import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
-import com.quiddity.app.R
 
 /*
  * ============================================================================
@@ -104,14 +102,7 @@ class AgentTaskService : Service() {
     }
 
     private fun buildNotification(): Notification =
-        NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_notification)
-            // 与主动消息前台服务同一文案约定：处理期间统一「潮水无声，静待回荡」
-            .setContentTitle("潮水无声")
-            .setContentText("静待回荡")
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setOngoing(true)
-            .build()
+        NotificationChannels.buildForeground(this, CHANNEL_ID)
 
     companion object {
         private const val CHANNEL_ID = "agent_task"

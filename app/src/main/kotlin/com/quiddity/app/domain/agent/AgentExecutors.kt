@@ -504,7 +504,7 @@ class AgentExecutors(
             val shot = screenshot()
             val marker = "已保存截图："
             if (shot.startsWith(marker)) {
-                shot.removePrefix(marker).substringBefore(" ").trim()
+                shot.removePrefix(marker).trim()
             } else {
                 return shot
             }
@@ -949,17 +949,20 @@ class AgentExecutors(
         return runCatching { java.time.Instant.parse(value.trim()).toEpochMilli() }.getOrNull()
     }
 
-    private fun hasUsageAccess(): Boolean = runCatching {
-        val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
-        @Suppress("DEPRECATION")
-        appOps.checkOpNoThrow(
-            AppOpsManager.OPSTR_GET_USAGE_STATS,
-            Process.myUid(),
-            context.packageName
-        ) == AppOpsManager.MODE_ALLOWED
-    }.getOrDefault(false)
+    private fun hasUsageAccess(): Boolean = hasUsageAccess(context)
 
     companion object {
+
+        /** 是否已授予「使用情况访问」权限（执行层与设置页共用）。 */
+        fun hasUsageAccess(context: Context): Boolean = runCatching {
+            val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
+            @Suppress("DEPRECATION")
+            appOps.checkOpNoThrow(
+                AppOpsManager.OPSTR_GET_USAGE_STATS,
+                Process.myUid(),
+                context.packageName
+            ) == AppOpsManager.MODE_ALLOWED
+        }.getOrDefault(false)
 
         private const val DAY_MS = 86_400_000L
 

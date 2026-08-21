@@ -134,17 +134,6 @@ internal class GroupReplyRunner(
     }
 
     /**
-     * 解析群聊转述中出现的成员 id → 名字（未设置名字的成员回退显示 id）。
-     */
-    suspend fun decideGroupResponder(
-        members: List<Conversation>,
-        transcript: List<Message>,
-        message: Message
-    ): String {
-        throw NotImplementedError("群聊功能未实现：1.3.0 仅预留接口，2.0.0 实体加入")
-    }
-
-    /**
      * 群聊小本本压缩接口（4.1，2.0.0 实现）。
      *
      * 规划：达到条数阈值（[QuiddityConstants.GROUP_MEMORY_THRESHOLD]）后对群聊转述执行压缩，

@@ -37,6 +37,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -50,6 +51,21 @@ import com.quiddity.app.ui.theme.Motion
 import com.quiddity.app.util.DateUtils
 import kotlinx.coroutines.delay
 
+
+@Composable
+internal fun cardColor(isMultiSelect: Boolean, isSelected: Boolean, hasListWallpaper: Boolean): Color {
+    return when {
+        isMultiSelect && isSelected ->
+            if (hasListWallpaper) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.80f)
+            else MaterialTheme.colorScheme.primaryContainer
+        isMultiSelect ->
+            if (hasListWallpaper) MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.55f)
+            else MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.5f)
+        else ->
+            if (hasListWallpaper) MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.78f)
+            else MaterialTheme.colorScheme.surfaceContainerLow
+    }
+}
 
 @Composable
 internal fun ConversationCard(
@@ -68,20 +84,7 @@ internal fun ConversationCard(
     //   * 多选未选：surfaceContainerLow @ 0.55f 透明度（更透，弱化未选项）
     //   * 多选已选：primaryContainer @ 0.80f 透明度（保留选中高亮）
     // - tonalElevation 在壁纸存在时设为 0，避免 M3 自动叠加的不透明色调破坏透明效果
-    val cardColor = when {
-        isMultiSelect && isSelected -> {
-            if (hasListWallpaper) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.80f)
-            else MaterialTheme.colorScheme.primaryContainer
-        }
-        isMultiSelect -> {
-            if (hasListWallpaper) MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.55f)
-            else MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.5f)
-        }
-        else -> {
-            if (hasListWallpaper) MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.78f)
-            else MaterialTheme.colorScheme.surfaceContainerLow
-        }
-    }
+    val cardColor = cardColor(isMultiSelect, isSelected, hasListWallpaper)
 
     // - 仅保留头像 + 名字
     // - 多选模式下右侧显示选中状态勾选框
@@ -164,20 +167,7 @@ internal fun GroupConversationCard(
     val members = remember(conversation.memberConversationIds) {
         memberResolver(conversation.memberConversationIds)
     }
-    val cardColor = when {
-        isMultiSelect && isSelected -> {
-            if (hasListWallpaper) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.80f)
-            else MaterialTheme.colorScheme.primaryContainer
-        }
-        isMultiSelect -> {
-            if (hasListWallpaper) MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.55f)
-            else MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.5f)
-        }
-        else -> {
-            if (hasListWallpaper) MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.78f)
-            else MaterialTheme.colorScheme.surfaceContainerLow
-        }
-    }
+    val cardColor = cardColor(isMultiSelect, isSelected, hasListWallpaper)
     Box(
         modifier = modifier
             .fillMaxWidth()

@@ -58,7 +58,6 @@ class ReplyOverlayService : Service(), ReplyOverlayView.Listener {
 
     /** 拖动时显示的关闭按钮（独立悬浮窗，拖到上面即关闭）。 */
     private var closeButtonView: TextView? = null
-    private var closeButtonParams: WindowManager.LayoutParams? = null
     private var closeHighlighted = false
 
     override fun onCreate() {
@@ -231,7 +230,7 @@ class ReplyOverlayService : Service(), ReplyOverlayView.Listener {
     }
 
     override fun onSnapped(left: Boolean, x: Int, y: Int) {
-        // 位置由 animateWindowTo 平滑过渡，这里只接收吸附方向翻转，不直接落点
+        // x/y 为吸附目标点，仅作方向参考（左右翻转由 left 决定），实际落点由 animateWindowTo 平滑完成
     }
 
     override fun onAvatarClicked() {
@@ -423,7 +422,6 @@ class ReplyOverlayService : Service(), ReplyOverlayView.Listener {
         runCatching {
             windowManager.addView(button, params)
             closeButtonView = button
-            closeButtonParams = params
             closeHighlighted = false
         }
     }
@@ -432,7 +430,6 @@ class ReplyOverlayService : Service(), ReplyOverlayView.Listener {
     private fun hideCloseButton() {
         closeButtonView?.let { runCatching { windowManager.removeView(it) } }
         closeButtonView = null
-        closeButtonParams = null
         closeHighlighted = false
     }
 

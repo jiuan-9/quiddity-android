@@ -17,7 +17,6 @@ class ReplyOverlayStateMachineTest {
         assertFalse(m.hasVisibleContent)
         m.startReply("c1", ConversationType.SOLO)
         assertEquals(1, m.activeCount)
-        assertEquals("正在回复…", m.aggregateStatusText())
         assertTrue(m.hasVisibleContent)
         m.endReply("c1")
         assertEquals(0, m.activeCount)
@@ -32,10 +31,8 @@ class ReplyOverlayStateMachineTest {
         m.startReply("c3", ConversationType.AGENT)
         assertEquals(3, m.activeCount)
         assertEquals(listOf("c1", "c2", "c3"), m.activeConversationIds())
-        assertEquals("3 个对话正在回复…", m.aggregateStatusText())
         m.endReply("c1")
         assertEquals(2, m.activeCount)
-        assertEquals("2 个对话正在回复…", m.aggregateStatusText())
     }
 
     @Test

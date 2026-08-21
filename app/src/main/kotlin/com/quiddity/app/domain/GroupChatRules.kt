@@ -97,11 +97,7 @@ object GroupChatRules {
         if (nameToId.isEmpty()) return emptyList()
         return nameToId
             .mapNotNull { (name, id) ->
-                if (isMentionedAt(text, name)) {
-                    text.indexOf("@$name") to id
-                } else {
-                    null
-                }
+                findMentionIndex(text, name)?.let { it to id }
             }
             .sortedBy { it.first }
             .map { it.second }
@@ -113,16 +109,23 @@ object GroupChatRules {
      * 空白 / 标点 / 文本结尾。避免「@小明」误命中「@小明哥」「@小明abc」这类
      * 更长词的前缀（子串匹配的误报根因）。
      */
-    fun isMentionedAt(text: String, name: String): Boolean {
-        if (text.isBlank() || name.isBlank()) return false
+    fun isMentionedAt(text: String, name: String): Boolean = findMentionIndex(text, name) != null
+
+    /**
+     * 找到首个合法 @点名 的位置（@ 后紧跟完整名字，且名字后是边界）；
+     * 无合法点名返回 null。用返回的位置而非 [String.indexOf] 排序，
+     * 避免「@小明哥 @小明」这类先出现长名前缀时排序位置错乱。
+     */
+    fun findMentionIndex(text: String, name: String): Int? {
+        if (text.isBlank() || name.isBlank()) return null
         val marker = "@$name"
         var from = 0
         while (true) {
             val idx = text.indexOf(marker, from)
-            if (idx < 0) return false
+            if (idx < 0) return null
             val after = idx + marker.length
             // 名字后必须是边界（结尾 / 空白 / 非字母数字），否则继续向后找
-            if (after >= text.length || !text[after].isLetterOrDigit()) return true
+            if (after >= text.length || !text[after].isLetterOrDigit()) return idx
             from = after
         }
     }

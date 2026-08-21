@@ -287,6 +287,15 @@ class TimeLibraryRepository(
      * - 为所有启用会话补齐当天时间库（见 [refreshLibrariesForEnabledSessions]）
      */
     suspend fun onAppStart() {
+        onAppStartLight()
+        // 全局总开关关闭时 onAppStartLight 已注销全部闹钟并提前返回，无需再补齐
+        if (settingsRepository.currentSnapshot().proactiveMessageEnabled) {
+            refreshLibrariesForEnabledSessions()
+        }
+    }
+
+    /** 启动/开机 goAsync 轻量窗口调用：每日重置 + 重注册闹钟（本地操作，不等待网络型 LLM 补齐）。 */
+    suspend fun onAppStartLight() {
         runCatching {
             settingsRepository.ensureInitialized()
             // 全局总开关关闭：不重置、不注册、不补齐，注销全部会话闹钟
@@ -310,7 +319,6 @@ class TimeLibraryRepository(
             }
         }
         reRegisterAlarms()
-        refreshLibrariesForEnabledSessions()
     }
 
     /**
@@ -321,7 +329,7 @@ class TimeLibraryRepository(
      * 开机后自动为所有启用会话补齐，已生成当天库的会话由
      * [TimeLibraryEngine.shouldGenerate] 判定为无需生成直接跳过（无多余 LLM 调用）。
      */
-    private suspend fun refreshLibrariesForEnabledSessions() {
+    suspend fun refreshLibrariesForEnabledSessions() {
         // 开机/冷启动时网络可能尚未就绪：先延迟再批量补齐，避免全部生成失败
         kotlinx.coroutines.delay(QuiddityConstants.ACTIVE_MESSAGE_STARTUP_DELAY_MS)
         conversationRepository.conversations.value

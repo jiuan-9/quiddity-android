@@ -350,15 +350,20 @@ class ScreenReaderService : AccessibilityService() {
             return dispatchGesture(service, gesture, "拖拽")
         }
 
-        /** 向下滚动查找并点击目标文字，最多尝试 [maxScrolls] 次。 */
+        /** 双向滚动查找并点击目标文字：先向下（视口下方）再向上（视口上方），滚动次数受控防死循环。 */
         suspend fun performScrollToText(text: String, maxScrolls: Int): String {
             val service = instance ?: return "滚动查找需要先开启无障碍服务"
-            repeat(maxScrolls.coerceIn(1, 10)) {
-                val clicked = clickTextNow(service, text)
-                if (clicked) return "已滚动并点击「$text」"
-                val scrolled = performScroll("up", 700f)
-                if (scrolled.startsWith("模拟滑动需要") || scrolled.startsWith("不支持的滑动方向")) {
-                    return "未找到「$text」"
+            val limit = maxScrolls.coerceIn(1, 10)
+            // 目标可能在视口上方或下方：仅向下滚动会漏掉上方目标，改为分段向两侧尝试；
+            // 每轮滚动后重读屏幕文本比对目标，找到即停。
+            val directions = arrayOf("up" to limit / 2, "down" to limit)
+            for ((direction, times) in directions) {
+                repeat(times) {
+                    if (clickTextNow(service, text)) return "已滚动并点击「$text」"
+                    val scrolled = performScroll(direction, 700f)
+                    if (scrolled.startsWith("模拟滑动需要") || scrolled.startsWith("不支持的滑动方向")) {
+                        return "未找到「$text」"
+                    }
                 }
             }
             return "滚动 $maxScrolls 次后仍未找到「$text」"

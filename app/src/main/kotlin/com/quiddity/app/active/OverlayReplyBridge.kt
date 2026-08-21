@@ -25,17 +25,20 @@ object OverlayReplyBridge {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
-    @Volatile
-    private var sending = false
+    /** 正在发送/回复中的会话集合（按会话互斥，避免全局互斥吞掉其他空闲会话的悬浮窗消息）。 */
+    private val sendingConversations = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
-    /** 本次回复累计内容（悬浮窗最终气泡用，不落库）。 */
-    private val replyAccumulator = StringBuilder()
+    /** 各会话本次回复累计内容（悬浮窗最终气泡用，不落库；按会话隔离，避免并发交叉）。 */
+    private val replyAccumulators = mutableMapOf<String, StringBuilder>()
 
     fun send(conversationId: String, type: ConversationType, text: String) {
         val content = text.trim()
         if (content.isEmpty()) return
-        if (sending) return
-        sending = true
+        // 按会话互斥：同一会话已有回复在进行则提示并跳过，且不再用全局互斥吞掉其他空闲会话。
+        if (!sendingConversations.add(conversationId)) {
+            ReplyOverlayController.showTransientStatus("正在回复中，请稍候")
+            return
+        }
         scope.launch {
             try {
                 val convRepo = ServiceLocator.conversationRepository
@@ -63,7 +66,7 @@ object OverlayReplyBridge {
                 }
                 ReplyOverlayController.startReply(conv.id, type)
                 val history = convRepo.observeMessages(conv.id).value
-                replyAccumulator.setLength(0)
+                replyAccumulators[conversationId] = StringBuilder()
                 ServiceLocator.chatRepository.streamAssistantReply(
                     conv = conv,
                     history = history,
@@ -78,7 +81,7 @@ object OverlayReplyBridge {
                 ReplyOverlayController.endReply(conversationId)
             } finally {
                 settleInterruptedStreams(conversationId)
-                sending = false
+                sendingConversations.remove(conversationId)
             }
         }
     }
@@ -111,15 +114,14 @@ object OverlayReplyBridge {
                     return
                 }
                 convRepo.updateMessage(event.message)
-                replyAccumulator.append(event.message.content)
+                replyAccumulators.getOrPut(conv.id) { StringBuilder() }.append(event.message.content)
             }
             is ChatRepository.Event.ToolConfirmBatch ->
                 // 悬浮窗无确认 UI：一律拒绝需要确认的工具操作（安全兜底）
                 event.resume(false)
             is ChatRepository.Event.Done -> {
                 // 回复结束：本轮累计的完整回复作为最终气泡展示
-                val fullReply = replyAccumulator.toString().trim()
-                replyAccumulator.setLength(0)
+                val fullReply = replyAccumulators.remove(conv.id)?.toString()?.trim().orEmpty()
                 if (fullReply.isNotBlank()) {
                     ReplyOverlayController.enqueueBubble(
                         text = fullReply,
@@ -130,11 +132,11 @@ object OverlayReplyBridge {
                 ReplyOverlayController.endReply(conv.id)
             }
             is ChatRepository.Event.Error -> {
-                replyAccumulator.setLength(0)
+                replyAccumulators.remove(conv.id)
                 ReplyOverlayController.endReply(conv.id)
             }
             is ChatRepository.Event.Truncated -> {
-                replyAccumulator.setLength(0)
+                replyAccumulators.remove(conv.id)
                 ReplyOverlayController.endReply(conv.id)
             }
             is ChatRepository.Event.Notice -> Unit

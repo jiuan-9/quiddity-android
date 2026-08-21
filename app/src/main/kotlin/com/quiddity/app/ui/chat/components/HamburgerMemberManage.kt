@@ -119,13 +119,25 @@ internal fun GroupMemberManagePanel(
         }
     }
 
-    /** 配置成员 API 后重新校验；通过则从失败列表移除。 */
+    /** 把已通过校验的成员真正并入群聊（刷新群聊本体，避免用过期快照覆盖）；超限/已存在则忽略。 */
+    suspend fun addMemberToGroup(memberId: String) {
+        val currentGroup = conversationRepo.conversations.value
+            .firstOrNull { it.id == group.id } ?: group
+        val newIds = currentGroup.memberConversationIds + memberId
+        if (newIds.size <= QuiddityConstants.GROUP_MAX_MEMBERS && memberId !in currentGroup.memberConversationIds) {
+            conversationRepo.updateConversation(currentGroup.copy(memberConversationIds = newIds))
+        }
+    }
+
+    /** 配置成员 API 后重新校验；通过则从失败列表移除并真正加入群聊。 */
     fun configureMemberAndRevalidate(member: Conversation, catalogId: String?) {
         scope.launch {
             val updated = member.copy(apiCatalogId = catalogId)
             conversationRepo.updateConversation(updated)
             val result = conversationRepo.validateGroupMember(updated)
             if (result.isSuccess) {
+                // 真正并入群聊：仅更新成员自身会话不足以让成员成为群聊成员
+                addMemberToGroup(updated.id)
                 android.widget.Toast.makeText(
                     context,
                     "${member.persona.name.ifBlank { "成员" }} 配置成功，已加入",
@@ -308,6 +320,8 @@ internal fun GroupMemberManagePanel(
                             ?: return@launch
                         val result = conversationRepo.validateGroupMember(updated)
                         if (result.isSuccess) {
+                            // 真正并入群聊：仅更新成员自身会话不足以让成员成为群聊成员
+                            addMemberToGroup(updated.id)
                             android.widget.Toast.makeText(
                                 context,
                                 "${updated.persona.name.ifBlank { "成员" }} 校验通过，已加入",

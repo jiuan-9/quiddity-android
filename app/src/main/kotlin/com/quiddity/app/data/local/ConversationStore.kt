@@ -264,6 +264,8 @@ class ConversationStore(private val context: Context) {
             _conversations.value = newList
             written
         }
+        // 删除会话前清理其引用的持久化聊天图片，回收内部存储空间
+        deleteConversationImages(convId)
         runCatching { messagesFile(convId).delete() }
             .onFailure { android.util.Log.w("ConversationStore", "删除 messages_$convId.json 失败", it) }
         getMessageLock(convId).withLock {
@@ -271,6 +273,22 @@ class ConversationStore(private val context: Context) {
             messagesFlows.remove(convId)?.value = emptyList()
         }
         ok
+    }
+
+    /** 删除会话引用的持久化聊天图片文件（file:// chat_images/msg_*），回收空间。 */
+    private fun deleteConversationImages(convId: String) {
+        val file = messagesFile(convId)
+        if (!file.exists()) return
+        val messages = runCatching {
+            json.decodeFromString(ListSerializer(Message.serializer()), file.readText())
+        }.getOrDefault(emptyList())
+        messages.forEach { msg ->
+            msg.imageUri?.takeIf { it.isNotBlank() }?.let { uriStr ->
+                runCatching {
+                    com.quiddity.app.util.ImageUtils.deleteChatImage(android.net.Uri.parse(uriStr))
+                }
+            }
+        }
     }
 
     /**
@@ -287,6 +305,8 @@ class ConversationStore(private val context: Context) {
             written
         }
         convIds.forEach { convId ->
+            // 删除会话前清理其引用的持久化聊天图片
+            deleteConversationImages(convId)
             runCatching { messagesFile(convId).delete() }
                 .onFailure { android.util.Log.w("ConversationStore", "删除 messages_$convId.json 失败", it) }
             getMessageLock(convId).withLock {
@@ -333,7 +353,8 @@ class ConversationStore(private val context: Context) {
         val now = System.currentTimeMillis()
         // 流式中的 AI 消息尚未定型：不更新会话预览与 updatedAt，
         // 避免每个 token 都重写 conversations.json（预览内容也是中间态）
-        if (!message.isStreaming) {
+        // isNotice（如小应用邀请气泡）为 UI 专用、不参与对话：同样不更新预览与排序。
+        if (!message.isStreaming && !message.isNotice) {
             conversationsLock.withLock {
                 val newList = _conversations.value.map { conv ->
                     if (conv.id == convId) conv.copy(lastMessagePreview = preview, updatedAt = now)

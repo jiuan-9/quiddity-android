@@ -113,14 +113,6 @@ class ReplyOverlayStateMachine {
         toolActions.values.firstOrNull()
     }
 
-    fun aggregateStatusText(): String = synchronized(lock) {
-        when (active.size) {
-            0 -> ""
-            1 -> "正在回复…"
-            else -> "${active.size} 个对话正在回复…"
-        }
-    }
-
     fun clearAll() {
         synchronized(lock) {
             active.clear()

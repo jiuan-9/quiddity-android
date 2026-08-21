@@ -35,14 +35,6 @@ internal data class StreamRoundResult(
     val isCompleteReply: Boolean get() = hasContent && !truncated
 }
 
-private const val MAX_FINAL_RECOVERY_ROUNDS = 3
-
-private const val TRUNCATE_CONTINUE_NUDGE =
-    "（你的回复因达到长度上限被截断。请直接从断点继续输出，不要重复已经输出的内容，直接给出后续正文。）"
-
-private const val EMPTY_REPLY_NUDGE =
-    "（你刚才没有输出有效回复。请基于已有信息直接给出完整回复；若任务尚未完成，请继续完成并说明结果。）"
-
 private const val DEEPSEEK_THINKING_UNAVAILABLE_REPORT = "deepseek本身模型有概率不配合，思考内容不返回"
 
 internal class SingleStreamRunner(

@@ -40,6 +40,15 @@ import com.quiddity.app.ui.chat.PendingToolConfirm
 import com.quiddity.app.ui.chat.WithdrawProposal
 import com.quiddity.app.ui.chat.components.RewriteBottomSheet
 import com.quiddity.app.ui.theme.Motion
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
+
+/** 取参数原始字符串（无 JSON 引号）；非原始值回退 JSON 表示。 */
+private fun argText(v: JsonElement?): String = when (v) {
+    null -> ""
+    is JsonPrimitive -> v.content
+    else -> v.toString()
+}
 
 @Composable
 internal fun AgentChatDialogs(
@@ -120,18 +129,18 @@ internal fun AgentChatDialogs(
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         val detail = buildString {
-                            item.args["pkg"]?.let { append("应用包名：$it\n") }
-                            item.args["path"]?.let { append("路径：$it\n") }
-                            item.args["src"]?.let { append("源路径：$it\n") }
-                            item.args["dst"]?.let { append("目标路径：$it\n") }
-                            item.args["op"]?.let { append("权限操作：$it\n") }
-                            item.args["mode"]?.let { append("权限模式：$it\n") }
-                            item.args["x"]?.let { append("横坐标：$it\n") }
-                            item.args["y"]?.let { append("纵坐标：$it\n") }
-                            item.args["direction"]?.let { append("方向：$it\n") }
-                            item.args["distance"]?.let { append("距离：$it\n") }
-                            item.args["action"]?.let { append("系统动作：$it\n") }
-                            item.args["text"]?.let { append("文字：$it\n") }
+                            item.args["pkg"]?.let { append("应用包名：${argText(it)}\n") }
+                            item.args["path"]?.let { append("路径：${argText(it)}\n") }
+                            item.args["src"]?.let { append("源路径：${argText(it)}\n") }
+                            item.args["dst"]?.let { append("目标路径：${argText(it)}\n") }
+                            item.args["op"]?.let { append("权限操作：${argText(it)}\n") }
+                            item.args["mode"]?.let { append("权限模式：${argText(it)}\n") }
+                            item.args["x"]?.let { append("横坐标：${argText(it)}\n") }
+                            item.args["y"]?.let { append("纵坐标：${argText(it)}\n") }
+                            item.args["direction"]?.let { append("方向：${argText(it)}\n") }
+                            item.args["distance"]?.let { append("距离：${argText(it)}\n") }
+                            item.args["action"]?.let { append("系统动作：${argText(it)}\n") }
+                            item.args["text"]?.let { append("文字：${argText(it)}\n") }
                             if (isEmpty()) append(item.args.toString())
                         }.trimEnd()
                         Text(

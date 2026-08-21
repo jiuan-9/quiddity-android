@@ -95,13 +95,13 @@ class ChatViewModel(
                 }
         }
 
-        // 一次性同步：会话首次加载时，若 memoryBankEnabled 且 memoryBankRounds 与
-        // contextLimit 不一致（历史数据残留旧默认值 40），自动同步为 contextLimit。
-        // 同步后两者相等，不会重复触发；用户后续手动调整 memoryBankRounds 不会被覆盖
-        // （仅当 contextLimit 再次变化时才由 updateContextLimit 重新同步）。
+        // 一次性同步：会话首次加载时，仅当 memoryBankRounds 仍为旧版遗留默认值（40，
+        // 即历史 FULL 档的 contextLimit）时，自动对齐为当前 contextLimit。
+        // 不覆盖用户手动设置的其它自定义轮数（仅当 contextLimit 变化时才由 updateContextLimit 重新同步）。
         viewModelScope.launch {
             state.conversation.firstOrNull { conv ->
-                conv != null && conv.memoryBankEnabled && conv.memoryBankRounds != conv.contextLimit
+                conv != null && conv.memoryBankEnabled &&
+                    conv.memoryBankRounds == QuiddityConstants.TIER_FULL_CONTEXT_LIMIT
             }?.let { conv ->
                 val syncRounds = conv.contextLimit.coerceIn(
                     QuiddityConstants.MIN_MEMORY_BANK_ROUNDS,

@@ -138,85 +138,93 @@ class DefuseViewModel(
 
     fun start() {
         if (_uiState.value.checking) return
+        val expectedRoute = _uiState.value.route
         _uiState.update { it.copy(checking = true) }
         viewModelScope.launch {
-            val partner = _uiState.value.partner
-            val difficulty = _uiState.value.difficulty
-            val game = DefuseGenerator.generate(difficulty, random)
-            var partnerName = "内置搭档"
-            var partnerAvatarUri: String? = null
-            var partnerPersona: String? = null
-            var access: ApiAccess.Resolved? = null
-            var conversationId: String? = null
-            var notice: String? = null
+            try {
+                val partner = _uiState.value.partner
+                val difficulty = _uiState.value.difficulty
+                val game = DefuseGenerator.generate(difficulty, random)
+                var partnerName = "内置搭档"
+                var partnerAvatarUri: String? = null
+                var partnerPersona: String? = null
+                var access: ApiAccess.Resolved? = null
+                var conversationId: String? = null
+                var notice: String? = null
 
-            if (partner != null) {
-                val conversation = partner.conversation
-                val character = partner.character ?: conversation?.let { conv ->
-                    Character(
-                        id = conv.characterId ?: "defuse_${conv.id}",
-                        persona = conv.persona,
-                        userPersona = conv.userPersona,
-                        memory = conv.memory,
-                        aiAvatarUri = conv.persona.aiAvatarUri
-                    )
-                }
-                if (character != null) {
-                    if (partner.character != null && conversation != null && conversation.characterId == null) {
-                        conversationRepository.updateConversation(conversation.copy(characterId = partner.character.id))
-                    }
-                    val invite = inviteManager.prepare(
-                        character = character,
-                        inviteBubbleText = { name -> "你邀请了「$name」一起拆弹小队：你看面板，TA 翻手册，别剪错线！" },
-                        miniAppId = "defuse",
-                        miniAppTitle = "拆弹小队",
-                        existingConversation = conversation
-                    )
-                    access = invite.access
-                    conversationId = invite.conversationId
-                    partnerName = invite.opponentName
-                    partnerPersona = invite.opponentPersona
-                    partnerAvatarUri = partner.avatarUri
-                    if (access == null) {
-                        notice = "未检测到可用 API，已切换为内置脚本搭档"
-                    }
-                }
-            }
-
-            val session = DefuseSession(game)
-            val now = System.currentTimeMillis()
-            warned30 = false
-            _uiState.update {
-                it.copy(
-                    route = DefuseRoute.Playing(game.id),
-                    game = game,
-                    session = session,
-                    partnerName = partnerName,
-                    partnerAvatarUri = partnerAvatarUri,
-                    partnerPersona = partnerPersona,
-                    messages = listOf(
-                        DefuseChatMessage(
-                            sender = DefuseChatSender.PARTNER,
-                            text = DefuseScriptPartner.opening(partnerName)
+                if (partner != null) {
+                    val conversation = partner.conversation
+                    val character = partner.character ?: conversation?.let { conv ->
+                        Character(
+                            id = conv.characterId ?: "defuse_${conv.id}",
+                            persona = conv.persona,
+                            userPersona = conv.userPersona,
+                            memory = conv.memory,
+                            aiAvatarUri = conv.persona.aiAvatarUri
                         )
-                    ),
-                    thinking = false,
-                    checking = false,
-                    notice = notice,
-                    conversationId = conversationId,
-                    access = access,
-                    startedAtMs = now,
-                    nowMs = now,
-                    opponentBoostMs = 0L,
-                    helpUsed = false,
-                    showManual = false,
-                    lastEvent = null,
-                    finishedAtMs = null,
-                    resultKind = null,
-                    score = 0
-                )
+                    }
+                    if (character != null) {
+                        if (partner.character != null && conversation != null && conversation.characterId == null) {
+                            conversationRepository.updateConversation(conversation.copy(characterId = partner.character.id))
+                        }
+                        val invite = inviteManager.prepare(
+                            character = character,
+                            inviteBubbleText = { name -> DefuseMiniApp.inviteBubbleText(name) },
+                            miniAppId = DefuseMiniApp.id,
+                            miniAppTitle = DefuseMiniApp.name,
+                            existingConversation = conversation
+                        )
+                        access = invite.access
+                        conversationId = invite.conversationId
+                        partnerName = invite.opponentName
+                        partnerPersona = invite.opponentPersona
+                        partnerAvatarUri = partner.avatarUri
+                        if (access == null) {
+                            notice = "未检测到可用 API，已切换为内置脚本搭档"
+                        }
+                    }
+                }
+
+                // 检查期用户可能已返回/离开设置页，校验目标路由后再进入对局
+                if (_uiState.value.route != expectedRoute) return@launch
+
+                val session = DefuseSession(game)
+                val now = System.currentTimeMillis()
+                warned30 = false
+                _uiState.update {
+                    it.copy(
+                        route = DefuseRoute.Playing(game.id),
+                        game = game,
+                        session = session,
+                        partnerName = partnerName,
+                        partnerAvatarUri = partnerAvatarUri,
+                        partnerPersona = partnerPersona,
+                        messages = listOf(
+                            DefuseChatMessage(
+                                sender = DefuseChatSender.PARTNER,
+                                text = DefuseScriptPartner.opening(partnerName)
+                            )
+                        ),
+                        thinking = false,
+                        checking = false,
+                        notice = notice,
+                        conversationId = conversationId,
+                        access = access,
+                        startedAtMs = now,
+                        nowMs = now,
+                        opponentBoostMs = 0L,
+                        helpUsed = false,
+                        showManual = false,
+                        lastEvent = null,
+                        finishedAtMs = null,
+                        resultKind = null,
+                        score = 0
+                    )
+                }
+                startTicker()
+            } finally {
+                _uiState.update { it.copy(checking = false) }
             }
-            startTicker()
         }
     }
 
@@ -242,7 +250,11 @@ class DefuseViewModel(
                     finish(session.copy(exploded = true), total, opponentBeaten = false)
                     break
                 }
-                if (!session.allCleared && elapsed >= opponent) {
+                // 「首次求助对手加速8秒」应真实生效：输局判定与进度条同口径
+                // （(elapsed+boost)/opponentTimeMs 到 100% 即 elapsed = opponentTimeMs - boost）。
+                if (!session.allCleared &&
+                    elapsed >= (opponent - state.opponentBoostMs).coerceAtLeast(0L)
+                ) {
                     finish(session, elapsed, opponentBeaten = false)
                     break
                 }
@@ -320,7 +332,7 @@ class DefuseViewModel(
                     finish(
                         move.session,
                         elapsed,
-                        opponentBeaten = elapsed <= move.session.game.opponentTimeMs
+                        opponentBeaten = elapsed + state.opponentBoostMs <= move.session.game.opponentTimeMs
                     )
                 } else {
                     appendPartnerLine(DefuseScriptPartner.onDefused())

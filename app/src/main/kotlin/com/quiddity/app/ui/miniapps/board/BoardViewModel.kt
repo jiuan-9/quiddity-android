@@ -177,38 +177,45 @@ class BoardViewModel(
         val size = route.size
         _uiState.update { it.copy(inviteChecking = true) }
         viewModelScope.launch {
-            val conversation = invitee.conversation
-            val character = invitee.character ?: conversation?.let { conv ->
-                Character(
-                    id = conv.characterId ?: "board_${conv.id}",
-                    persona = conv.persona,
-                    userPersona = conv.userPersona,
-                    memory = conv.memory,
-                    aiAvatarUri = conv.persona.aiAvatarUri
+            try {
+                val conversation = invitee.conversation
+                val character = invitee.character ?: conversation?.let { conv ->
+                    Character(
+                        id = conv.characterId ?: "board_${conv.id}",
+                        persona = conv.persona,
+                        userPersona = conv.userPersona,
+                        memory = conv.memory,
+                        aiAvatarUri = conv.persona.aiAvatarUri
+                    )
+                } ?: return@launch
+                if (invitee.character != null && conversation != null && conversation.characterId == null) {
+                    conversationRepository.updateConversation(conversation.copy(characterId = invitee.character.id))
+                }
+                val invite = inviteManager.prepare(
+                    character = character,
+                    inviteBubbleText = { name -> BoardMiniApp.inviteBubbleText(game, size, name) },
+                    miniAppId = BoardMiniApp.id,
+                    miniAppTitle = BoardMiniApp.name,
+                    existingConversation = conversation
                 )
-            } ?: return@launch
-            if (invitee.character != null && conversation != null && conversation.characterId == null) {
-                conversationRepository.updateConversation(conversation.copy(characterId = invitee.character.id))
-            }
-            val invite = inviteManager.prepare(
-                character = character,
-                inviteBubbleText = { name -> BoardMiniApp.inviteBubbleText(game, size, name) },
-                miniAppId = BoardMiniApp.id,
-                miniAppTitle = BoardMiniApp.name,
-                existingConversation = conversation
-            )
 
-            startSession(
-                game = game,
-                boardSize = size,
-                mode = BoardGameMode.INVITE_CHARACTER,
-                opponentName = invite.opponentName,
-                opponentPersona = invite.opponentPersona,
-                difficulty = BoardDifficulty.default(),
-                conversationId = invite.conversationId,
-                access = invite.access,
-                notice = if (invite.access == null) "API 连接失败，已切换为本地电脑对弈" else null
-            )
+                // 检查期用户可能已返回邀请页，校验仍处于 Invite 再开局
+                if (_uiState.value.route !is BoardRoute.Invite) return@launch
+
+                startSession(
+                    game = game,
+                    boardSize = size,
+                    mode = BoardGameMode.INVITE_CHARACTER,
+                    opponentName = invite.opponentName,
+                    opponentPersona = invite.opponentPersona,
+                    difficulty = BoardDifficulty.default(),
+                    conversationId = invite.conversationId,
+                    access = invite.access,
+                    notice = if (invite.access == null) "API 连接失败，已切换为本地电脑对弈" else null
+                )
+            } finally {
+                _uiState.update { it.copy(inviteChecking = false) }
+            }
         }
     }
 

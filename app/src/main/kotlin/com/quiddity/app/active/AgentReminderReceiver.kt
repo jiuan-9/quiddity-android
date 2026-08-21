@@ -51,7 +51,10 @@ class AgentReminderReceiver : BroadcastReceiver() {
                 .setAutoCancel(true)
                 .setPriority(NotificationCompat.PRIORITY_DEFAULT)
                 .build()
-            manager.notify(NOTIFICATION_ID, notification)
+            // 用标题+文本派生稳定且唯一的通知 ID：多条不同提醒同时到点时不互相覆盖，
+            // 同一条提醒（相同标题文本）仍走 ID 复用，更新而非重复堆叠。
+            val notificationId = (title + "|" + text).hashCode() and Int.MAX_VALUE
+            manager.notify(notificationId, notification)
         }
     }
 
@@ -60,6 +63,5 @@ class AgentReminderReceiver : BroadcastReceiver() {
         const val EXTRA_TITLE = "title"
         const val EXTRA_TEXT = "text"
         private const val CHANNEL_ID = "agent_reminder"
-        private const val NOTIFICATION_ID = 1201
     }
 }

@@ -191,15 +191,18 @@ internal fun rememberHamburgerFileLaunchers(
                                     if (plan.needsKeyRefill.isNotEmpty()) {
                                         onKeyRefill(plan.needsKeyRefill)
                                     }
+                                    // 与设置页导入一致：先恢复壁纸/头像等资产（复制到内部存储并改写 URI），
+                                    // 否则导入后这些图片仍是源设备的无效路径而显示损坏。
+                                    val (restored, assetSkips) = DataPorter.restoreAssets(context, plan.payload)
                                     // 已有数据时弹窗让用户抉择；无数据时直接合并导入
                                     if (settingsViewModel.hasExistingData()) {
-                                        onImportPayload(plan.payload)
+                                        onImportPayload(restored)
                                     } else {
-                                        settingsViewModel.importAllPayload(plan.payload, mode = ImportMode.MERGE)
-                                        onToast(if (plan.skipItems.isEmpty()) {
+                                        settingsViewModel.importAllPayload(restored, mode = ImportMode.MERGE)
+                                        onToast(if (plan.skipItems.isEmpty() && assetSkips.isEmpty()) {
                                             "对话记录已导入（JSON）"
                                         } else {
-                                            "对话记录已导入（${plan.skipItems.size} 项已跳过）"
+                                            "对话记录已导入（${plan.skipItems.size + assetSkips.size} 项已跳过）"
                                         })
                                     }
                                 }

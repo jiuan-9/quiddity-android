@@ -71,7 +71,7 @@ fun categoryOf(name: String): AgentToolCategory = when (name) {
     "open_app", "notify_self", "reply_notification", "schedule_notify", "sleep" ->
         AgentToolCategory.ACT
     "ocr_image" -> AgentToolCategory.OCR
-    else -> AgentToolCategory.READ
+    else -> AgentToolCategory.ACT
 }
 
 /**
@@ -167,7 +167,9 @@ class AgentRoundEffects {
                 }
                 "copy_file", "move_file", "rename_file" -> {
                     if (!dst.isNullOrBlank()) created += dst
-                    if (!src.isNullOrBlank() && toolName != "rename_file") changed += "移动 $src"
+                    if (!src.isNullOrBlank() && toolName != "rename_file") {
+                        changed += (if (toolName == "copy_file") "复制 $src" else "移动 $src")
+                    }
                 }
                 "write_file", "append_file" -> {
                     if (!path.isNullOrBlank()) changed += "写入 $path"

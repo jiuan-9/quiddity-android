@@ -1,12 +1,9 @@
 package com.quiddity.app.ui.agent
 
-import android.net.Uri
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
@@ -120,6 +117,7 @@ import com.quiddity.app.data.model.Role
 import com.quiddity.app.di.ServiceLocator
 import com.quiddity.app.ui.components.AiAvatar
 import com.quiddity.app.ui.chat.ChatViewModel
+import com.quiddity.app.ui.chat.rememberChatImagePicker
 import com.quiddity.app.ui.chat.ToolTrace
 import com.quiddity.app.ui.chat.OcrState
 import com.quiddity.app.ui.chat.components.ChatInputBar
@@ -130,8 +128,8 @@ import com.quiddity.app.ui.chat.components.StreamingCursor
 import com.quiddity.app.ui.chat.components.TypingIndicator
 import com.quiddity.app.ui.chat.gesture.ChatDragController
 import com.quiddity.app.ui.chat.gesture.detectNativeHorizontalSwipe
+import com.quiddity.app.domain.agent.AgentToolCategory
 import com.quiddity.app.domain.agent.AgentToolRegistry
-import com.quiddity.app.util.ImageUtils
 import com.quiddity.app.ui.settings.SettingsViewModel
 import com.quiddity.app.ui.theme.Motion
 import com.quiddity.app.util.DateUtils
@@ -251,27 +249,8 @@ fun AgentChatScreen(
     val openedAtMs = rememberSaveable { System.currentTimeMillis() }
 
     // ===== 发图：选图 → 复制到内部存储（规避临时授权丢失） → 挂载待发送 =====
-    val imagePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        if (uri != null) {
-            val copied = runCatching {
-                ImageUtils.copyToInternalStorage(context, uri, "chat_images")
-            }.getOrNull()
-            if (copied != null) {
-                viewModel.setPendingImage(copied.toString())
-            } else {
-                Toast.makeText(context, "图片读取失败，请重新选择", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-    var lastAttachedImageUri by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(pendingImageUri) {
-        val previous = lastAttachedImageUri
-        lastAttachedImageUri = pendingImageUri
-        if (pendingImageUri == null && previous != null) {
-            ImageUtils.deleteTempFile(Uri.parse(previous))
-        }
+    val imagePickerLauncher = rememberChatImagePicker(context, pendingImageUri) { uri ->
+        viewModel.setPendingImage(uri)
     }
 
     // ===== 滑动手势：与私聊/群聊同一套 ChatDragController =====
@@ -324,7 +303,9 @@ fun AgentChatScreen(
             if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
                 accessibilityWarning =
                     conversation?.type == com.quiddity.app.data.model.ConversationType.AGENT &&
-                        ServiceLocator.agentStore?.snapshot()?.toolSwitches?.simulate_click == true &&
+                        AgentToolCategory.toolsOf(AgentToolCategory.ACT).any {
+                            ServiceLocator.agentStore?.snapshot()?.toolSwitches?.isEnabled(it) == true
+                        } &&
                         !com.quiddity.app.active.ScreenReaderService.isServiceEnabled(context)
             }
         }

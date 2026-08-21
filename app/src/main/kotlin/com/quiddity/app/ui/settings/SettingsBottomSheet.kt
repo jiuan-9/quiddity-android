@@ -165,6 +165,9 @@ import kotlinx.coroutines.withContext
 // 当前规则：80% 屏幕高度从底部滑入；rememberSaveable 保留子页面状态。
 // 顶部抓手可拖动关闭：拖动时整个面板 translationY 实时跟随手指（1:1），
 // 超过阈值（屏幕高度 20%）则关闭，否则回弹。
+// 悬浮窗授权跳转超时窗口：超过该时长视为非本次返回，不再自动开启悬浮窗
+private const val OVERLAY_REQUEST_WINDOW_MS = 5 * 60 * 1000L
+
 @Composable
 fun SettingsBottomSheet(
     viewModel: SettingsViewModel,
@@ -199,16 +202,20 @@ fun SettingsBottomSheet(
     var showDelayEditor by rememberSaveable { mutableStateOf(false) }
     var showListWallpaper by rememberSaveable { mutableStateOf(false) }
     var showLegalDocs by rememberSaveable { mutableStateOf(false) }
-    var requestedOverlayPermission by rememberSaveable { mutableStateOf(false) }
+    // 悬浮窗授权跳转标记：记录跳转时间戳，仅该次返回时消费并清除，避免残留导致非本意自动开启
+    var overlayRequestTimestamp by rememberSaveable { mutableStateOf(0L) }
     var toastMsg by remember { mutableStateOf<String?>(null) }
     // 主动消息总开关：开启后先弹"已了解该功能"提示，确认后才持久化
     var showProactiveDialog by remember { mutableStateOf(false) }
 
     // 悬浮窗授权返回后自动开启：授权页跳转前标记，返回前台时若权限已授予则保存开关
     LifecycleResumeEffect(Unit) {
-        if (requestedOverlayPermission && Settings.canDrawOverlays(context)) {
-            requestedOverlayPermission = false
-            viewModel.setOverlayEnabled(true)
+        if (overlayRequestTimestamp != 0L) {
+            val isPendingReturn = System.currentTimeMillis() - overlayRequestTimestamp <= OVERLAY_REQUEST_WINDOW_MS
+            overlayRequestTimestamp = 0L
+            if (isPendingReturn && Settings.canDrawOverlays(context)) {
+                viewModel.setOverlayEnabled(true)
+            }
         }
         onPauseOrDispose { }
     }
@@ -681,7 +688,8 @@ fun SettingsBottomSheet(
                                     } else {
                                         viewModel.setProactiveMessageEnabled(false)
                                     }
-                                }
+                                },
+                                showSavedToast = false
                             )
                         // 系统条件引导：总开关开启后展示精确闹钟 / 电池优化状态与一键跳转
                         if (settings.proactiveMessageEnabled) {
@@ -699,7 +707,7 @@ fun SettingsBottomSheet(
                                     if (enabled) {
                                         if (!Settings.canDrawOverlays(context)) {
                                             // 未授权：跳系统悬浮窗设置页，返回后自动开启
-                                            requestedOverlayPermission = true
+                                            overlayRequestTimestamp = System.currentTimeMillis()
                                             runCatching {
                                                 context.startActivity(
                                                     Intent(
@@ -714,7 +722,8 @@ fun SettingsBottomSheet(
                                     } else {
                                         viewModel.setOverlayEnabled(false)
                                     }
-                                }
+                                },
+                                showSavedToast = false
                             )
                             Row(
                                 modifier = Modifier
@@ -1045,7 +1054,7 @@ fun SettingsBottomSheet(
                                     val ok = viewModel.importAllPayload(restored, mode = ImportMode.REPLACE)
                                     val totalSkips = p.skipItems.size + assetSkips.size
                                     toastMsg = if (!ok) {
-                                        "导入失败：写入数据失败，已回滚本机数据"
+                                        "导入失败：写入数据失败，请重试"
                                     } else if (totalSkips == 0) {
                                         "导入成功（已替换）"
                                     } else {

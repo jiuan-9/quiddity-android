@@ -316,7 +316,8 @@ internal fun ToggleRow(
     onCheckedChange: (Boolean) -> Unit,
     helpText: String? = null,
     onHelpClick: (() -> Unit)? = null,
-    enabled: Boolean = true
+    enabled: Boolean = true,
+    showSavedToast: Boolean = true
 ) {
     val context = LocalContext.current
     // Box 替代 Surface：行内无 elevation 需求，Box+background+clip 跳过 Surface 的 CompositionLocalProvider 开销
@@ -370,7 +371,7 @@ internal fun ToggleRow(
                 checked = checked,
                 onCheckedChange = {
                     onCheckedChange(it)
-                    Toast.makeText(context, "已保存", Toast.LENGTH_SHORT).show()
+                    if (showSavedToast) Toast.makeText(context, "已保存", Toast.LENGTH_SHORT).show()
                 },
                 enabled = enabled
             )

@@ -1,7 +1,6 @@
 package com.quiddity.app.ui.home
 
 import android.os.Build
-import android.graphics.drawable.BitmapDrawable
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
@@ -102,8 +101,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
-import coil.imageLoader
-import coil.request.ImageRequest
 import com.quiddity.app.data.model.Conversation
 import com.quiddity.app.data.model.ConversationType
 import com.quiddity.app.domain.GlobalChatSearch
@@ -116,6 +113,7 @@ import com.quiddity.app.ui.settings.SettingsViewModel
 import com.quiddity.app.ui.theme.Motion
 import com.quiddity.app.util.DateUtils
 import com.quiddity.app.util.WallpaperContrast
+import com.quiddity.app.util.rememberWallpaperBrightness
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -165,7 +163,6 @@ fun HomeScreen(
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
     val newConversationId by viewModel.newConversationId.collectAsStateWithLifecycle()
-    val context = LocalContext.current
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var showAgentSettings by rememberSaveable { mutableStateOf(false) }
 
@@ -173,12 +170,16 @@ fun HomeScreen(
     val pagerState = rememberPagerState(initialPage = 1, pageCount = { 3 })
     val pagerScope = rememberCoroutineScope()
     var showGroupTutorial by rememberSaveable { mutableStateOf(false) }
+    var showAgentTutorial by rememberSaveable { mutableStateOf(false) }
 
     // 首次进入群聊页弹教程（记录已看过，只弹一次，方案十.9）
     LaunchedEffect(pagerState.currentPage) {
         if (pagerState.currentPage == 2 && !settings.groupTutorialSeen) {
             showGroupTutorial = true
             settingsViewModel.setGroupTutorialSeen(true)
+        } else if (pagerState.currentPage == 0 && !settings.agentTutorialSeen) {
+            showAgentTutorial = true
+            settingsViewModel.setAgentTutorialSeen(true)
         }
     }
 
@@ -194,30 +195,7 @@ fun HomeScreen(
     val listWallpaperDarken = settings.listWallpaperDarken
     val hasListWallpaper = listWallpaperUri != null
     // ===== 列表壁纸自动对比度：采样亮度，自动叠加保证文字可读的遮罩基线 =====
-    val imageLoader = LocalContext.current.imageLoader
-    var listWallpaperBrightness by remember(listWallpaperUri) {
-        mutableFloatStateOf(WallpaperContrast.DEFAULT_BRIGHTNESS)
-    }
-    LaunchedEffect(listWallpaperUri) {
-        if (listWallpaperUri == null) {
-            listWallpaperBrightness = WallpaperContrast.DEFAULT_BRIGHTNESS
-            return@LaunchedEffect
-        }
-        val brightness = withContext(Dispatchers.IO) {
-            runCatching {
-                val request = ImageRequest.Builder(context)
-                    .data(listWallpaperUri)
-                    .size(64)
-                    .allowHardware(false)
-                    .build()
-                val drawable = imageLoader.execute(request).drawable
-                val bitmap = (drawable as? BitmapDrawable)?.bitmap
-                    ?: return@runCatching WallpaperContrast.DEFAULT_BRIGHTNESS
-                WallpaperContrast.sampleBrightness(bitmap)
-            }.getOrDefault(WallpaperContrast.DEFAULT_BRIGHTNESS)
-        }
-        listWallpaperBrightness = brightness
-    }
+    val listWallpaperBrightness = rememberWallpaperBrightness(listWallpaperUri)
     val listWallpaperScrim = remember(
         listWallpaperBrightness, listWallpaperDarken, settings.darkMode
     ) {
@@ -447,13 +425,19 @@ fun HomeScreen(
         }
     }
 
+    // 当前 Tab 的会话列表（多选「全选/反选」只作用于当前页，避免跨 Tab 误删其它会话）
+    val currentTabIds = when (pagerState.currentPage) {
+        0 -> agentFiltered.map { it.id }.toSet()
+        1 -> soloFiltered.map { it.id }.toSet()
+        else -> groupFiltered.map { it.id }.toSet()
+    }
+
     fun selectAll() {
-        syncMultiSelect(true, conversations.map { it.id }.toSet())
+        syncMultiSelect(true, currentTabIds)
     }
 
     fun invertSelection() {
-        val allIds = conversations.map { it.id }.toSet()
-        val newIds = allIds - selectedIds
+        val newIds = currentTabIds - selectedIds
         if (newIds.isEmpty() && isMultiSelect) {
             syncMultiSelect(false, newIds)
         } else {
@@ -550,7 +534,7 @@ fun HomeScreen(
                 if (multiSelect) {
                     MultiSelectTopBar(
                         selectedCount = selectedIds.size,
-                        totalCount = conversations.size,
+                        totalCount = currentTabIds.size,
                         onBack = { exitMultiSelect() },
                         onSelectAll = { selectAll() },
                         onInvert = { invertSelection() },
@@ -633,6 +617,8 @@ fun HomeScreen(
                         } else {
                             HorizontalPager(
                                 state = pagerState,
+                                // 多选模式下禁用左右滑动：避免把当前 Tab 的选中项带到他 Tab 造成误删
+                                userScrollEnabled = !isMultiSelect,
                                 modifier = Modifier.fillMaxSize()
                             ) { page ->
                                 if (page == 0) {
@@ -819,6 +805,10 @@ fun HomeScreen(
 
     if (showGroupTutorial) {
         GroupTutorialDialog(onDismiss = { showGroupTutorial = false })
+    }
+
+    if (showAgentTutorial) {
+        AgentTutorialDialog(onDismiss = { showAgentTutorial = false })
     }
 
     pendingDeleteIds?.let { ids ->

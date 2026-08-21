@@ -188,6 +188,9 @@ class SettingsViewModel(
     fun setGroupTutorialSeen(seen: Boolean) = viewModelScope.launch {
         settingsRepository.setGroupTutorialSeen(seen)
     }
+    fun setAgentTutorialSeen(seen: Boolean) = viewModelScope.launch {
+        settingsRepository.setAgentTutorialSeen(seen)
+    }
 
     /** 下一个群聊默认名（新群聊 N）。 */
     suspend fun nextGroupTitle(): String = settingsRepository.nextGroupTitle()
@@ -443,24 +446,6 @@ class SettingsViewModel(
             } else {
                 payload.settings
             }
-            when (mode) {
-                ImportMode.REPLACE -> {
-                    if (!settingsRepository.update { _ -> sanitizedSettings }) {
-                        throw IllegalStateException("写入设置失败")
-                    }
-                }
-                ImportMode.MERGE -> {
-                    // 合并模式：保留本机 UI 偏好（暗色/字体/延迟等），只合并模型配置与缺失的媒体资源，
-                    // 避免"合并导入"把用户本机设置整个覆盖掉
-                    if (!settingsRepository.update { local ->
-                            mergeSettings(local, sanitizedSettings, hasWallpaperAsset)
-                        }
-                    ) {
-                        throw IllegalStateException("写入设置失败")
-                    }
-                }
-                ImportMode.CHARACTERS_ONLY -> Unit
-            }
             // 1.5.0：群聊随私聊一并导入（方案十七.2），群聊消息按会话 id 落盘
             val allBundles = payload.privateChats + payload.groupChats
             conversationRepository.importV2Snapshot(
@@ -491,6 +476,27 @@ class SettingsViewModel(
                         }
                     }
                 }
+            }
+
+            // 设置最后写入：REPLACE 下先保证会话/角色/Agent 数据落盘成功再改设置，
+            // 避免数据导入失败时设置已被替换成导入值（半替换状态）。
+            when (mode) {
+                ImportMode.REPLACE -> {
+                    if (!settingsRepository.update { _ -> sanitizedSettings }) {
+                        throw IllegalStateException("写入设置失败")
+                    }
+                }
+                ImportMode.MERGE -> {
+                    // 合并模式：保留本机 UI 偏好（暗色/字体/延迟等），只合并模型配置与缺失的媒体资源，
+                    // 避免"合并导入"把用户本机设置整个覆盖掉
+                    if (!settingsRepository.update { local ->
+                            mergeSettings(local, sanitizedSettings, hasWallpaperAsset)
+                        }
+                    ) {
+                        throw IllegalStateException("写入设置失败")
+                    }
+                }
+                ImportMode.CHARACTERS_ONLY -> Unit
             }
             true
         } catch (t: Throwable) {

@@ -51,6 +51,13 @@ class ActiveMessageReceiver : BroadcastReceiver() {
         val serviceIntent = Intent(context, ActiveMessageService::class.java)
             .putExtra(AlarmScheduler.EXTRA_CONV_ID, convId)
             .putExtra(AlarmScheduler.EXTRA_TIME, time)
-        ContextCompat.startForegroundService(context, serviceIntent)
+        // Android 12+：未授予「闹钟和提醒」精确闹钟权限时会降级为非精确闹钟，
+        // 后台以此拉起进程再启动前台服务会抛 ForegroundServiceStartNotAllowedException，
+        // 导致进程被杀、主动消息丢失。这里用 runCatching 防护：失败仅记日志，不崩进程。
+        runCatching {
+            ContextCompat.startForegroundService(context, serviceIntent)
+        }.onFailure {
+            android.util.Log.e("ActiveMessageReceiver", "后台启动前台服务失败，主动消息本次未能触发", it)
+        }
     }
 }

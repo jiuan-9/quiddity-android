@@ -16,12 +16,16 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.quiddity.app.active.ActiveMessageSystem
 
 /*
@@ -67,10 +71,17 @@ fun ActiveMessagePermissionCard(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    // 系统 API 查询（binder 调用）在组合期间执行较慢，缓存到 remember 中，
-    // 避免滚动/动画/状态变化引起的每次重组都重复查询。
-    val exactGranted = remember(context) { ActiveMessageSystem.exactAlarmGranted(context) }
-    val batteryIgnored = remember(context) { ActiveMessageSystem.batteryOptimizationIgnored(context) }
+    // 系统 API 查询（binder 调用）较慢，故用 remember 缓存避免每次重组重复查询；
+    // 但 remember 不会随重组重新求值，授权页返回后仍是旧值。
+    // 因此在每次 Lifecycle.Resume 时重读，保证从系统授权页返回后状态立即刷新。
+    var exactGranted by remember { mutableStateOf(ActiveMessageSystem.exactAlarmGranted(context)) }
+    var batteryIgnored by remember { mutableStateOf(ActiveMessageSystem.batteryOptimizationIgnored(context)) }
+    LifecycleResumeEffect(Unit) {
+        // 每次回到前台（含从系统授权页返回）重读权限状态，避免 remember 缓存旧值
+        exactGranted = ActiveMessageSystem.exactAlarmGranted(context)
+        batteryIgnored = ActiveMessageSystem.batteryOptimizationIgnored(context)
+        onPauseOrDispose { }
+    }
 
     Column(
         modifier = modifier

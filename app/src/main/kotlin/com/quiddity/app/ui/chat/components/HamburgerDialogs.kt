@@ -66,7 +66,11 @@ internal fun HamburgerConfirmDialogs(
     if (pendingDeleteConversation) {
         ConfirmDialog(
             title = "删除该会话",
-            message = "将删除当前群聊及其全部消息记录，成员私聊不受影响。此操作不可撤销。",
+            message = if (isGroupConversation) {
+                "将删除当前群聊及其全部消息记录，成员私聊不受影响。此操作不可撤销。"
+            } else {
+                "将删除该会话及其全部消息记录。此操作不可撤销。"
+            },
             confirmText = "删除",
             onConfirm = onDeleteConversation,
             onDismiss = onDismiss

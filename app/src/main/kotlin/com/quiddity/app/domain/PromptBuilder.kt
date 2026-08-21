@@ -584,7 +584,9 @@ object PromptBuilder {
             result.add(ChatMessage(role = "system", content = systemPrompt))
         }
         val memberNames = senderLabels.values.filter { it.isNotBlank() }.toSet()
-        history.filterNot { it.isThinking }.forEach { msg ->
+        // isNotice（小应用邀请等 UI 专用气泡）不参与 LLM 上下文，与既有调用方过滤保持一致；
+        // isGameLog 因 isNotice=false 仍会进入，供角色感知对局。
+        history.filterNot { it.isThinking || it.isNotice }.forEach { msg ->
             val role = when (msg.role) {
                 Role.USER -> "user"
                 Role.ASSISTANT -> "assistant"

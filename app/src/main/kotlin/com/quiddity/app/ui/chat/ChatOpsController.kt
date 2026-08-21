@@ -180,6 +180,8 @@ internal class OpsController(
         viewModelScope.launch {
             // NonCancellable：页面即将返回销毁 ViewModel，删除必须完整落盘后再释放
             withContext(NonCancellable) {
+                // 与首页批量删除一致：先移除被群聊引用的成员，避免群聊 memberConversationIds 悬空
+                conversationRepository.removeMemberFromGroups(id)
                 conversationRepository.deleteConversation(id)
             }
         }

@@ -26,6 +26,7 @@ import com.quiddity.app.domain.agent.AgentTool
 import com.quiddity.app.domain.agent.AgentToolCallRequest
 import com.quiddity.app.domain.agent.AgentToolRegistry
 import com.quiddity.app.domain.agent.AgentWorkflowController
+import com.quiddity.app.domain.agent.isToolResultFailure
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -314,7 +315,8 @@ internal class ToolResultBuilder(
             ctx
         )
         // 3. 失败自动重试：真实执行失败（非用户取消/未确认）且未重试过 → 重试一次，
-        //    重试时确认自动通过（用户已确认过同一操作），其余门控照常
+        //    重试时确认自动通过（用户已确认过同一操作），其余门控照常。
+        //    每个结果用 (文本, 是否成功) 对表示；重试后的成败以重试段结果判定。
         val finalResults = toExecute.zip(results).map { (call, raw) ->
             val retryable = isRetryableToolFailure(raw)
             if (workflow != null && workflow.shouldRetry(call.name, parseArgs(call), ok = false, retryable = retryable)) {
@@ -324,20 +326,20 @@ internal class ToolResultBuilder(
                     confirmRequestBatch = { _ -> true }
                 )
                 val retryRaw = registry.dispatch(call.name, call.arguments, retryCtx)
-                "首次执行失败：" + raw + "\n已自动重试：" + retryRaw
+                ("首次执行失败：" + raw + "\n已自动重试：" + retryRaw) to isToolResultSuccess(retryRaw)
             } else {
-                raw
+                raw to isToolResultSuccess(raw)
             }
         }
         // 4. 记录真实执行历史（供去重与计数），并把去重命中结果按原顺序回填
-        toExecute.zip(finalResults).forEach { (call, raw) ->
-            workflow?.record(call.name, parseArgs(call), ok = isToolResultSuccess(raw), result = raw)
+        toExecute.zip(finalResults).forEach { (call, combined) ->
+            workflow?.record(call.name, parseArgs(call), ok = combined.second, result = combined.first)
         }
         val executedIter = finalResults.iterator()
         return plans.map { plan ->
             plan.cached?.let { cached ->
                 "（已去重：该调用与此前的成功调用相同，直接复用结果）\n" + cached.result
-            } ?: executedIter.next()
+            } ?: executedIter.next().first
         }
     }
 
@@ -392,15 +394,8 @@ internal class ToolResultBuilder(
         }
     }
 
-    /** 粗略判断工具结果是否成功（供聊天页工具痕迹展示状态）。 */
-    fun isToolResultSuccess(content: String): Boolean =
-        !content.contains("【工具返回异常】") &&
-            !content.contains("失败") &&
-            !content.contains("取消") &&
-            !content.contains("不存在") &&
-            !content.contains("未启用") &&
-            !content.contains("尚未接入") &&
-            !content.contains("未获得")
+    /** 粗略判断工具结果是否成功（与 AgentSecurity.isToolResultFailure 共用同一套判定）。 */
+    fun isToolResultSuccess(content: String): Boolean = !isToolResultFailure(content)
 
     /**
      * 清洗模型回传的工具参数：空串/非法 JSON 一律补为 "{}"，

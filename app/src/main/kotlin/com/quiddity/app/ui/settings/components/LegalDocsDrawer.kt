@@ -1,9 +1,5 @@
 package com.quiddity.app.ui.settings.components
 
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
-import android.widget.Toast
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
@@ -191,7 +187,7 @@ fun LegalDocsDrawer(
                     LegalDocumentsContent(
                         legalProvider = legalProvider,
                         selectedDocIndex = selectedDocIndex,
-                        onCopyUrl = { url -> copyToClipboard(context, url) },
+                        onCopyUrl = { url -> copyToClipboard(context, url, "链接已复制") },
                         modifier = Modifier.fillMaxSize()
                     )
                 }
@@ -448,8 +444,4 @@ private fun LawReferenceCard(
     }
 }
 
-private fun copyToClipboard(context: Context, text: String) {
-    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    clipboard.setPrimaryClip(ClipData.newPlainText("法律链接", text))
-    Toast.makeText(context, "法律链接已复制", Toast.LENGTH_SHORT).show()
-}
+

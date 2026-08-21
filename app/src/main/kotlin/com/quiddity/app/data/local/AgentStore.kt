@@ -83,13 +83,13 @@ data class AgentToolSwitches(
     val write_uninstall: Boolean = false
 ) {
 
-    /** 指定工具的开关状态；未在 Map 中的工具按旧字段 / 默认值兜底。 */
-    fun isEnabled(toolName: String): Boolean {
+    /** 指定工具的开关状态；未在 Map 中的工具按旧字段 / 默认值兜底（[default] 为工具注册表默认值）。 */
+    fun isEnabled(toolName: String, default: Boolean? = null): Boolean {
         tools[toolName]?.let { return it }
         TOOL_TO_LEGACY[toolName]?.let { legacyName ->
             return legacyValue(legacyName)
         }
-        return DEFAULT_ENABLED[toolName] ?: true
+        return default ?: DEFAULT_ENABLED[toolName] ?: true
     }
 
     /** 旧字段值查询（v1 迁移兜底）。 */

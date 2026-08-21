@@ -8,6 +8,7 @@ import com.quiddity.app.data.model.ConversationType
 import com.quiddity.app.data.model.Message
 import com.quiddity.app.data.model.MessageToolTrace
 import com.quiddity.app.data.model.Role
+import com.quiddity.app.data.model.hasPersonaContent
 import com.quiddity.app.data.repo.ChatRepository
 import com.quiddity.app.data.repo.ConversationRepository
 import com.quiddity.app.data.repo.SettingsRepository
@@ -114,8 +115,9 @@ internal class StreamController(
         }
         // 仅在 API 调用 / 压缩期间阻止发送；发送延迟期间允许继续发送
         if (_isGenerating.value || _compressionState.value is CompressionState.Compressing) return
-        // 方案九.4/6：私聊必须设置用户名才能发送消息（Agent 模式不要求用户名）
-        if (conv.type == ConversationType.SOLO && conv.userPersona.name.isBlank()) {
+        // 方案九.4/6：私聊已设定角色卡（人设/记忆任一非空）时必须设置用户名才能发送；
+        // 无角色卡的新会话不强制（PromptBuilder 回退用「用户」称呼），与 ChatScreen 弹窗条件保持一致。
+        if (conv.type == ConversationType.SOLO && conv.userPersona.name.isBlank() && conv.hasPersonaContent) {
             _errorEvent.value = "请先设置用户名"
             return
         }
@@ -172,7 +174,7 @@ internal class StreamController(
             _ocrState.value = OcrState.Recognizing
             // 发送前置校验：失败时保留待发送图片，避免"OCR 白跑 + 图片被吞"
             if (!group.isGroup()) {
-                if (conv.userPersona.name.isBlank()) {
+                if (conv.type == ConversationType.SOLO && conv.userPersona.name.isBlank() && conv.hasPersonaContent) {
                     _ocrState.value = OcrState.Idle
                     _errorEvent.value = "请先设置用户名"
                     return@launch
@@ -456,9 +458,11 @@ internal class StreamController(
             val guide = if (replyReference != null &&
                 com.quiddity.app.data.repo.isActionOnlyReply(replyReference.content)
             ) {
-                "（继续说：请直接说出一句完整的台词继续对话，不要复述上一句。）"
+                "（继续说：请直接说出一句完整的台词继续对话，不要复述上一句。" +
+                    "必须输出完整的一句话，并以句号、问号或感叹号收尾，不要以逗号结尾。）"
             } else {
-                "（继续说：请直接接着上一句继续输出后续内容，不要复述上一句。）"
+                "（继续说：请直接接着上一句继续输出后续内容，不要复述上一句。" +
+                    "必须输出完整的一句话，并以句号、问号或感叹号收尾，不要以逗号结尾。）"
             }
             val newHistory = _messages.value + Message(
                 id = IdGenerator.newId(IdGenerator.Prefix.USER_MESSAGE),
@@ -624,8 +628,11 @@ internal class StreamController(
             val result = chatRepository.compressConversationMemory(conv, messages)
             if (result.success) {
                 // 6.5.2：摘要写入 compressedMemory，索引写入 memoryIndex（含程序补全的覆盖范围）
+                // 用实时会话快照而不是流式开始前的旧 conv 回写：流式期间 sceneInjected 等
+                // 并发更新（markSceneInjectedIfUnchanged）需保留，避免场景被重复注入。
+                val live = conversation.value ?: conv
                 conversationRepository.updateConversation(
-                    conv.copy(
+                    live.copy(
                         compressedMemory = result.summary,
                         memoryIndex = result.index,
                         lastCompressedAtRound = userRounds

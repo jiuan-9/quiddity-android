@@ -586,6 +586,10 @@ data class AppSettings(
      */
     val groupTutorialSeen: Boolean = false,
     /**
+     * Agent 教程弹窗是否已看过（首次进入 Agent 模式列表页弹一次）。
+     */
+    val agentTutorialSeen: Boolean = false,
+    /**
      * 私聊默认名计数器：新会话 1、2、3…，删除不补号（方案二.4）。
      */
     val soloChatCounter: Int = 0,

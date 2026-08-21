@@ -286,3 +286,35 @@ internal fun GroupTutorialDialog(onDismiss: () -> Unit) {
         }
     )
 }
+
+@Composable
+internal fun AgentTutorialDialog(onDismiss: () -> Unit) {
+    val lines = listOf(
+        "Agent 是能帮你自动操作手机的小助手：你说需求，它调用工具来完成",
+        "它可读取屏幕/通知、看图、发送信息、读写文件、点按滑动、查看应用等",
+        "涉及删除/修改等敏感操作时会弹出确认，看清再允许即可",
+        "部分能力需在「Agent 设置」里开启对应开关（读屏/通知/Shizuku 等）",
+        "生成过程中可随时停止；完成的操作可通过「撤回」回滚这一步"
+    )
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Agent 玩法") },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                lines.forEachIndexed { index, line ->
+                    Text(
+                        text = "${index + 1}. $line",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("知道了") }
+        }
+    )
+}

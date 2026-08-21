@@ -212,6 +212,10 @@ class SettingsRepository(private val store: SettingsStore) {
         it.copy(groupTutorialSeen = seen)
     }
 
+    suspend fun setAgentTutorialSeen(seen: Boolean) = update {
+        it.copy(agentTutorialSeen = seen)
+    }
+
     /** 下一个私聊默认名（新会话 N），计数器递增、删除不补号。 */
     suspend fun nextSoloTitle(): String {
         val n = currentSnapshot().soloChatCounter + 1

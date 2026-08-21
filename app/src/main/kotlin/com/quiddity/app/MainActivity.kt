@@ -15,8 +15,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
@@ -33,6 +36,8 @@ import com.quiddity.app.di.ServiceLocator
 import com.quiddity.app.ui.navigation.QuiddityRoute
 import com.quiddity.app.ui.navigation.QuiddityNavHost
 import com.quiddity.app.ui.theme.QuiddityTheme
+import com.quiddity.app.ui.components.AppLaunchIntro
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -120,6 +125,13 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val settings by settingsState.collectAsState()
+            // 进软件开始动画：应用名/slogan 依次浮现，达到最小时长后淡出揭示主界面
+            var launchIntroVisible by remember { mutableStateOf(true) }
+            var launchIntroMinElapsed by remember { mutableStateOf(false) }
+            LaunchedEffect(Unit) {
+                delay(1_200L)
+                launchIntroMinElapsed = true
+            }
             // 状态栏图标颜色跟随应用主题（不跟随系统），亮色模式=深色图标
             WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightStatusBars = !settings.darkMode
             WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightNavigationBars = !settings.darkMode
@@ -147,6 +159,13 @@ class MainActivity : ComponentActivity() {
                         QuiddityNavHost(
                             pendingConversationRoute = pendingConversationRoute,
                             onPendingConversationConsumed = { pendingConversationRoute = null }
+                        )
+                    }
+                    if (launchIntroVisible) {
+                        AppLaunchIntro(
+                            darkMode = settings.darkMode,
+                            visible = launchIntroMinElapsed,
+                            onFinished = { launchIntroVisible = false }
                         )
                     }
                 }
