@@ -149,14 +149,58 @@ private const val ACTION_ONLY_PUNCTUATION = "，。！？、；：,.;:!?…~-—
  * 去掉成对括号内动作、标点与空白后，两条消息核心内容相同，且任一条含动作括号
  * （如「（动作）台词」与「台词」）时视为模型复述，丢弃后一条。
  * 不带动作括号的完全相同分片（如硬上限强制切分）不判定，避免误删合法分片。
+ *
+ * 新增判定：模型偶发输出「（动作）名字说：台词」旁白后，再单独复述一遍纯台词
+ * 「台词」（或顺序倒置）。两段核心内容为子串关系，且多出的前缀只是「名字+说话动词」
+ * 的发言引导（属于说话人标记）时判为复述——避免「说话人旁白 + 台词」被当成两条
+ * 独立消息同时展示，造成同一句话在界面上重复。
  */
 internal fun isNearDuplicateContent(previous: String, candidate: String): Boolean {
     val lastCore = stripBracketsAndPunctuation(previous)
     val candidateCore = stripBracketsAndPunctuation(candidate)
     if (lastCore.isEmpty() || candidateCore.isEmpty()) return false
-    if (lastCore != candidateCore) return false
-    return previous.any { isOpenBracketChar(it) } || candidate.any { isOpenBracketChar(it) }
+    if (lastCore == candidateCore) {
+        return previous.any { isOpenBracketChar(it) } || candidate.any { isOpenBracketChar(it) }
+    }
+    // 说话人引导前缀：仅由「名字/称呼 + 说话动词」构成，不含完整句子（无句末标点）。
+    // 「（动作）名字说：台词」→ 核心「名字说台词」；紧随其后的纯「台词」是其后缀，前缀为发言引导。
+    if (candidateCore.length < lastCore.length &&
+        lastCore.endsWith(candidateCore) &&
+        isSpeechAttribution(lastCore.removeSuffix(candidateCore))
+    ) {
+        return true
+    }
+    if (candidateCore.length > lastCore.length &&
+        candidateCore.endsWith(lastCore) &&
+        isSpeechAttribution(candidateCore.removeSuffix(lastCore))
+    ) {
+        return true
+    }
+    return false
 }
+
+/**
+ * 判断一段文本是否是「名字/称呼 + 说话动词」的发言引导前缀（不含实质台词）。
+ *
+ * 特征：长度短（≤ 12 字）、不含句末标点、命中说话动词。用于识别「（动作）名字说：台词」
+ * 旁白里名字外的部分，从而把「旁白+台词」与后面的纯「台词」判定为模型复述，
+ * 而不是把两句话都保留为独立消息。
+ */
+private fun isSpeechAttribution(text: String): Boolean {
+    val trimmed = text.trim()
+    if (trimmed.isEmpty()) return false
+    if (trimmed.length > 12) return false
+    if (trimmed.any { it in "。！？!?" }) return false
+    // 只认"以明确发言动词收尾"的前缀，避免把「知道/街道/听说」等含"道/说"的
+    // 普通词误判为发言引导（它们会误吞合法对话，造成不该发生的去重）。
+    return SPEECH_ATTRIBUTION_SUFFIXES.any { trimmed.endsWith(it) }
+}
+
+/** 以明确发言动词收尾的旁白前缀（用于识别「名字说/问/答道/开口/轻声道」等）。 */
+private val SPEECH_ATTRIBUTION_SUFFIXES = listOf(
+    "说", "问", "答", "讲", "说道", "答道", "笑道", "叹道", "喊道", "轻声道",
+    "低声道", "喃喃道", "应道", "开口道", "开口说话", "开口", "告诉", "招呼说"
+)
 
 /**
  * 两段文本的相似度（0f～1f）：去掉动作括号、标点与空白后，按相邻字符对（bigram）的

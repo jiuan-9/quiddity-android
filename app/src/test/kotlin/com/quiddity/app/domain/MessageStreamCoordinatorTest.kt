@@ -685,6 +685,21 @@ class MessageStreamCoordinatorTest {
     }
 
     @Test
+    fun `speaker attribution narration then bare dialog is deduplicated`() {
+        // 用户反馈：模型先输出「（动作）名字说：台词」旁白，随后又单独复述一遍纯台词。
+        // 说话人引导（名字+说/道/开口…）不是实质台词，第二条纯台词应被去重，只保留一条。
+        val coord = MessageStreamCoordinator("conv1", "run1", singleMessageTokens = 1000)
+        coord.accept("（轻声）林希说：快进来吧。")
+        coord.accept("快进来吧。")
+        coord.finalize()
+        assertEquals(
+            listOf("（轻声）林希说：快进来吧。"),
+            coord.snapshot().map { it.content },
+            "说话人旁白+台词后紧跟纯台词应去重：${coord.snapshot().map { it.content }}"
+        )
+    }
+
+    @Test
     fun `bracket with partially streamed content never orphans a half message`() {
         // 复现：括号先到，随后半句内容先以流式消息发出，再与括号合并——
         // 旧实现会留下一条永远半截的重复消息（两条同时加载）

@@ -371,6 +371,20 @@ internal fun ChatListPage(
         }
         return
     }
+
+    // 当前规则：新建会话后自动把列表滚到该会话所在位置（按更新时间排列表头），
+    // 避免新建的会话被"淹没"在顶部、需要用户手动上滑才能看到。仅针对本次新建会话滚动一次。
+    var scrolledNewConversationId by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(newConversationId, conversations) {
+        val targetId = newConversationId ?: return@LaunchedEffect
+        if (scrolledNewConversationId == targetId) return@LaunchedEffect
+        val index = conversations.indexOfFirst { it.id == targetId }
+        if (index >= 0) {
+            listState.scrollToItem(index)
+            scrolledNewConversationId = targetId
+        }
+    }
+
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize(),
