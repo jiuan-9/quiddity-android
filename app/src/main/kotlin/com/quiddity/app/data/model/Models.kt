@@ -424,6 +424,17 @@ data class Message(
      */
     val toolSegmentEnds: List<Int> = emptyList(),
     /**
+     * DeepSeek 思考原文（reasoning_content，流式期间累积后固化）。
+     *
+     * DeepSeek 官方约束：携带 tools 的思考模式请求，历史中 assistant 消息必须在
+     * 后续所有轮次原样回传 reasoning_content（字段缺失即 400「思考内容需要回传」）。
+     * - 不展示（思考展示由提示词引导的【思考】标记负责）、不参与压缩、不导出；
+     * - 仅在「请求携带 tools + DeepSeek 模型 + 本消息为请求方自己的发言」时回传，
+     *   避免把字段挂在群聊里其他成员的发言上引发新的 400；
+     * - 旧数据无此字段自动兼容（空串 = 未知，回传时按空串占位，官方校验字段存在性）。
+     */
+    val reasoningContent: String = "",
+    /**
      * 本轮会话创建/更改的文件路径（Agent 模式撤回追踪，1.6.0）。
      * - 记录该条 AI 消息对应的一轮用户指令中，AI 通过工具创建的文件/目录路径
      *   （create_file / mkdir / copy_file / move_file / rename_file 的目标）；

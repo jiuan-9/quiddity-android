@@ -44,8 +44,8 @@ android {
         applicationId = "com.quiddity.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 16
-        versionName = "1.6.0"
+        versionCode = 18
+        versionName = "1.6.2"
         vectorDrawables.useSupportLibrary = true
     }
 

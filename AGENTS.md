@@ -5,7 +5,7 @@
 ## 项目位置与环境
 
 - 项目根目录：`D:\Quiddity-android`（所有窗口统一使用此路径）
-- 当前版本：1.6.0（versionCode 16），主页为私聊/群聊/Agent 三 Tab
+- 当前版本：1.6.2（versionCode 18），主页为私聊/群聊/Agent 三 Tab
 - 构建：`D:\Quiddity-android\gradlew.bat :app:assembleDebug`（调试）/
   `:app:assembleRelease`（发布，自动签名）
 - APK 输出只允许放在标准路径：
@@ -49,7 +49,7 @@ adb exec-out screencap -p > 截图.png
 
 ### 应用包名
 
-- 调试包：`com.quiddity.app.debug`（versionName 1.6.0-debug，日常验证用这个）
+- 调试包：`com.quiddity.app.debug`（versionName 1.6.2-debug，日常验证用这个）
 - 正式包：`com.quiddity.app`（真机/发布用，模拟器里可能是旧版本，别搞混）
 
 启动/操作模拟器一律用**调试包**，安装 APK 用 `app-debug.apk`。

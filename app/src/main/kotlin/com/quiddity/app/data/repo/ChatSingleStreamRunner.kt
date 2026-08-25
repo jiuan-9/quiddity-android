@@ -170,4 +170,23 @@ internal class SingleStreamRunner(
         return model.contains("deepseek", ignoreCase = true)
     }
 
+    /**
+     * DeepSeek 思考原文固化：把本轮累积的 reasoning_content 写入首条正式回复消息，
+     * 供后续携带 tools 的请求原样回传（官方强制：字段缺失即 400「思考内容需要回传」，
+     * 见 [Message.reasoningContent]）。只在流正常结束后调用，不影响展示。
+     */
+    suspend fun attachReasoningContentIfNeeded(
+        request: ChatRoundRequest,
+        coordinator: StreamCoordinator,
+        reasoningText: String,
+        onEvent: suspend (ChatRepository.Event) -> Unit
+    ) {
+        if (reasoningText.isBlank() || !isDeepSeekModel(request)) return
+        val target = coordinator.snapshot().firstOrNull {
+            it.role == Role.ASSISTANT && !it.isNotice && !it.isThinking && !it.isError
+        } ?: return
+        if (target.reasoningContent == reasoningText) return
+        onEvent(ChatRepository.Event.UpdateMessage(target.copy(reasoningContent = reasoningText)))
+    }
+
 }

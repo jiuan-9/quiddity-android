@@ -108,6 +108,7 @@ class ApiCatalogManager(
         "kimi-k3" to ModelTier.FULL,
         "deepseek-v4-pro" to ModelTier.FULL,
         "deepseek-v4-flash" to ModelTier.FULL, // 便宜且主流
+        "deepseek-v4-flash-vision-exp" to ModelTier.FULL, // 多模态实验版，文本能力与 v4-flash 持平
         "glm-5.3" to ModelTier.FULL, // 智谱最新旗舰（与 GLM-5.2 同基座，后训练大幅提升）
         "hy3" to ModelTier.FULL, // 腾讯混元 Hy3 正式版旗舰
         "ernie-5.1" to ModelTier.FULL,
@@ -191,6 +192,8 @@ class ApiCatalogManager(
         "ernie-4.5-turbo-vl", "ernie-4.5-turbo-vl-32k",
         // MiniMax 多模态
         "MiniMax-M3", "MiniMaxAI/MiniMax-M3",
+        // DeepSeek 官方多模态（实验版，图文混合输入）
+        "deepseek-v4-flash-vision-exp",
         // 小米 MiMo（自定义条目仍可做视觉识图）
         "mimo-v2.5",
         // 硅基流动 OCR / 视觉专用模型
@@ -415,7 +418,8 @@ class ApiCatalogManager(
             responsesUrl = QuiddityConstants.DEEPSEEK_RESPONSES_URL,
             models = listOf(
                 "deepseek-v4-flash",
-                "deepseek-v4-pro"
+                "deepseek-v4-pro",
+                "deepseek-v4-flash-vision-exp"
             )
         ),
         Provider(

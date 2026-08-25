@@ -132,9 +132,9 @@ class ApiCatalogManagerTest {
     }
 
     @Test
-    fun `supported model count is exactly 42`() {
+    fun `supported model count is exactly 43`() {
         val total = manager.tieredModels().values.sumOf { it.size }
-        assertEquals(42, total, "应用内置支持的模型总数应为 42")
+        assertEquals(43, total, "应用内置支持的模型总数应为 43")
     }
 
     @Test
@@ -146,6 +146,10 @@ class ApiCatalogManagerTest {
         assertEquals(
             ApiCatalogManager.ModelTier.FULL,
             manager.getModelTier("deepseek-ai/DeepSeek-V4-Flash", "siliconflow")
+        )
+        assertEquals(
+            ApiCatalogManager.ModelTier.FULL,
+            manager.getModelTier("deepseek-v4-flash-vision-exp", "deepseek")
         )
     }
 
@@ -262,6 +266,8 @@ class ApiCatalogManagerTest {
         assertTrue(manager.isVisionModel("glm-4.6v-flash", "zhipu"), "智谱 GLM 视觉")
         assertTrue(manager.isVisionModel("gemini-2.5-flash", "google"), "Gemini 全系多模态")
         assertTrue(manager.isVisionModel("gpt-5.4", "openai"), "GPT-5 系列支持视觉")
+
+        assertTrue(manager.isVisionModel("deepseek-v4-flash-vision-exp", "deepseek"), "DeepSeek 官方多模态实验版")
 
         assertFalse(manager.isVisionModel("deepseek-v4-flash", "deepseek"), "DeepSeek 纯文本")
         assertFalse(manager.isVisionModel("glm-5.2", "zhipu"), "GLM 文本模型")

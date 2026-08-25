@@ -108,7 +108,18 @@ object GroupReplyPlanner {
             group.groupBackgroundMode,
             thinkingDepth
         )
-        val apiMessages = PromptBuilder.toApiMessages(systemPrompt, transcript, senderNames, userName)
+        // 方案六.3：基础级只带最近 N 条；进阶级/完整级可自行用工具检索完整群聊消息。
+        val useSearchTool = tier != ApiCatalogManager.ModelTier.BASIC
+        // DeepSeek 思考模式工具轮约束：携带 tools 的请求必须在后续所有轮次回传历史
+        // assistant 消息的 reasoning_content（缺失即 400「思考内容需要回传」）。
+        // 仅在「本请求携带工具 + DeepSeek 模型」时挂载；成员自己的发言回传落库的
+        // 思考原文，其他成员发言由 toApiMessages 统一空串占位，避免挂错发言人。
+        val apiMessages = PromptBuilder.toApiMessages(
+            systemPrompt, transcript, senderNames, userName,
+            requesterSenderId = senderId,
+            attachReasoning = access.model.contains("deepseek", ignoreCase = true) &&
+                (useSearchTool || !webSearchResponsesUrl.isNullOrBlank())
+        )
         val maxTokens = member.maxTokens ?: settings.globalMaxTokens
         val singleMsgTokens = member.singleMessageTokens ?: settings.globalSingleMessageTokens
         // 按成员所用模型支持的最高温度钳制：部分模型仅支持 0～1.0。
@@ -122,8 +133,6 @@ object GroupReplyPlanner {
             },
             access.maxTemperature
         )
-        // 方案六.3：基础级只带最近 N 条；进阶级/完整级可自行用工具检索完整群聊消息。
-        val useSearchTool = tier != ApiCatalogManager.ModelTier.BASIC
         // 按 URL 识别（内置名册已移除 MiMo，自定义条目填官方 URL 时同样适配）
         val isXiaomi = QuiddityConstants.isXiaomiMimoUrl(access.apiUrl)
         val request = ChatCompletionRequest(

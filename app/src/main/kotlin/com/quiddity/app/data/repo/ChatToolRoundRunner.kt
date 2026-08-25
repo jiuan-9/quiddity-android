@@ -148,10 +148,9 @@ internal class ToolRoundRunner(
             )
         }
         val contextLimit = if (conv.contextLimit > 0) conv.contextLimit else settings.globalContextLimit
-        // 过滤 isNotice 提示气泡与 isThinking 思考消息：不发给 LLM
+        // 过滤 isNotice 提示气泡与 isThinking 思考消息：不发送给 LLM
         val filteredHistory = history.filterNot { it.isNotice || it.isThinking }
         val trimmedHistory = onTakeLastRounds(filteredHistory, contextLimit, 4)
-        val apiMessages = PromptBuilder.toApiMessages(systemPrompt, trimmedHistory)
 
         val maxTokens = conv.maxTokens ?: settings.globalMaxTokens
         val singleMsgTokens = conv.singleMessageTokens ?: settings.globalSingleMessageTokens
@@ -173,6 +172,15 @@ internal class ToolRoundRunner(
         } else {
             null
         }
+        val responsesUrl = toolResultBuilder.resolveWebSearch(settings, conv)
+        // DeepSeek 思考模式工具轮约束：携带 tools 的请求必须在后续所有轮次回传历史
+        // assistant 消息的 reasoning_content（缺失即 400「思考内容需要回传」），
+        // 故历史装配处按「本请求是否携带工具」预挂落库的思考原文。
+        val apiMessages = PromptBuilder.toApiMessages(
+            systemPrompt, trimmedHistory,
+            attachReasoning = access.model.contains("deepseek", ignoreCase = true) &&
+                (agentTools != null || toolStrategyActive || !responsesUrl.isNullOrBlank())
+        )
         val buildRequest: (String?) -> ChatRoundRequest = {
             buildChatRound(
                 access = access,
@@ -180,7 +188,7 @@ internal class ToolRoundRunner(
                 apiMessages = apiMessages,
                 maxTokens = maxTokens,
                 temperature = temperature,
-                responsesUrl = toolResultBuilder.resolveWebSearch(settings, conv),
+                responsesUrl = responsesUrl,
                 // 思考深度映射到 API reasoning_effort（浅=low / 深=high），
                 // 控制模型内部推理强度；仅 DeepSeek 模型携带，其他模型忽略。
                 reasoningEffort = if (conv.thinkingEnabled &&
@@ -490,6 +498,7 @@ internal class ToolRoundRunner(
                 )
                 if (!recovered) return false
             } else {
+                if (finalRound.reasoningText.isNotBlank()) reasoningText = finalRound.reasoningText
                 if (finalRound.toolCalls.isNotEmpty()) {
                     // 轮次上限内的最后一轮仍发起工具调用：照常执行，不再进入下一轮
                     finalRound.toolCalls.forEach { onEvent(ChatRepository.Event.ToolUse(it.name)) }
@@ -527,6 +536,7 @@ internal class ToolRoundRunner(
                         )
                         return false
                     }
+                    if (finalRound.reasoningText.isNotBlank()) reasoningText = finalRound.reasoningText
                 }
                 val snapshotText = coordinator.snapshot()
                     .filterNot { it.isThinking || it.isNotice }
@@ -554,6 +564,8 @@ internal class ToolRoundRunner(
         }
 
         singleStreamRunner.attachThinkingUnavailableReportIfNeeded(request, coordinator, thinkingActive, onEvent)
+        // 思考原文固化：供后续携带 tools 的轮次原样回传（仅 DeepSeek，见方法注释）
+        singleStreamRunner.attachReasoningContentIfNeeded(request, coordinator, reasoningText, onEvent)
         if (roundEffects != null) {
             onEvent(
                 ChatRepository.Event.AgentRoundEffects(

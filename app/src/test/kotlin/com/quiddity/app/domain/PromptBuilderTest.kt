@@ -7,6 +7,7 @@ import com.quiddity.app.util.QuiddityConstants
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /*
@@ -65,14 +66,16 @@ class PromptBuilderTest {
         id: String,
         role: Role = Role.USER,
         content: String,
-        senderId: String? = null
+        senderId: String? = null,
+        reasoningContent: String = ""
     ): Message = Message(
         id = id,
         conversationId = "conv_test",
         role = role,
         content = content,
         timestamp = now,
-        senderId = senderId
+        senderId = senderId,
+        reasoningContent = reasoningContent
     )
 
     // ============================================================
@@ -216,6 +219,70 @@ class PromptBuilderTest {
         assertEquals(2, plain.size, "整条占位符消息应被跳过")
         assertEquals("前面的回复内容是，这部分保留", plain[0].content, "正文中的占位符应被剥离")
         assertEquals("正常消息", plain[1].content)
+    }
+
+    // ============================================================
+    // DeepSeek 思考回传（携带 tools 的请求必须回传 reasoning_content，缺失即 400）
+    // ============================================================
+
+    @Test
+    fun `toApiMessages attaches reasoning for assistant when enabled`() {
+        val history = listOf(
+            msg("m1", Role.USER, "你好"),
+            msg("m2", Role.ASSISTANT, "你好呀", reasoningContent = "思考原文"),
+            msg("m3", Role.USER, "再说一遍")
+        )
+        val result = PromptBuilder.toApiMessages("", history, attachReasoning = true)
+        assertEquals("思考原文", result[1].reasoning_content, "私聊无发言人概念，assistant 直接回传落库思考")
+        assertNull(result[0].reasoning_content, "user 消息不携带思考字段")
+    }
+
+    @Test
+    fun `toApiMessages group attaches own reasoning and empty placeholder for others`() {
+        val history = listOf(
+            msg("m1", Role.ASSISTANT, "我自己说过", senderId = "member_a", reasoningContent = "我的思考"),
+            msg("m2", Role.ASSISTANT, "别人说过", senderId = "member_b", reasoningContent = "别人的思考"),
+            msg("m3", Role.ASSISTANT, "我旧数据无思考", senderId = "member_a")
+        )
+        val result = PromptBuilder.toApiMessages(
+            systemPrompt = "",
+            history = history,
+            senderLabels = mapOf("member_a" to "小A", "member_b" to "小B"),
+            requesterSenderId = "member_a",
+            attachReasoning = true
+        )
+        assertEquals("我的思考", result[0].reasoning_content, "请求方自己的发言回传落库原文")
+        assertEquals("", result[1].reasoning_content, "其他成员发言空串占位，不挂错发言人")
+        assertEquals("", result[2].reasoning_content, "旧数据未知思考按空串占位（官方校验字段存在性）")
+    }
+
+    @Test
+    fun `toApiMessages without attach reasoning omits field`() {
+        val history = listOf(
+            msg("m1", Role.ASSISTANT, "回复", reasoningContent = "思考原文")
+        )
+        val result = PromptBuilder.toApiMessages("", history, attachReasoning = false)
+        assertNull(result[0].reasoning_content, "不携带工具的请求不挂思考字段（官方无工具时会忽略）")
+    }
+
+    @Test
+    fun `toResponsesInput emits reasoning item before assistant message`() {
+        val apiMessages = listOf(
+            com.quiddity.app.data.remote.ChatMessage(role = "system", content = "系统"),
+            com.quiddity.app.data.remote.ChatMessage(role = "user", content = "你好"),
+            com.quiddity.app.data.remote.ChatMessage(
+                role = "assistant", content = "你好呀", reasoning_content = "思考原文"
+            ),
+            com.quiddity.app.data.remote.ChatMessage(
+                role = "assistant", content = "旧轮无思考", reasoning_content = ""
+            )
+        )
+        val items = PromptBuilder.toResponsesInput(apiMessages)
+        assertEquals(4, items.size, "system 不进 input；非空思考挂 reasoning item；空思考不挂")
+        assertEquals("user", items[0].role)
+        assertEquals("reasoning", items[1].type, "非空思考先挂 reasoning item")
+        assertEquals("assistant", items[2].role)
+        assertEquals("assistant", items[3].role, "空思考不挂 reasoning item，消息本体照常")
     }
 
     @Test

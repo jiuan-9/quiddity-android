@@ -4,7 +4,7 @@
 >
 > 知所不尽，往复不止 — Know no bounds, repeat no end.
 
-[![Release](https://img.shields.io/badge/release-v1.6.0-blue)](#下载)
+[![Release](https://img.shields.io/badge/release-v1.6.2-blue)](#下载)
 [![Android](https://img.shields.io/badge/Android-8.0%2B-green)](#系统要求)
 [![License](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.0.21-purple)](#技术栈)
@@ -33,7 +33,7 @@ Quiddity Android 是 Quiddity 移动端的独立产品（与 Quiddity-Chat、Qui
 
 前往官网 [https://quiddity-3by.pages.dev/](https://quiddity-3by.pages.dev/) 下载最新版本。
 
-最新 APK 以官网下载页为准（当前版本 1.6.0）。
+最新 APK 以官网下载页为准（当前版本 1.6.2）。
 
 ## 系统要求
 
@@ -277,6 +277,8 @@ Agent 会话支持工具调用闭环：`AgentToolRegistry` 注册 56 个工具�
 - [x] 1.5.0：会话多选 / 导出长图 / 发送延迟 / 群聊点名回复与记忆压缩，版本号递增（versionCode 12 → 13）
 - [x] 1.5.x：联网搜索细化与稳定性修复（versionCode 13 → 14）
 - [x] 1.6.0：Agent 模式（工具调用 / 无障碍读屏 / 主动消息 / 56 个工具），版本号递增（versionCode 14 → 16，含修复版）
+- [x] 1.6.1：修复 Shizuku 已授权仍无法开启工具分类、新增 DeepSeek 多模态模型 deepseek-v4-flash-vision-exp，版本号递增（versionCode 16 → 17）
+- [x] 1.6.2：修复 DeepSeek 思考模式下群聊/Agent/联网搜索携带工具时报 400「思考内容需要回传」（思考原文落库 + 历史原样回传），版本号递增（versionCode 17 → 18）
 - [ ] 1.7.0：插件系统
 - [ ] 2.0.0：端侧模型（llama.cpp / MediaPipe）
 

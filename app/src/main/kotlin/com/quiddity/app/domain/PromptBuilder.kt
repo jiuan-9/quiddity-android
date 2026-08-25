@@ -572,12 +572,20 @@ object PromptBuilder {
      *   - 消息文本含「@名字」时标注点名对象（成员名与用户名都参与匹配）；
      *   - 用户无点名的消息标注「对全体成员说」；
      *   - 其他 AI 成员无点名的消息不机械标注（接话判断由系统提示词规则兜底）。
+     *
+     * DeepSeek 思考回传：[attachReasoning] 为 true 时（请求携带 tools 的 DeepSeek 思考模式），
+     * assistant 消息携带 reasoning_content（官方强制：字段缺失即 400「思考内容需要回传」）：
+     *   - 请求方自己的发言（[requesterSenderId] 匹配或私聊无发言人概念）回传落库的思考原文；
+     *   - 旧数据/未知思考按空串占位（官方校验字段存在性，空串可通过）；
+     *   - 群聊里其他成员的发言同样用空串占位，避免把思考挂错发言人。
      */
     fun toApiMessages(
         systemPrompt: String,
         history: List<Message>,
         senderLabels: Map<String, String> = emptyMap(),
-        userName: String? = null
+        userName: String? = null,
+        requesterSenderId: String? = null,
+        attachReasoning: Boolean = false
     ): List<ChatMessage> {
         val result = mutableListOf<ChatMessage>()
         if (systemPrompt.isNotBlank()) {
@@ -614,7 +622,16 @@ object PromptBuilder {
                 .replace(CCR_REFERENCE_REGEX, "")
                 .trim()
             if (cleaned.isBlank()) return@forEach
-            result.add(ChatMessage(role = role, content = cleaned))
+            val reasoning = if (attachReasoning && msg.role == Role.ASSISTANT) {
+                if (requesterSenderId == null || msg.senderId == requesterSenderId) {
+                    msg.reasoningContent
+                } else {
+                    ""
+                }
+            } else {
+                null
+            }
+            result.add(ChatMessage(role = role, content = cleaned, reasoning_content = reasoning))
         }
         return result
     }
@@ -648,6 +665,10 @@ object PromptBuilder {
      * 服务端将其作为上下文中的第一条 system 消息）；其余消息按 role/content 原样映射。
      * 历史中的非首条 system 消息（如小应用对局记录气泡）转为 user 角色并加【系统记录】前缀，
      * 保证角色在 Responses 路径下同样能读到这些上下文。
+     *
+     * assistant 消息若携带非空 reasoning_content（DeepSeek 思考原文），先挂一条
+     * reasoning item 再挂消息本体：思考模式下携带工具的请求缺失即 400；
+     * 空串/未知思考不挂（避免产生非法的空 reasoning 内容块）。
      */
     fun toResponsesInput(apiMessages: List<ChatMessage>): List<ResponsesInputItem> {
         var systemSeen = false
@@ -662,6 +683,20 @@ object PromptBuilder {
                 }
                 systemSeen = true
             } else {
+                val reasoning = msg.reasoning_content
+                if (msg.role == "assistant" && !reasoning.isNullOrBlank()) {
+                    out += ResponsesInputItem(
+                        type = "reasoning",
+                        content = kotlinx.serialization.json.JsonArray(
+                            listOf(
+                                kotlinx.serialization.json.buildJsonObject {
+                                    put("type", kotlinx.serialization.json.JsonPrimitive("reasoning_text"))
+                                    put("text", kotlinx.serialization.json.JsonPrimitive(reasoning))
+                                }
+                            )
+                        )
+                    )
+                }
                 out += ResponsesInputItem(
                     role = msg.role,
                     content = msg.content?.let { kotlinx.serialization.json.JsonPrimitive(it) }

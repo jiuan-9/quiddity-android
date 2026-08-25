@@ -1093,7 +1093,10 @@ private fun toolGateInfo(
     "click", "long_press", "click_text", "scroll", "global_action", "input_text",
     "click_id", "click_desc", "drag", "scroll_to_text", "lock_screen" ->
         accessibilityEnabled to (if (accessibilityEnabled) null else "无障碍服务")
-    else -> false to "Shizuku 授权"
+    "list_apps", "get_time", "app_permissions", "app_install_info", "file_access",
+    "read_clipboard", "write_clipboard", "clear_clipboard", "open_app", "notify_self",
+    "schedule_notify", "sleep", "ocr_image" -> true to null
+    else -> shizukuReady to (if (shizukuReady) null else "Shizuku 授权")
 }
 
 /** 添加黑名单弹窗：应用包名 或 文件/目录路径（默认全应用权限，命中即拒绝 AI 查看/更改/删除）。 */
