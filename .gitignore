@@ -55,3 +55,9 @@ gradle-*-bin.zip
 
 # 调试用 APK（不入仓）
 remote-check.apk
+
+# AI Agent 协作配置（不入仓）
+AGENTS.md
+.qoder/
+.cursor/
+
