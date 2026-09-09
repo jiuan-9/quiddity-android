@@ -105,9 +105,11 @@ object ConversationCodec {
     /** 消息分隔线（纯文本）。 */
     private const val TXT_SEPARATOR = "\n\n----------------------------------------\n\n"
 
+    @android.annotation.SuppressLint("ConstantLocale")
     private val isoFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).apply {
         timeZone = TimeZone.getDefault()
     }
+    @android.annotation.SuppressLint("ConstantLocale")
     private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).apply {
         timeZone = TimeZone.getDefault()
     }
@@ -298,9 +300,9 @@ object ConversationCodec {
         if (!hasAny) return
 
         if (isMarkdown) {
-            sb.append("## 人设卡\n\n")
+            sb.append("## 角色卡\n\n")
         } else {
-            sb.append("人设卡\n")
+            sb.append("角色卡\n")
             sb.append("========================================\n\n")
         }
 
@@ -632,9 +634,11 @@ object ConversationCodec {
         var scene = ""
         var memory = ""
 
-        // 找到人设卡区域的边界
-        val startMarker = if (isMarkdown) "## 人设卡" else "人设卡\n========================================"
-        val startIdx = content.indexOf(startMarker)
+        // 找到角色卡区域的边界（兼容旧版"人设卡"标记）
+        val marker = if (isMarkdown) "## 角色卡" else "角色卡\n========================================"
+        val legacyMarker = if (isMarkdown) "## 人设卡" else "人设卡\n========================================"
+        val startIdx = content.indexOf(marker).let { if (it >= 0) it else content.indexOf(legacyMarker) }
+        val startMarker = if (startIdx >= 0) marker else legacyMarker
         if (startIdx < 0) {
             return Quadruple(Persona.Empty, UserPersona.Empty, "", "")
         }

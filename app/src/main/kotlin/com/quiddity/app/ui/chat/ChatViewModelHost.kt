@@ -52,7 +52,10 @@ class ChatViewModelHost(
     private val releaseRequests = mutableSetOf<String>()
 
     /** 获取（或创建）指定会话的 ViewModel。 */
-    fun get(convId: String): ChatViewModel = vmOf(convId)
+    fun get(convId: String): ChatViewModel {
+        releaseRequests -= convId
+        return vmOf(convId)
+    }
 
     /** 聊天页退出组合时调用。 */
     fun onScreenExit(convId: String) {

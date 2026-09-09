@@ -7,6 +7,7 @@ import com.quiddity.app.util.QuiddityConstants
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /*
@@ -65,14 +66,16 @@ class PromptBuilderTest {
         id: String,
         role: Role = Role.USER,
         content: String,
-        senderId: String? = null
+        senderId: String? = null,
+        reasoningContent: String = ""
     ): Message = Message(
         id = id,
         conversationId = "conv_test",
         role = role,
         content = content,
         timestamp = now,
-        senderId = senderId
+        senderId = senderId,
+        reasoningContent = reasoningContent
     )
 
     // ============================================================
@@ -206,6 +209,83 @@ class PromptBuilderTest {
     }
 
     @Test
+    fun `toApiMessages drops ccr placeholder content`() {
+        val history = listOf(
+            msg("m1", Role.USER, "<<ccr:97f81194c97d,string,725B>>"),
+            msg("m2", Role.ASSISTANT, "前面的回复内容是<<ccr:abc123,string,100B>>，这部分保留"),
+            msg("m3", Role.USER, "正常消息")
+        )
+        val plain = PromptBuilder.toApiMessages("", history)
+        assertEquals(2, plain.size, "整条占位符消息应被跳过")
+        assertEquals("前面的回复内容是，这部分保留", plain[0].content, "正文中的占位符应被剥离")
+        assertEquals("正常消息", plain[1].content)
+    }
+
+    // ============================================================
+    // DeepSeek 思考回传（携带 tools 的请求必须回传 reasoning_content，缺失即 400）
+    // ============================================================
+
+    @Test
+    fun `toApiMessages attaches reasoning for assistant when enabled`() {
+        val history = listOf(
+            msg("m1", Role.USER, "你好"),
+            msg("m2", Role.ASSISTANT, "你好呀", reasoningContent = "思考原文"),
+            msg("m3", Role.USER, "再说一遍")
+        )
+        val result = PromptBuilder.toApiMessages("", history, attachReasoning = true)
+        assertEquals("思考原文", result[1].reasoning_content, "私聊无发言人概念，assistant 直接回传落库思考")
+        assertNull(result[0].reasoning_content, "user 消息不携带思考字段")
+    }
+
+    @Test
+    fun `toApiMessages group attaches own reasoning and empty placeholder for others`() {
+        val history = listOf(
+            msg("m1", Role.ASSISTANT, "我自己说过", senderId = "member_a", reasoningContent = "我的思考"),
+            msg("m2", Role.ASSISTANT, "别人说过", senderId = "member_b", reasoningContent = "别人的思考"),
+            msg("m3", Role.ASSISTANT, "我旧数据无思考", senderId = "member_a")
+        )
+        val result = PromptBuilder.toApiMessages(
+            systemPrompt = "",
+            history = history,
+            senderLabels = mapOf("member_a" to "小A", "member_b" to "小B"),
+            requesterSenderId = "member_a",
+            attachReasoning = true
+        )
+        assertEquals("我的思考", result[0].reasoning_content, "请求方自己的发言回传落库原文")
+        assertEquals("", result[1].reasoning_content, "其他成员发言空串占位，不挂错发言人")
+        assertEquals("", result[2].reasoning_content, "旧数据未知思考按空串占位（官方校验字段存在性）")
+    }
+
+    @Test
+    fun `toApiMessages without attach reasoning omits field`() {
+        val history = listOf(
+            msg("m1", Role.ASSISTANT, "回复", reasoningContent = "思考原文")
+        )
+        val result = PromptBuilder.toApiMessages("", history, attachReasoning = false)
+        assertNull(result[0].reasoning_content, "不携带工具的请求不挂思考字段（官方无工具时会忽略）")
+    }
+
+    @Test
+    fun `toResponsesInput emits reasoning item before assistant message`() {
+        val apiMessages = listOf(
+            com.quiddity.app.data.remote.ChatMessage(role = "system", content = "系统"),
+            com.quiddity.app.data.remote.ChatMessage(role = "user", content = "你好"),
+            com.quiddity.app.data.remote.ChatMessage(
+                role = "assistant", content = "你好呀", reasoning_content = "思考原文"
+            ),
+            com.quiddity.app.data.remote.ChatMessage(
+                role = "assistant", content = "旧轮无思考", reasoning_content = ""
+            )
+        )
+        val items = PromptBuilder.toResponsesInput(apiMessages)
+        assertEquals(4, items.size, "system 不进 input；非空思考挂 reasoning item；空思考不挂")
+        assertEquals("user", items[0].role)
+        assertEquals("reasoning", items[1].type, "非空思考先挂 reasoning item")
+        assertEquals("assistant", items[2].role)
+        assertEquals("assistant", items[3].role, "空思考不挂 reasoning item，消息本体照常")
+    }
+
+    @Test
     fun `toResponsesInput keeps game log system records as user input`() {
         val apiMessages = listOf(
             com.quiddity.app.data.remote.ChatMessage(role = "system", content = "人设提示词"),
@@ -216,10 +296,14 @@ class PromptBuilderTest {
         val input = PromptBuilder.toResponsesInput(apiMessages)
         assertEquals(3, input.size)
         assertEquals("user", input[0].role)
-        assertEquals("你好", input[0].content)
+        assertEquals(
+            "你好",
+            (input[0].content as kotlinx.serialization.json.JsonPrimitive).content
+        )
         assertEquals("user", input[1].role)
-        assertTrue(input[1].content.orEmpty().contains("《棋盘》对局记录"), "对局记录应保留给角色阅读")
-        assertTrue(input[1].content.orEmpty().startsWith("【系统记录】"), "非首条 system 记录应转为带标记的 user 输入")
+        val secondContent = (input[1].content as kotlinx.serialization.json.JsonPrimitive).content
+        assertTrue(secondContent.contains("《棋盘》对局记录"), "对局记录应保留给角色阅读")
+        assertTrue(secondContent.startsWith("【系统记录】"), "非首条 system 记录应转为带标记的 user 输入")
         assertEquals("assistant", input[2].role)
     }
 
@@ -272,25 +356,6 @@ class PromptBuilderTest {
         assertTrue(prompt.contains("程序员"), "该成员私聊里的用户人设应注入 system 提示词")
         assertTrue(prompt.contains("群聊规则"), "应包含群聊规则节")
         assertTrue(prompt.contains("不替其他成员或用户发言"), "应包含群聊规则内容")
-    }
-
-    @Test
-    fun `group decision prompt contains transcript and output constraint`() {
-        val member = conv().copy(
-            persona = com.quiddity.app.data.model.Persona(name = "小A")
-        )
-        val transcript = PromptBuilder.buildGroupTranscript(
-            listOf(
-                msg("m1", content = "你好", senderId = "conv_user"),
-                msg("m2", content = "你们好呀", senderId = "conv_b")
-            ),
-            lastN = 10,
-            senderNames = mapOf("conv_user" to "我", "conv_b" to "小B")
-        )
-        val prompt = PromptBuilder.buildGroupDecisionPrompt(member, transcript)
-        assertTrue(prompt.contains("群聊转述"), "决策提示词应包含群聊转述节")
-        assertTrue(prompt.contains("我：你好"), "转述应使用名字：内容格式")
-        assertTrue(prompt.contains("严格只输出数字 0"), "应包含输出约束")
     }
 
     @Test
@@ -424,6 +489,29 @@ class PromptBuilderTest {
     }
 
     @Test
+    fun `system prompt includes thinking markers when thinking enabled`() {
+        val conv = conv().copy(
+            thinkingEnabled = true,
+            thinkingDepth = com.quiddity.app.util.QuiddityConstants.THINKING_DEPTH_SHALLOW
+        )
+        val system = PromptBuilder.buildSystemPrompt(
+            conv = conv,
+            thinkingDepth = conv.thinkingDepth
+        )
+        assertTrue(system.contains("【思考】"), "开启思考时应引导模型输出【思考】标记")
+        assertTrue(system.contains("【回答】"), "开启思考时应引导模型输出【回答】标记")
+        assertTrue(system.contains("第一人称"), "思考应要求第一人称")
+    }
+
+    @Test
+    fun `system prompt omits thinking markers when thinking disabled`() {
+        val system = PromptBuilder.buildSystemPrompt(
+            conv().copy(thinkingEnabled = false)
+        )
+        assertFalse(system.contains("【思考】"), "关闭思考时不应引导【思考】标记")
+    }
+
+    @Test
     fun `group rules are generic and minimal`() {
         assertTrue(PromptBuilder.GROUP_RULES.contains("不替其他成员或用户发言"))
         assertFalse(PromptBuilder.GROUP_RULES.contains("必须包含"), "不再强制台词硬规则（由切分器根因修复兜底）")
@@ -439,7 +527,14 @@ class PromptBuilderTest {
         )
         val prompt = PromptBuilder.buildGroupSystemPrompt(member, PromptBuilder.GROUP_RULES)
         assertTrue(prompt.contains("【对话方式】"), "群聊提示词应包含对话方式节")
-        assertTrue(prompt.contains("动作/神态用括号括起，如（轻笑）。"), "括号动作规则应带示例：$prompt")
+        assertTrue(
+            prompt.contains("不要刻意添加动作或神态描写"),
+            "对话方式应引导自然输出而非强制动作描写：$prompt"
+        )
+        assertTrue(
+            prompt.contains("禁止整条回复只有动作没有台词"),
+            "对话方式应保留动作-only 安全兜底：$prompt"
+        )
         assertTrue(prompt.contains("不加「名字：」前缀或解释"), "前缀规则应在对话方式节：$prompt")
         assertTrue(prompt.contains("被用户「@」点名时优先回应"), "@点名规则应在对话方式节：$prompt")
         assertTrue(prompt.contains("不提及自己是 AI 或模型"), "AI 身份纪律应在对话方式节：$prompt")

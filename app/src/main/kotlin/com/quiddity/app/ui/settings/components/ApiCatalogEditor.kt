@@ -103,183 +103,49 @@ fun ApiCatalogEditor(
     onBack: () -> Unit
 ) {
     val settings by viewModel.settings.collectAsStateWithLifecycle()
-    val configuration = LocalConfiguration.current
-    val screenHeight = configuration.screenHeightDp.dp
-    val scope = rememberCoroutineScope()
     val apiCatalogManager = remember { ServiceLocator.apiCatalogManager }
-
-    var visible by rememberSaveable { mutableStateOf(false) }
     // 安全规则：不把解密后的 API Key 明文写入 rememberSaveable（可能落盘），
-    // 恢复编辑状态时 apiKey 置空；保存时未重输密钥则保留原密文（见 SettingsViewModel.upsertCatalog）。
-    val editingStateSaver = remember {
-        Saver<ApiCatalogEditFormState?, List<String>>(
-            save = { state ->
-                if (state == null) emptyList()
-                else listOf(
-                    state.id, state.name, state.providerId, state.apiUrl, state.apiModel,
-                    state.maxTemperature?.toString().orEmpty()
-                )
-            },
-            restore = { saved ->
-                if (saved.size < 5) null
-                else ApiCatalogEditFormState(
-                    id = saved[0],
-                    name = saved[1],
-                    providerId = saved[2],
-                    apiUrl = saved[3],
-                    apiModel = saved[4],
-                    apiKey = "",
-                    maxTemperature = saved.getOrNull(5)?.toDoubleOrNull()
-                )
-            }
-        )
-    }
+    // 恢复编辑状态时 apiKey 置空；编辑时由点击回调解密回显，保存时未重输密钥则保留原密文。
+    val editingStateSaver = rememberCatalogEditingStateSaver()
     var editingState by rememberSaveable(stateSaver = editingStateSaver) { mutableStateOf<ApiCatalogEditFormState?>(null) }
     var isCreating by rememberSaveable { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<ApiCatalogEntry?>(null) }
 
-    LaunchedEffect(Unit) { visible = true }
-
-    Box(modifier = Modifier.fillMaxSize().imePadding()) {
-        AnimatedVisibility(
-            visible = visible,
-            enter = fadeIn(tween(Motion.DurationMedium)),
-            exit = fadeOut(tween(Motion.DurationShort)),
-            modifier = Modifier.fillMaxSize()
+    CatalogEditorScaffold(
+        title = "模型配置",
+        onBack = onBack,
+        onAdd = { isCreating = true }
+    ) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.45f))
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) {
-                        visible = false
-                        scope.launch {
-                            kotlinx.coroutines.delay(Motion.DurationShort.toLong())
-                            onBack()
-                        }
-                    }
-            )
-        }
-
-        AnimatedVisibility(
-            visible = visible,
-            enter = slideInVertically(
-                initialOffsetY = { it },
-                animationSpec = tween(Motion.DurationXLong, easing = Motion.EasingEmphasizedDecelerate)
-            ) + fadeIn(tween(Motion.DurationLong)),
-            exit = slideOutVertically(
-                targetOffsetY = { it },
-                animationSpec = tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedAccelerate)
-            ) + fadeOut(tween(Motion.DurationShort)),
-            modifier = Modifier.align(Alignment.BottomCenter)
-        ) {
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(screenHeight * 0.8f),
-                color = MaterialTheme.colorScheme.surface,
-                shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-                tonalElevation = 3.dp,
-                shadowElevation = 8.dp
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .windowInsetsPadding(WindowInsets.navigationBars)
-                ) {
-                    // 顶部栏
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clip(CircleShape)
-                                .clickable(
-                                    interactionSource = remember { MutableInteractionSource() },
-                                    indication = null
-                                ) {
-                                    visible = false
-                                    scope.launch {
-                                        kotlinx.coroutines.delay(Motion.DurationShort.toLong())
-                                        onBack()
-                                    }
-                                },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "返回",
-                                tint = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                        Text(
-                            text = "模型配置",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurface
+            items(
+                items = settings.catalog,
+                key = { it.id },
+                contentType = { "catalog_entry" }
+            ) { entry ->
+                CatalogCard(
+                    entry = entry,
+                    isActive = entry.id == settings.activeCatalogId,
+                    catalogManager = apiCatalogManager,
+                    onClick = {
+                        // 编辑回显已保存密钥：解密后预填，用户可直接核对；
+                        // 解密失败时置空并保留原密文（保存走 upsertCatalog 空值分支）。
+                        editingState = ApiCatalogEditFormState(
+                            id = entry.id,
+                            name = entry.name,
+                            providerId = entry.providerId,
+                            apiUrl = entry.apiUrl,
+                            apiModel = entry.apiModel,
+                            apiKey = apiCatalogManager.decryptKey(entry) ?: "",
+                            maxTemperature = entry.maxTemperature
                         )
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clip(CircleShape)
-                                .clickable(
-                                    interactionSource = remember { MutableInteractionSource() },
-                                    indication = null
-                                ) { isCreating = true },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Add,
-                                contentDescription = "新建",
-                                tint = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    }
-
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        items(
-                            items = settings.catalog,
-                            key = { it.id },
-                            contentType = { "catalog_entry" }
-                        ) { entry ->
-                            CatalogCard(
-                                entry = entry,
-                                isActive = entry.id == settings.activeCatalogId,
-                                catalogManager = apiCatalogManager,
-                                onClick = {
-                                    // 设计：编辑不预填解密后的密钥（密钥是秘密，解密展示无必要）。
-                                    // 已存密钥时表单提示"已保存，留空保持不变"；
-                                    // 输入新密钥则替换。避免"解密失败被误认为没保存"。
-                                    editingState = ApiCatalogEditFormState(
-                                        id = entry.id,
-                                        name = entry.name,
-                                        providerId = entry.providerId,
-                                        apiUrl = entry.apiUrl,
-                                        apiModel = entry.apiModel,
-                                        apiKey = "",
-                                        maxTemperature = entry.maxTemperature
-                                    )
-                                },
-                                onSetActive = { viewModel.setActiveCatalog(entry.id) },
-                                onDelete = { pendingDelete = entry }
-                            )
-                        }
-                    }
-                }
+                    },
+                    onSetActive = { viewModel.setActiveCatalog(entry.id) },
+                    onDelete = { pendingDelete = entry }
+                )
             }
         }
     }
@@ -336,10 +202,9 @@ fun ApiCatalogEditor(
     }
 
     pendingDelete?.let { entry ->
-        ConfirmDialog(
+        CatalogDeleteConfirmDialog(
+            entry = entry,
             title = "删除模型配置",
-            message = "将删除「${entry.name}」，此操作不可撤销。", 
-            confirmText = "删除",
             onConfirm = {
                 viewModel.removeCatalog(entry.id)
                 pendingDelete = null
@@ -467,3 +332,168 @@ private fun CatalogCard(
         }
     }
 }
+@Composable
+internal fun rememberCatalogEditingStateSaver(): Saver<ApiCatalogEditFormState?, List<String>> = remember {
+    Saver<ApiCatalogEditFormState?, List<String>>(
+        save = { state ->
+            if (state == null) emptyList()
+            else listOf(
+                state.id, state.name, state.providerId, state.apiUrl, state.apiModel,
+                state.maxTemperature?.toString().orEmpty()
+            )
+        },
+        restore = { saved ->
+            if (saved.size < 5) null
+            else ApiCatalogEditFormState(
+                id = saved[0],
+                name = saved[1],
+                providerId = saved[2],
+                apiUrl = saved[3],
+                apiModel = saved[4],
+                apiKey = "",
+                maxTemperature = saved.getOrNull(5)?.toDoubleOrNull()
+            )
+        }
+    )
+}
+
+@Composable
+internal fun CatalogDeleteConfirmDialog(
+    entry: ApiCatalogEntry,
+    title: String,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    ConfirmDialog(
+        title = title,
+        message = "将删除「${entry.name}」，此操作不可撤销。",
+        confirmText = "删除",
+        onConfirm = onConfirm,
+        onDismiss = onDismiss
+    )
+}
+
+@Composable
+internal fun CatalogEditorScaffold(
+    title: String,
+    onBack: () -> Unit,
+    onAdd: () -> Unit,
+    content: @Composable () -> Unit
+) {
+    val configuration = LocalConfiguration.current
+    val screenHeight = configuration.screenHeightDp.dp
+    val scope = rememberCoroutineScope()
+    var visible by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(Unit) { visible = true }
+
+    Box(modifier = Modifier.fillMaxSize().imePadding()) {
+        AnimatedVisibility(
+            visible = visible,
+            enter = fadeIn(tween(Motion.DurationMedium)),
+            exit = fadeOut(tween(Motion.DurationShort)),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.45f))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) {
+                        visible = false
+                        scope.launch {
+                            kotlinx.coroutines.delay(Motion.DurationShort.toLong())
+                            onBack()
+                        }
+                    }
+            )
+        }
+
+        AnimatedVisibility(
+            visible = visible,
+            enter = slideInVertically(
+                initialOffsetY = { it },
+                animationSpec = tween(Motion.DurationXLong, easing = Motion.EasingEmphasizedDecelerate)
+            ) + fadeIn(tween(Motion.DurationLong)),
+            exit = slideOutVertically(
+                targetOffsetY = { it },
+                animationSpec = tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedAccelerate)
+            ) + fadeOut(tween(Motion.DurationShort)),
+            modifier = Modifier.align(Alignment.BottomCenter)
+        ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(screenHeight * 0.8f),
+                color = MaterialTheme.colorScheme.surface,
+                shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+                tonalElevation = 3.dp,
+                shadowElevation = 8.dp
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .windowInsetsPadding(WindowInsets.navigationBars)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null
+                                ) {
+                                    visible = false
+                                    scope.launch {
+                                        kotlinx.coroutines.delay(Motion.DurationShort.toLong())
+                                        onBack()
+                                    }
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "返回",
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Text(
+                            text = title,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null
+                                ) { onAdd() },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Add,
+                                contentDescription = "新建",
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                    content()
+                }
+            }
+        }
+    }
+}
+

@@ -144,7 +144,7 @@ fun BoardGameScreen(
             .imePadding()
     ) {
         BoardTopBar(
-            title = "${session.gameType.displayName} · ${session.opponentName}",
+            title = "${session.gameType.displayName} ${session.board.size}×${session.board.size} · ${session.opponentName}",
             onBack = {
                 if (session.status == BoardStatus.Playing) showExitConfirm = true else onBack()
             },
@@ -284,7 +284,8 @@ fun BoardGameScreen(
         if (showResult) {
             BoardResultDialog(
                 result = result,
-                gameName = session.gameType.displayName,
+                gameName = "${session.gameType.displayName} ${session.board.size}×${session.board.size}",
+                userStone = session.userStone,
                 onDismiss = { showResult = false },
                 onRematch = onRematch,
                 onExit = onBack,
@@ -925,13 +926,14 @@ private fun ChatBubble(message: BoardChatMessage) {
 private fun BoardResultDialog(
     result: BoardStatus.Finished,
     gameName: String,
+    userStone: Stone,
     onDismiss: () -> Unit,
     onRematch: () -> Unit,
     onExit: () -> Unit,
     onOpenChat: (() -> Unit)?
 ) {
-    val win = result.winnerName == "你"
-    val draw = result.winnerName == null
+    val win = result.winner == userStone
+    val draw = result.winner == null
     val bannerColor = when {
         win -> Color(0xFF2E7D32)
         draw -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)

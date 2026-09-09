@@ -35,6 +35,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -105,7 +106,7 @@ fun UpdateDialog(
     val lifecycleOwner = LocalLifecycleOwner.current
 
     var phase by remember { mutableStateOf<DownloadPhase>(DownloadPhase.Idle) }
-    var currentDownloadId by remember { mutableStateOf(0L) }
+    var currentDownloadId by remember { mutableLongStateOf(0L) }
     var downloadJob by remember { mutableStateOf<Job?>(null) }
 
     DisposableEffect(lifecycleOwner) {

@@ -1,6 +1,18 @@
 package com.quiddity.app.util
 
 import android.graphics.Bitmap
+import android.graphics.drawable.BitmapDrawable
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
+import coil.imageLoader
+import coil.request.ImageRequest
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /*
  * ============================================================================
@@ -111,4 +123,31 @@ object WallpaperContrast {
         }
         return averageBrightness(sampled)
     }
+}
+
+@Composable
+fun rememberWallpaperBrightness(uri: String?): Float {
+    val context = LocalContext.current
+    val imageLoader = context.imageLoader
+    var brightness by remember(uri) { mutableFloatStateOf(WallpaperContrast.DEFAULT_BRIGHTNESS) }
+    LaunchedEffect(uri) {
+        if (uri == null) {
+            brightness = WallpaperContrast.DEFAULT_BRIGHTNESS
+            return@LaunchedEffect
+        }
+        brightness = withContext(Dispatchers.IO) {
+            runCatching {
+                val request = ImageRequest.Builder(context)
+                    .data(uri)
+                    .size(64)
+                    .allowHardware(false)
+                    .build()
+                val drawable = imageLoader.execute(request).drawable
+                val bitmap = (drawable as? BitmapDrawable)?.bitmap
+                    ?: return@runCatching WallpaperContrast.DEFAULT_BRIGHTNESS
+                WallpaperContrast.sampleBrightness(bitmap)
+            }.getOrDefault(WallpaperContrast.DEFAULT_BRIGHTNESS)
+        }
+    }
+    return brightness
 }

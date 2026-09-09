@@ -2,11 +2,13 @@ package com.quiddity.app.di
 
 import android.annotation.SuppressLint
 import android.content.Context
+import com.quiddity.app.active.ShizukuClient
 import com.quiddity.app.active.AlarmScheduler
 import com.quiddity.app.data.local.CharacterStore
 import com.quiddity.app.data.local.ConversationStore
 import com.quiddity.app.data.local.MiniAppStore
 import com.quiddity.app.data.local.SettingsStore
+import com.quiddity.app.data.local.AgentStore
 import com.quiddity.app.data.remote.ChatApi
 import com.quiddity.app.data.repo.ChatRepository
 import com.quiddity.app.data.repo.CharacterRepository
@@ -17,6 +19,8 @@ import com.quiddity.app.data.repo.TimeLibraryRepository
 import com.quiddity.app.domain.ApiCatalogManager
 import com.quiddity.app.domain.DocsProvider
 import com.quiddity.app.domain.VisionOcrService
+import com.quiddity.app.domain.agent.AgentExecutors
+import com.quiddity.app.domain.agent.AgentToolRegistry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -64,6 +68,10 @@ object ServiceLocator {
     private lateinit var appContext: Context
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
+    /** 全局 Application Context（供无 UI 场景的前台服务启动等使用）。 */
+    val applicationContext: Context
+        get() = appContext
+
     lateinit var settingsStore: SettingsStore
         private set
     lateinit var conversationStore: ConversationStore
@@ -72,7 +80,15 @@ object ServiceLocator {
         private set
     lateinit var characterStore: CharacterStore
         private set
+    lateinit var agentStore: AgentStore
+        private set
+    lateinit var shizukuClient: ShizukuClient
+        private set
     lateinit var chatApi: ChatApi
+        private set
+
+    /** Agent 工具执行器（撤回删除创建物等场景直接复用）。 */
+    lateinit var agentExecutors: AgentExecutors
         private set
 
     lateinit var settingsRepository: SettingsRepository
@@ -125,6 +141,8 @@ object ServiceLocator {
         conversationStore = ConversationStore(appContext)
         miniAppStore = MiniAppStore(appContext)
         characterStore = CharacterStore(appContext)
+        agentStore = AgentStore(appContext)
+        shizukuClient = ShizukuClient(appContext)
         chatApi = ChatApi()
 
         settingsRepository = SettingsRepository(settingsStore)
@@ -145,11 +163,20 @@ object ServiceLocator {
             apiCatalogManager
         )
         docsProvider = DocsProvider(apiCatalogManager)
+        agentExecutors = AgentExecutors(
+            appContext,
+            shizukuClient,
+            visionOcrService,
+            settingsRepository,
+            apiCatalogManager
+        )
         chatRepository = ChatRepository(
             api = chatApi,
             conversationRepo = conversationRepository,
             settingsRepo = settingsRepository,
-            apiCatalogManager = apiCatalogManager
+            apiCatalogManager = apiCatalogManager,
+            agentToolRegistry = AgentToolRegistry.defaultRegistry(agentExecutors),
+            agentStore = agentStore
         )
         alarmScheduler = AlarmScheduler(appContext)
         timeLibraryRepository = TimeLibraryRepository(
@@ -170,11 +197,22 @@ object ServiceLocator {
                 settingsRepository.migrateLegacyApiKeysIfNeeded()
                 conversationRepository.loadAll()
                 characterRepository.loadAll()
+                // 历史私聊回填角色卡引用：每个私聊人设对应角色库唯一 uid
+                conversationRepository.syncAllSoloCharacters()
                 miniAppStore.load()
+                agentStore.load()
                 // 详见 ConversationStore.migrateDeduplicateMessageIds
                 conversationRepository.migrateDeduplicateMessageIds()
                 // 主动消息：每日首次启动重置 done → pending，并重注册闹钟
                 timeLibraryRepository.onAppStart()
+                // 回复悬浮窗：启动时应用设置开关与头像（权限由系统设置页授权）
+                val overlaySettings = settingsRepository.currentSnapshot()
+                com.quiddity.app.active.ReplyOverlayController.updateEnabled(
+                    overlaySettings.overlayEnabled
+                )
+                com.quiddity.app.active.ReplyOverlayController.updateAvatarUri(
+                    overlaySettings.overlayAvatarUri
+                )
             }.onFailure {
                 android.util.Log.e("ServiceLocator", "启动加载数据失败", it)
             }

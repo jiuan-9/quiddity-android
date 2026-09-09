@@ -3,7 +3,6 @@ package com.quiddity.app.domain
 import com.quiddity.app.data.model.TimePoint
 import com.quiddity.app.data.model.TimePointStatus
 import com.quiddity.app.util.QuiddityConstants
-import java.util.Locale
 
 /*
  * ============================================================================
@@ -49,6 +48,11 @@ import java.util.Locale
  */
 object TimeLibraryEngine {
 
+    const val SLOT_COUNT = 10
+    const val SLOTS_PER_HALF = 5
+    const val PM_START_SLOT = 5
+    const val NOON_HOUR = 12
+
     private val TIME_PATTERN = Regex("""^([01]\d|2[0-3]):([0-5]\d)$""")
     private val TIME_EXTRACT_PATTERN = Regex("""([01]\d|2[0-3]):([0-5]\d)""")
 
@@ -78,51 +82,60 @@ object TimeLibraryEngine {
 
     /**
      * 解析时间库生成结果：从 LLM 返回文本中提取 24 小时制 "HH:mm" 时间点。
-     * - 最多不超过 5 个，按出现顺序、去重
+     * - 按出现顺序、去重
+     * - 再按 10 个固定时间框（上下午各 5 个）的禁用情况裁剪
      * - 允许为空列表（LLM 认为当天无需主动发消息）
      */
-    fun parseGeneratedTimes(raw: String): List<String> {
+    fun parseGeneratedTimes(
+        raw: String,
+        disabledSlots: Set<Int> = emptySet()
+    ): List<String> {
         val result = mutableListOf<String>()
         TIME_EXTRACT_PATTERN.findAll(raw).forEach { match ->
             val time = match.value
             if (result.none { it == time }) result.add(time)
         }
-        return result.take(QuiddityConstants.ACTIVE_MESSAGE_MAX_POINTS)
+        return enforceTimeLibraryRules(result, disabledSlots)
     }
 
     /**
-     * 从生成结果中提取 4~6 位数字查看密码；未输出返回空串。
-     * 纯数字无冒号，不会被 [parseGeneratedTimes] 误识别为时间。
+     * 时间库规则约束：
+     * - 共 [SLOT_COUNT] 个固定时间框，上午 0-4、下午 5-9
+     * - 被禁用的时间框不参与，也不计入上限
+     * - 上午 / 下午各自的上限 = 对应半场剩余可用框数
      */
-    fun parseGeneratedPassword(raw: String): String {
-        val match = Regex("""【查看密码】\s*(\d{4,6})""").find(raw) ?: return ""
-        return match.groupValues[1]
+    fun enforceTimeLibraryRules(
+        times: List<String>,
+        disabledSlots: Set<Int> = emptySet()
+    ): List<String> {
+        val amCap = enabledAmCount(disabledSlots)
+        val pmCap = enabledPmCount(disabledSlots)
+        val totalCap = amCap + pmCap
+        val seen = LinkedHashSet<String>()
+        var am = 0
+        var pm = 0
+        for (time in times) {
+            if (seen.size >= totalCap) break
+            val minutes = parseMinutes(time) ?: continue
+            if (minutes / 60 < NOON_HOUR) {
+                if (am >= amCap) continue
+                am++
+            } else {
+                if (pm >= pmCap) continue
+                pm++
+            }
+            seen.add(time)
+        }
+        return seen.toList()
     }
 
-    /**
-     * 校验并清洗 AI 输出的密码：只保留数字并取前 6 位；
-     * 不足 4 位视为无效返回空串（调用方改用兜底密码）。
-     */
-    fun sanitizePassword(raw: String): String {
-        val digits = raw.filter { it.isDigit() }
-        return if (digits.length >= 4) digits.take(6) else ""
-    }
+    /** 上午剩余可用时间框数（下标 0-4）。 */
+    fun enabledAmCount(disabledSlots: Set<Int>): Int =
+        (SLOTS_PER_HALF - disabledSlots.count { it in 0 until PM_START_SLOT }).coerceAtLeast(0)
 
-    /**
-     * 兜底密码：AI 未输出有效密码时使用，按会话 id + 日期稳定生成 6 位数字，
-     * 保证"查看时间库"功能任何时候都可用。
-     */
-    fun fallbackPassword(seed: String): String =
-        String.format(Locale.US, "%06d", (seed.hashCode() and 0x7fffffff) % 1_000_000)
-
-    /**
-     * 从生成结果中提取"是否告知查看密码"（是/否/true/false/1/0）。
-     * 未明确输出"否"时默认告知（保证用户能查看时间库，功能可用）。
-     */
-    fun parsePasswordRevealed(raw: String): Boolean {
-        val match = Regex("""【是否告知】\s*(是|否|true|false|1|0)""").find(raw) ?: return true
-        return match.groupValues[1] in setOf("是", "true", "1")
-    }
+    /** 下午剩余可用时间框数（下标 5-9）。 */
+    fun enabledPmCount(disabledSlots: Set<Int>): Int =
+        (SLOTS_PER_HALF - disabledSlots.count { it in PM_START_SLOT until SLOT_COUNT }).coerceAtLeast(0)
 
     /**
      * 时间库更新与兜底：

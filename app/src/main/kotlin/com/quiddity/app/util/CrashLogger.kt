@@ -45,6 +45,7 @@ object CrashLogger {
 
     private const val TAG = "CrashLogger"
     private const val MAX_LOG_FILES = 20
+    @android.annotation.SuppressLint("ConstantLocale")
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.getDefault())
 
     /** 安装全局未捕获异常处理器。 */

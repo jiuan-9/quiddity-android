@@ -101,10 +101,10 @@ private val MentionPattern = Regex("@[^\\s@]+")
 fun ChatInputBar(
     enterToSend: Boolean,
     isGenerating: Boolean,
+    modifier: Modifier = Modifier,
     allowSendWhileGenerating: Boolean = false,
     onSend: (String) -> Unit,
     onStop: () -> Unit,
-    modifier: Modifier = Modifier,
     enabled: Boolean = true,
     transparent: Boolean = false,
     onTextChange: ((String) -> Unit)? = null,
@@ -113,13 +113,15 @@ fun ChatInputBar(
     onPickImage: (() -> Unit)? = null,
     pendingImageUri: String? = null,
     onRemoveImage: (() -> Unit)? = null,
+    // 输入框初始文本：进入多选/压缩/搜索等移除输入栏再返回时，用它从 ViewModel 恢复未发送草稿
+    initialText: String = "",
     // 图片正在 OCR 识别中（按钮位置显示加载圈，阻止重复发送）
     ocrBusy: Boolean = false,
     // 输入框容器内的顶部内容（群聊成员头像栏，随输入框一起动）
     header: (@Composable (MentionInputScope) -> Unit)? = null
 ) {
     var textFieldValue by rememberSaveable(stateSaver = TextFieldValue.Saver) {
-        mutableStateOf(TextFieldValue(""))
+        mutableStateOf(TextFieldValue(initialText))
     }
 
     val density = LocalDensity.current

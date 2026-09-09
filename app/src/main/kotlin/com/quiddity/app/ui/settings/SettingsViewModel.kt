@@ -13,6 +13,7 @@ import com.quiddity.app.data.model.ImportMode
 import com.quiddity.app.data.repo.CharacterRepository
 import com.quiddity.app.data.repo.ConversationRepository
 import com.quiddity.app.data.repo.SettingsRepository
+import com.quiddity.app.di.ServiceLocator
 import com.quiddity.app.domain.ApiCatalogManager
 import com.quiddity.app.util.QuiddityConstants
 import kotlinx.coroutines.flow.asStateFlow
@@ -53,7 +54,8 @@ class SettingsViewModel(
     private val settingsRepository: SettingsRepository,
     private val conversationRepository: ConversationRepository,
     private val apiCatalogManager: ApiCatalogManager,
-    private val characterRepository: CharacterRepository
+    private val characterRepository: CharacterRepository,
+    private val agentStore: com.quiddity.app.data.local.AgentStore? = null
 ) : ViewModel() {
 
     /** 写操作失败提示（防未捕获协程异常导致 App 闪退）。 */
@@ -159,14 +161,6 @@ class SettingsViewModel(
         )
     }
 
-    fun setTypingDelayEnabled(enabled: Boolean) = viewModelScope.launch {
-        settingsRepository.setTypingDelayEnabled(enabled)
-    }
-
-    fun setTypingDelayMsPerChar(value: Int) = viewModelScope.launch {
-        settingsRepository.setTypingDelayMsPerChar(value)
-    }
-
     fun setSendDelayEnabled(enabled: Boolean) = viewModelScope.launch {
         settingsRepository.setSendDelayEnabled(enabled)
     }
@@ -180,16 +174,22 @@ class SettingsViewModel(
     }
 
     /**
-     * 主动消息总设置开关（对应算法文档 2.1）。
-     * 仅持久化"已了解该功能"标记；实际生效需在具体会话中单独开启。
+     * 主动消息总设置开关（对应算法文档 2.1，1.6.2 起为真总开关）。
+     * - 开启：允许各会话启用主动消息，并立即重注册闹钟、补齐时间库；
+     * - 关闭：所有会话的主动消息立即停止（注销全部闹钟），会话内开关置灰。
      */
     fun setProactiveMessageEnabled(enabled: Boolean) = viewModelScope.launch {
         settingsRepository.setProactiveMessageEnabled(enabled)
+        // 总开关真正生效：开启时重注册闹钟并补齐时间库；关闭时注销全部闹钟
+        ServiceLocator.timeLibraryRepository.onGlobalEnabledChanged(enabled)
     }
 
     /** 群聊教程弹窗已看标记（首次进入群聊列表页弹一次后置 true）。 */
     fun setGroupTutorialSeen(seen: Boolean) = viewModelScope.launch {
         settingsRepository.setGroupTutorialSeen(seen)
+    }
+    fun setAgentTutorialSeen(seen: Boolean) = viewModelScope.launch {
+        settingsRepository.setAgentTutorialSeen(seen)
     }
 
     /** 下一个群聊默认名（新群聊 N）。 */
@@ -205,6 +205,17 @@ class SettingsViewModel(
     // ===== 头像 =====
     fun setUserAvatar(uri: String?) = viewModelScope.launch {
         settingsRepository.setUserAvatar(uri)
+    }
+
+    // ===== 回复悬浮窗 =====
+    fun setOverlayEnabled(enabled: Boolean) = viewModelScope.launch {
+        settingsRepository.setOverlayEnabled(enabled)
+        com.quiddity.app.active.ReplyOverlayController.updateEnabled(enabled)
+    }
+
+    fun setOverlayAvatarUri(uri: String?) = viewModelScope.launch {
+        settingsRepository.setOverlayAvatarUri(uri)
+        com.quiddity.app.active.ReplyOverlayController.updateAvatarUri(uri)
     }
 
     // ===== 模型配置 =====
@@ -376,13 +387,6 @@ class SettingsViewModel(
         }
     }
 
-    /** 测试 API 连接（封装 Result，UI 层只关心成功 / 失败）。 */
-    suspend fun testApiConnection(
-        apiUrl: String,
-        apiKey: String,
-        model: String
-    ): Result<String> = apiCatalogManager.testConnection(apiUrl, apiKey, model)
-
     // ===== 数据导出 / 导入 =====
     /**
      * 全量导出（schema v2，2.0.0 数据契约）。
@@ -413,7 +417,10 @@ class SettingsViewModel(
             messages = emptyMap(),
             characters = characters,
             privateChats = privateChats,
-            groupChats = emptyList()
+            groupChats = emptyList(),
+            // Agent 设置（工具开关/黑名单/权限管控/审计日志）随备份导出；
+            // 消息内的撤回追踪字段（createdPaths/changedItems）由 DataPorter 在写盘时剥离
+            agentSettings = agentStore?.snapshot()
         )
     }
 
@@ -439,6 +446,40 @@ class SettingsViewModel(
             } else {
                 payload.settings
             }
+            // 1.5.0：群聊随私聊一并导入（方案十七.2），群聊消息按会话 id 落盘
+            val allBundles = payload.privateChats + payload.groupChats
+            conversationRepository.importV2Snapshot(
+                characters = payload.characters,
+                conversations = allBundles.map { it.conversation },
+                messages = allBundles.associate { it.conversation.id to it.messages },
+                mode = mode
+            )
+            // 1.6.0：Agent 设置（工具开关/黑名单/权限管控/审计日志）随备份恢复
+            // - REPLACE：整体替换本机 Agent 设置
+            // - MERGE：保留本机开关与权限管控（用户偏好），仅补入导入的黑名单与审计日志
+            // - CHARACTERS_ONLY：不动 Agent 设置
+            if (mode != ImportMode.CHARACTERS_ONLY) {
+                payload.agentSettings?.let { imported ->
+                    val store = agentStore
+                    if (store != null) {
+                        if (mode == ImportMode.REPLACE) {
+                            store.replaceAll(imported.toolSwitches, imported.blacklist)
+                            store.setPermissionControl(imported.permissionControl)
+                            imported.audit.forEach { store.appendAudit(it) }
+                        } else {
+                            val local = store.snapshot()
+                            store.replaceAll(
+                                local.toolSwitches,
+                                (local.blacklist + imported.blacklist).distinct()
+                            )
+                            imported.audit.forEach { store.appendAudit(it) }
+                        }
+                    }
+                }
+            }
+
+            // 设置最后写入：REPLACE 下先保证会话/角色/Agent 数据落盘成功再改设置，
+            // 避免数据导入失败时设置已被替换成导入值（半替换状态）。
             when (mode) {
                 ImportMode.REPLACE -> {
                     if (!settingsRepository.update { _ -> sanitizedSettings }) {
@@ -457,14 +498,6 @@ class SettingsViewModel(
                 }
                 ImportMode.CHARACTERS_ONLY -> Unit
             }
-            // 1.5.0：群聊随私聊一并导入（方案十七.2），群聊消息按会话 id 落盘
-            val allBundles = payload.privateChats + payload.groupChats
-            conversationRepository.importV2Snapshot(
-                characters = payload.characters,
-                conversations = allBundles.map { it.conversation },
-                messages = allBundles.associate { it.conversation.id to it.messages },
-                mode = mode
-            )
             true
         } catch (t: Throwable) {
             android.util.Log.e("SettingsViewModel", "导入数据失败", t)
@@ -513,7 +546,8 @@ class SettingsViewModelFactory(
     private val settingsRepository: SettingsRepository,
     private val conversationRepository: ConversationRepository,
     private val apiCatalogManager: ApiCatalogManager,
-    private val characterRepository: CharacterRepository
+    private val characterRepository: CharacterRepository,
+    private val agentStore: com.quiddity.app.data.local.AgentStore? = null
 ) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -521,7 +555,8 @@ class SettingsViewModelFactory(
             settingsRepository,
             conversationRepository,
             apiCatalogManager,
-            characterRepository
+            characterRepository,
+            agentStore
         ) as T
     }
 }

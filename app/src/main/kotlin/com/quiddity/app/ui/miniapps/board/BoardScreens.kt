@@ -31,6 +31,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.rounded.DonutLarge
 import androidx.compose.material.icons.rounded.DonutSmall
 import androidx.compose.material.icons.rounded.Computer
+import androidx.compose.material.icons.rounded.GridOn
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material3.CircularProgressIndicator
@@ -98,7 +99,7 @@ fun BoardGameSelectScreen(
         GameTypeCard(
             icon = Icons.Rounded.DonutSmall,
             title = BoardGameType.GOMOKU.displayName,
-            subtitle = "15×15 · 先连成五子获胜",
+            subtitle = "${BoardGameType.GOMOKU.defaultSize}×${BoardGameType.GOMOKU.defaultSize} 标准 · 先连成五子获胜，大小可自选",
             accent = MaterialTheme.colorScheme.primary,
             onClick = { onSelect(BoardGameType.GOMOKU) }
         )
@@ -106,13 +107,13 @@ fun BoardGameSelectScreen(
         GameTypeCard(
             icon = Icons.Rounded.DonutLarge,
             title = BoardGameType.GO.displayName,
-            subtitle = "9×9 · 提子、围空（简化规则）",
+            subtitle = "${BoardGameType.GO.defaultSize}×${BoardGameType.GO.defaultSize} 标准 · 提子、围空（简化规则）",
             accent = MaterialTheme.colorScheme.primary,
             onClick = { onSelect(BoardGameType.GO) }
         )
         Spacer(Modifier.size(8.dp))
         Text(
-            text = "围棋为简化规则：提子、禁着、停一手与近似数子计分，完整规则后续优化。",
+            text = "围棋为简化规则：提子、禁着、停一手与近似数子计分；进入后可按习惯自选棋盘大小。",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
         )
@@ -120,8 +121,66 @@ fun BoardGameSelectScreen(
 }
 
 @Composable
+fun BoardSizeSelectScreen(
+    game: BoardGameType,
+    onBack: () -> Unit,
+    onSelect: (Int) -> Unit
+) {
+    BackHandler(onBack = onBack)
+    val options = when (game) {
+        BoardGameType.GOMOKU -> listOf(
+            9 to "速战小盘",
+            13 to "快节奏",
+            15 to "标准盘",
+            19 to "大棋盘"
+        )
+        BoardGameType.GO -> listOf(
+            9 to "入门练习",
+            13 to "中盘对弈",
+            19 to "标准盘"
+        )
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .windowInsetsPadding(WindowInsets.statusBars)
+            .windowInsetsPadding(WindowInsets.navigationBars)
+            .padding(horizontal = 20.dp)
+    ) {
+        BoardTopBar(title = "${game.displayName} · 选择棋盘大小", onBack = onBack)
+        Spacer(Modifier.size(8.dp))
+        Text(
+            text = "棋盘想下多大？",
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onBackground
+        )
+        Text(
+            text = "按中国棋友的习惯：${game.displayName} 标准 ${game.defaultSize}×${game.defaultSize}，也可以选小盘速战或大盘尽兴。",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.size(24.dp))
+        options.forEachIndexed { index, (size, label) ->
+            GameTypeCard(
+                icon = Icons.Rounded.GridOn,
+                title = "$size×$size · $label",
+                subtitle = if (size == game.defaultSize) "标准尺寸，推荐" else "自选尺寸",
+                accent = MaterialTheme.colorScheme.primary,
+                onClick = { onSelect(size) }
+            )
+            if (index < options.lastIndex) {
+                Spacer(Modifier.size(16.dp))
+            }
+        }
+    }
+}
+
+@Composable
 fun BoardModeSelectScreen(
     game: BoardGameType,
+    size: Int,
     onBack: () -> Unit,
     onInvite: () -> Unit,
     onVsComputer: () -> Unit
@@ -135,7 +194,7 @@ fun BoardModeSelectScreen(
             .windowInsetsPadding(WindowInsets.navigationBars)
             .padding(horizontal = 20.dp)
     ) {
-        BoardTopBar(title = "${game.displayName} · 选择对手", onBack = onBack)
+        BoardTopBar(title = "${game.displayName} $size×$size · 选择对手", onBack = onBack)
         Spacer(Modifier.size(8.dp))
         Text(
             text = "谁来应战？",
@@ -165,6 +224,7 @@ fun BoardModeSelectScreen(
 @Composable
 fun BoardDifficultySelectScreen(
     game: BoardGameType,
+    size: Int,
     onBack: () -> Unit,
     onSelect: (BoardDifficulty) -> Unit
 ) {
@@ -177,7 +237,7 @@ fun BoardDifficultySelectScreen(
             .windowInsetsPadding(WindowInsets.navigationBars)
             .padding(horizontal = 20.dp)
     ) {
-        BoardTopBar(title = "${game.displayName} · 选择难度", onBack = onBack)
+        BoardTopBar(title = "${game.displayName} $size×$size · 选择难度", onBack = onBack)
         Spacer(Modifier.size(8.dp))
         Text(
             text = "电脑棋手水平",
@@ -210,6 +270,7 @@ fun BoardDifficultySelectScreen(
 fun BoardInviteScreen(
     invitees: List<BoardInvitee>,
     game: BoardGameType,
+    size: Int,
     checking: Boolean,
     onBack: () -> Unit,
     onInvite: (BoardInvitee) -> Unit
@@ -223,7 +284,7 @@ fun BoardInviteScreen(
             .windowInsetsPadding(WindowInsets.navigationBars)
     ) {
         BoardTopBar(
-            title = "邀请好友 · ${game.displayName}",
+            title = "邀请好友 · ${game.displayName} $size×$size",
             onBack = onBack,
             horizontalPadding = 20.dp
         )

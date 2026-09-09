@@ -1,6 +1,5 @@
 package com.quiddity.app.ui.settings.components
 
-import android.graphics.drawable.BitmapDrawable
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -51,14 +50,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
-import coil.imageLoader
-import coil.request.ImageRequest
 import com.quiddity.app.ui.components.ConfirmDialog
 import com.quiddity.app.ui.components.ImageCropper
 import com.quiddity.app.util.CrashLogger
 import com.quiddity.app.util.IdGenerator
 import com.quiddity.app.util.ImageUtils
 import com.quiddity.app.util.WallpaperContrast
+import com.quiddity.app.util.rememberWallpaperBrightness
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -123,30 +121,7 @@ fun ListWallpaperPanel(
     var localDarken by remember(currentDarken) { mutableFloatStateOf(currentDarken) }
     // ===== 壁纸自动对比度：采样亮度，预览遮罩与最终渲染一致 =====
     val context = LocalContext.current
-    val imageLoader = context.imageLoader
-    var wallpaperBrightness by remember(currentWallpaperUri) {
-        mutableFloatStateOf(WallpaperContrast.DEFAULT_BRIGHTNESS)
-    }
-    LaunchedEffect(currentWallpaperUri) {
-        if (currentWallpaperUri == null) {
-            wallpaperBrightness = WallpaperContrast.DEFAULT_BRIGHTNESS
-            return@LaunchedEffect
-        }
-        val brightness = withContext(Dispatchers.IO) {
-            runCatching {
-                val request = ImageRequest.Builder(context)
-                    .data(currentWallpaperUri)
-                    .size(64)
-                    .allowHardware(false)
-                    .build()
-                val drawable = imageLoader.execute(request).drawable
-                val bitmap = (drawable as? BitmapDrawable)?.bitmap
-                    ?: return@runCatching WallpaperContrast.DEFAULT_BRIGHTNESS
-                WallpaperContrast.sampleBrightness(bitmap)
-            }.getOrDefault(WallpaperContrast.DEFAULT_BRIGHTNESS)
-        }
-        wallpaperBrightness = brightness
-    }
+    val wallpaperBrightness = rememberWallpaperBrightness(currentWallpaperUri)
     val darkMode = MaterialTheme.colorScheme.background.luminance() < 0.5f
     val previewScrim = remember(wallpaperBrightness, localDarken, darkMode) {
         val alpha = WallpaperContrast.effectiveScrimAlpha(wallpaperBrightness, localDarken, darkMode)

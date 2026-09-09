@@ -95,10 +95,6 @@ class SpyViewModel(
 
     // ============ 配置 ============
 
-    fun addLlmCharacter(character: Character) {
-        reselectLlmFrom(character)
-    }
-
     fun removeLlmCharacter(characterId: String) {
         val setup = _uiState.value.setup
         _uiState.update {
@@ -113,7 +109,7 @@ class SpyViewModel(
         val next = if (character in filtered) {
             filtered + character
         } else {
-            (filtered + character).takeLast(MAX_LLM_PLAYERS)
+            (filtered + character).takeLast(MAX_LLM)
         }
         _uiState.update { it.copy(setup = setup.copy(llmCharacters = next)) }
     }
@@ -131,7 +127,7 @@ class SpyViewModel(
     /** 开始游戏：随机选一名已加入角色，用它的 API 生成一组词并发牌（失败回退内置词）。 */
     fun startGame() {
         val setup = _uiState.value.setup
-        val llmChars = setup.llmCharacters.take(MAX_LLM_PLAYERS)
+        val llmChars = setup.llmCharacters.take(MAX_LLM)
         if (llmChars.size < MIN_LLM_PLAYERS) return
 
         val players = mutableListOf(
@@ -147,57 +143,63 @@ class SpyViewModel(
                 index = players.size,
                 name = c.persona.name.ifBlank { "角色${i + 1}" },
                 kind = SpyPlayerKind.LLM,
-                persona = buildPersonaText(c),
+                persona = inviteManager.buildPersonaText(c, null),
                 avatarUri = c.aiAvatarUri ?: c.persona.aiAvatarUri
             )
         }
 
         _uiState.update { it.copy(checked = true, lastSetup = setup) }
         viewModelScope.launch {
-            // 随机挑一名已加入角色：既作为连接检测对象，也作为词库生成来源
-            val picked = llmChars.randomOrNull(random) ?: llmChars.firstOrNull()
-            val access: ApiAccess.Resolved?
-            val conversationId: String?
-            if (picked != null) {
-                val invite = inviteManager.prepare(
-                    character = picked,
-                    inviteBubbleText = { name -> "你邀请了「$name」一起玩《谁是卧底》" },
-                    miniAppId = "spy",
-                    miniAppTitle = "谁是卧底"
-                )
-                access = invite.access
-                conversationId = invite.conversationId
-            } else {
-                access = null
-                conversationId = null
-            }
+            try {
+                // 随机挑一名已加入角色：既作为连接检测对象，也作为词库生成来源
+                val picked = llmChars.randomOrNull(random) ?: llmChars.firstOrNull()
+                val access: ApiAccess.Resolved?
+                val conversationId: String?
+                if (picked != null) {
+                    val invite = inviteManager.prepare(
+                        character = picked,
+                        inviteBubbleText = { name -> "你邀请了「$name」一起玩《谁是卧底》" },
+                        miniAppId = "spy",
+                        miniAppTitle = "谁是卧底"
+                    )
+                    access = invite.access
+                    conversationId = invite.conversationId
+                } else {
+                    access = null
+                    conversationId = null
+                }
 
-            val current = _uiState.value
-            if (current.route != SpyRoute.Setup) return@launch
-            val notice = if (picked != null && access == null) "API 连接失败，已改用内置词库" else null
+                // 检查期用户可能已返回/离开设置页，校验仍处于 Setup 再继续
+                if (_uiState.value.route != SpyRoute.Setup) return@launch
+                val notice = if (picked != null && access == null) "API 连接失败，已改用内置词库" else null
 
-            // 用所选名册自动生成本局词库；失败回退内置词
-            val category = setup.category
-            val wordPair = if (access != null) {
-                SpyLlmClient(access.toSpyGateway(chatApi))
-                    .generateWordPairs(WORD_GEN_COUNT, category ?: "").firstOrNull()
-            } else {
-                null
-            } ?: SpyWordBank.randomPair(random, category)
+                // 用所选名册自动生成本局词库；失败回退内置词
+                val category = setup.category
+                val wordPair = if (access != null) {
+                    SpyLlmClient(access.toSpyGateway(chatApi))
+                        .generateWordPairs(WORD_GEN_COUNT, category ?: "").firstOrNull()
+                } else {
+                    null
+                } ?: SpyWordBank.randomPair(random, category)
 
-            val dealt = SpyGame.deal(players, wordPair, random, setup.mode)
-            if (dealt !is SpyDeal.Done) return@launch
-            _uiState.update {
-                it.copy(
-                    route = SpyRoute.Deal,
-                    game = dealt.state,
-                    userIndex = 0,
-                    userAvatarUri = settingsRepository.currentSnapshot().userAvatarUri,
-                    checked = false,
-                    notice = notice,
-                    access = access,
-                    conversationId = conversationId
-                )
+                val dealt = SpyGame.deal(players, wordPair, random, setup.mode)
+                if (dealt !is SpyDeal.Done) return@launch
+                // 词库生成可能耗时（LLM），进入发牌页前再次校验路由
+                if (_uiState.value.route != SpyRoute.Setup) return@launch
+                _uiState.update {
+                    it.copy(
+                        route = SpyRoute.Deal,
+                        game = dealt.state,
+                        userIndex = 0,
+                        userAvatarUri = settingsRepository.currentSnapshot().userAvatarUri,
+                        checked = false,
+                        notice = notice,
+                        access = access,
+                        conversationId = conversationId
+                    )
+                }
+            } finally {
+                _uiState.update { it.copy(checked = false) }
             }
         }
     }
@@ -300,16 +302,21 @@ class SpyViewModel(
             else -> SpyScriptBot.speak(game, speaker.index, random, pk = pk)
         }
 
-        val latest = _uiState.value.game ?: return
+        val latest = _uiState.value.game ?: run { _uiState.update { it.copy(thinking = false) }; return@processAITurn }
         if (pk) {
             val result = SpyGame.pkSpeak(latest, speaker.index, text ?: "")
             if (result is SpyPkSpeak.Done) {
                 _uiState.update { it.copy(game = result.state, thinking = false) }
+            } else {
+                // 发言被拒（空文本/阶段不符）：复位 thinking，避免卡住
+                _uiState.update { it.copy(thinking = false) }
             }
         } else {
             val result = SpyGame.speak(latest, speaker.index, text ?: "")
             if (result is SpySpeak.Done) {
                 _uiState.update { it.copy(game = result.state, thinking = false) }
+            } else {
+                _uiState.update { it.copy(thinking = false) }
             }
         }
     }
@@ -356,7 +363,7 @@ class SpyViewModel(
             else -> if (pk) SpyScriptBot.pkVote(game, voter.index, random) else SpyScriptBot.vote(game, voter.index, random)
         }
 
-        val latest = _uiState.value.game ?: return
+        val latest = _uiState.value.game ?: run { _uiState.update { it.copy(thinking = false) }; return@processAIVote }
         if (pk) {
             val target = voteIndex ?: SpyScriptBot.pkVote(latest, voter.index, random)
             val outcome = if (target != null) {
@@ -366,6 +373,8 @@ class SpyViewModel(
             }
             if (outcome is SpyPkVoteOutcome.Done) {
                 applyPkVoteOutcome(outcome)
+            } else {
+                _uiState.update { it.copy(thinking = false) }
             }
         } else {
             val target = voteIndex ?: SpyScriptBot.vote(latest, voter.index, random)
@@ -376,6 +385,8 @@ class SpyViewModel(
             }
             if (outcome is SpyVoteOutcome.Done) {
                 applyVoteOutcome(outcome)
+            } else {
+                _uiState.update { it.copy(thinking = false) }
             }
         }
     }
@@ -523,19 +534,8 @@ class SpyViewModel(
         return "《谁是卧底·${game.mode.label}》对局结束：$winner 获胜（${reveal}，共 ${game.round} 轮）。"
     }
 
-    private fun buildPersonaText(character: Character): String {
-        val persona = character.persona
-        val parts = listOfNotNull(
-            persona.persona.takeIf { it.isNotBlank() }?.let { "身份：$it" },
-            persona.character.takeIf { it.isNotBlank() }?.let { "性格：$it" },
-            persona.appearance.takeIf { it.isNotBlank() }?.let { "外貌：$it" },
-            persona.worldBackground.takeIf { it.isNotBlank() }?.let { "背景：$it" }
-        )
-        return parts.joinToString("；")
-    }
 
     private companion object {
-        const val MAX_LLM_PLAYERS = 3
         const val MIN_LLM_PLAYERS = 3
         const val WORD_GEN_COUNT = 1
         const val AI_THINK_FIRST_MS = 700L

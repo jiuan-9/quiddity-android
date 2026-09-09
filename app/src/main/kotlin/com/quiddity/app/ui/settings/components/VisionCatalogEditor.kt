@@ -76,199 +76,68 @@ fun VisionCatalogEditor(
     onBack: () -> Unit
 ) {
     val settings by viewModel.settings.collectAsStateWithLifecycle()
-    val configuration = LocalConfiguration.current
-    val screenHeight = configuration.screenHeightDp.dp
-    val scope = rememberCoroutineScope()
     val apiCatalogManager = remember { ServiceLocator.apiCatalogManager }
     val visionOcrService = remember { ServiceLocator.visionOcrService }
     val visionProviders = remember { apiCatalogManager.visionProviders }
-
-    var visible by rememberSaveable { mutableStateOf(false) }
     // 安全规则：不把解密后的 API Key 明文写入 rememberSaveable（可能落盘）；
     // 恢复编辑状态时 apiKey 置空，保存时未重输密钥则保留原密文（见 SettingsViewModel.upsertVisionCatalog）。
-    val editingStateSaver = remember {
-        Saver<ApiCatalogEditFormState?, List<String>>(
-            save = { state ->
-                if (state == null) emptyList()
-                else listOf(
-                    state.id, state.name, state.providerId, state.apiUrl, state.apiModel,
-                    state.maxTemperature?.toString().orEmpty()
-                )
-            },
-            restore = { saved ->
-                if (saved.size < 5) null
-                else ApiCatalogEditFormState(
-                    id = saved[0],
-                    name = saved[1],
-                    providerId = saved[2],
-                    apiUrl = saved[3],
-                    apiModel = saved[4],
-                    apiKey = "",
-                    maxTemperature = saved.getOrNull(5)?.toDoubleOrNull()
-                )
-            }
-        )
-    }
+    val editingStateSaver = rememberCatalogEditingStateSaver()
     var editingState by rememberSaveable(stateSaver = editingStateSaver) {
         mutableStateOf<ApiCatalogEditFormState?>(null)
     }
     var isCreating by rememberSaveable { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<ApiCatalogEntry?>(null) }
 
-    LaunchedEffect(Unit) { visible = true }
 
-    Box(modifier = Modifier.fillMaxSize().imePadding()) {
-        AnimatedVisibility(
-            visible = visible,
-            enter = fadeIn(tween(Motion.DurationMedium)),
-            exit = fadeOut(tween(Motion.DurationShort)),
-            modifier = Modifier.fillMaxSize()
-        ) {
+    CatalogEditorScaffold(
+        title = "视觉 OCR 模型配置",
+        onBack = onBack,
+        onAdd = { isCreating = true }
+    ) {
+        if (settings.visionCatalog.isEmpty()) {
             Box(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.45f))
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) {
-                        visible = false
-                        scope.launch {
-                            kotlinx.coroutines.delay(Motion.DurationShort.toLong())
-                            onBack()
-                        }
-                    }
-            )
+                    .fillMaxWidth()
+                    .padding(24.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "尚未配置视觉 OCR 模型\n点右上角 + 选择服务商并填写 API Key",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
 
-        AnimatedVisibility(
-            visible = visible,
-            enter = slideInVertically(
-                initialOffsetY = { it },
-                animationSpec = tween(Motion.DurationXLong, easing = Motion.EasingEmphasizedDecelerate)
-            ) + fadeIn(tween(Motion.DurationLong)),
-            exit = slideOutVertically(
-                targetOffsetY = { it },
-                animationSpec = tween(Motion.DurationMedium, easing = Motion.EasingEmphasizedAccelerate)
-            ) + fadeOut(tween(Motion.DurationShort)),
-            modifier = Modifier.align(Alignment.BottomCenter)
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(screenHeight * 0.8f),
-                color = MaterialTheme.colorScheme.surface,
-                shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-                tonalElevation = 3.dp,
-                shadowElevation = 8.dp
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .windowInsetsPadding(WindowInsets.navigationBars)
-                ) {
-                    // 顶部栏
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clip(CircleShape)
-                                .clickable(
-                                    interactionSource = remember { MutableInteractionSource() },
-                                    indication = null
-                                ) {
-                                    visible = false
-                                    scope.launch {
-                                        kotlinx.coroutines.delay(Motion.DurationShort.toLong())
-                                        onBack()
-                                    }
-                                },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "返回",
-                                tint = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                        Text(
-                            text = "视觉 OCR 模型配置",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurface
+            items(
+                items = settings.visionCatalog,
+                key = { it.id },
+                contentType = { "vision_catalog_entry" }
+            ) { entry ->
+                VisionCatalogCard(
+                    entry = entry,
+                    isActive = entry.id == settings.activeVisionCatalogId,
+                    catalogManager = apiCatalogManager,
+                    onClick = {
+                        // 编辑回显已保存密钥：解密后预填，用户可直接核对
+                        editingState = ApiCatalogEditFormState(
+                            id = entry.id,
+                            name = entry.name,
+                            providerId = entry.providerId,
+                            apiUrl = entry.apiUrl,
+                            apiModel = entry.apiModel,
+                            apiKey = apiCatalogManager.decryptKey(entry) ?: "",
+                            maxTemperature = entry.maxTemperature
                         )
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clip(CircleShape)
-                                .clickable(
-                                    interactionSource = remember { MutableInteractionSource() },
-                                    indication = null
-                                ) { isCreating = true },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Add,
-                                contentDescription = "新建",
-                                tint = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    }
-
-                    if (settings.visionCatalog.isEmpty()) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(24.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = "尚未配置视觉 OCR 模型\n点右上角 + 选择服务商并填写 API Key",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        items(
-                            items = settings.visionCatalog,
-                            key = { it.id },
-                            contentType = { "vision_catalog_entry" }
-                        ) { entry ->
-                            VisionCatalogCard(
-                                entry = entry,
-                                isActive = entry.id == settings.activeVisionCatalogId,
-                                catalogManager = apiCatalogManager,
-                                onClick = {
-                                    editingState = ApiCatalogEditFormState(
-                                        id = entry.id,
-                                        name = entry.name,
-                                  providerId = entry.providerId,
-                                  apiUrl = entry.apiUrl,
-                                  apiModel = entry.apiModel,
-                                  apiKey = "",
-                                  maxTemperature = entry.maxTemperature
-                              )
-                                },
-                                onSetActive = { viewModel.setActiveVisionCatalog(entry.id) },
-                                onDelete = { pendingDelete = entry }
-                            )
-                        }
-                    }
-                }
+                    },
+                    onSetActive = { viewModel.setActiveVisionCatalog(entry.id) },
+                    onDelete = { pendingDelete = entry }
+                )
             }
         }
     }
@@ -333,10 +202,9 @@ fun VisionCatalogEditor(
     }
 
     pendingDelete?.let { entry ->
-        ConfirmDialog(
+        CatalogDeleteConfirmDialog(
+            entry = entry,
             title = "删除视觉 OCR 配置",
-            message = "将删除「${entry.name}」，此操作不可撤销。",
-            confirmText = "删除",
             onConfirm = {
                 viewModel.removeVisionCatalog(entry.id)
                 pendingDelete = null

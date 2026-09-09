@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -20,7 +21,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -56,9 +56,12 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.FormatSize
 import androidx.compose.material.icons.filled.Gavel
+import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Layers
@@ -102,6 +105,7 @@ import androidx.compose.ui.unit.dp
 import com.quiddity.app.util.QuiddityConstants
 import kotlin.math.roundToInt
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.quiddity.app.di.ServiceLocator
 import com.quiddity.app.data.model.ImportMode
 import com.quiddity.app.data.model.ImportPlan
@@ -161,6 +165,9 @@ import kotlinx.coroutines.withContext
 // 当前规则：80% 屏幕高度从底部滑入；rememberSaveable 保留子页面状态。
 // 顶部抓手可拖动关闭：拖动时整个面板 translationY 实时跟随手指（1:1），
 // 超过阈值（屏幕高度 20%）则关闭，否则回弹。
+// 悬浮窗授权跳转超时窗口：超过该时长视为非本次返回，不再自动开启悬浮窗
+private const val OVERLAY_REQUEST_WINDOW_MS = 5 * 60 * 1000L
+
 @Composable
 fun SettingsBottomSheet(
     viewModel: SettingsViewModel,
@@ -195,9 +202,23 @@ fun SettingsBottomSheet(
     var showDelayEditor by rememberSaveable { mutableStateOf(false) }
     var showListWallpaper by rememberSaveable { mutableStateOf(false) }
     var showLegalDocs by rememberSaveable { mutableStateOf(false) }
+    // 悬浮窗授权跳转标记：记录跳转时间戳，仅该次返回时消费并清除，避免残留导致非本意自动开启
+    var overlayRequestTimestamp by rememberSaveable { mutableStateOf(0L) }
     var toastMsg by remember { mutableStateOf<String?>(null) }
     // 主动消息总开关：开启后先弹"已了解该功能"提示，确认后才持久化
     var showProactiveDialog by remember { mutableStateOf(false) }
+
+    // 悬浮窗授权返回后自动开启：授权页跳转前标记，返回前台时若权限已授予则保存开关
+    LifecycleResumeEffect(Unit) {
+        if (overlayRequestTimestamp != 0L) {
+            val isPendingReturn = System.currentTimeMillis() - overlayRequestTimestamp <= OVERLAY_REQUEST_WINDOW_MS
+            overlayRequestTimestamp = 0L
+            if (isPendingReturn && Settings.canDrawOverlays(context)) {
+                viewModel.setOverlayEnabled(true)
+            }
+        }
+        onPauseOrDispose { }
+    }
     // 导入抉择：已有数据时暂存解析计划（payload + 跳过清单），弹窗让用户选择替换/合并/取消
     var pendingImportPlan by remember {
         mutableStateOf<ImportPlan?>(null)
@@ -483,36 +504,6 @@ fun SettingsBottomSheet(
                                 else "未设置",
                                 onClick = { showListWallpaper = true }
                             )
-                            ToggleRow(
-                                icon = Icons.Filled.Notifications,
-                                title = "主动消息",
-                                subtitle = if (settings.proactiveMessageEnabled) "已开启（需在会话内单独启用）"
-                                else "AI 在指定时间主动发消息",
-                                checked = settings.proactiveMessageEnabled,
-                                onCheckedChange = { enabled ->
-                                    if (enabled) {
-                                        // Android 13+ 需要通知权限：开启时一并请求，保证到点能弹通知
-                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                                            ContextCompat.checkSelfPermission(
-                                                context,
-                                                Manifest.permission.POST_NOTIFICATIONS
-                                            ) != PackageManager.PERMISSION_GRANTED
-                                        ) {
-                                            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                                        }
-                                        // 仅表知晓：先弹提示，确认后才保存总开关状态
-                                        showProactiveDialog = true
-                                    } else {
-                                        viewModel.setProactiveMessageEnabled(false)
-                                    }
-                                }
-                            )
-                        // 系统条件引导：总开关开启后展示精确闹钟 / 电池优化状态与一键跳转
-                        if (settings.proactiveMessageEnabled) {
-                                ActiveMessagePermissionCard(
-                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 3.dp)
-                                )
-                        }
 
                             }
                         }
@@ -647,12 +638,9 @@ fun SettingsBottomSheet(
                                 onCheckedChange = { viewModel.setEnterToSend(it) }
                             )
                         // ===== 延迟设置入口 =====
-                            val delayOverall = settings.typingDelayEnabled || settings.sendDelayEnabled
-                            val delaySubtitle = remember(
-                                delayOverall, settings.typingDelayMsPerChar, settings.sendDelaySeconds
-                            ) {
-                                if (delayOverall) {
-                                    "已启用 · 打字机 ${settings.typingDelayMsPerChar}ms/字 · 发送延迟 ${settings.sendDelaySeconds}s"
+                            val delaySubtitle = remember(settings.sendDelaySeconds) {
+                                if (settings.sendDelayEnabled) {
+                                    "已启用 · 发送延迟 ${settings.sendDelaySeconds}s"
                                 } else {
                                     "已关闭（点击展开启用总开关）"
                                 }
@@ -665,18 +653,103 @@ fun SettingsBottomSheet(
                             )
                         if (showDelayEditor) {
                                 DelaySettingsPanel(
-                                    typingDelayEnabled = settings.typingDelayEnabled,
-                                    typingDelayMsPerChar = settings.typingDelayMsPerChar,
                                     sendDelayEnabled = settings.sendDelayEnabled,
                                     sendDelaySeconds = settings.sendDelaySeconds,
-                                    onTypingDelayEnabledChange = { viewModel.setTypingDelayEnabled(it) },
-                                    onTypingDelayMsPerCharChange = { viewModel.setTypingDelayMsPerChar(it) },
                                     onSendDelayEnabledChange = { viewModel.setSendDelayEnabled(it) },
                                     onSendDelaySecondsChange = { viewModel.setSendDelaySeconds(it) },
                                     modifier = Modifier
                                 )
                         }
 
+                            }
+                        }
+                        // ===== Section: 通知与提醒 =====
+                        item(key = "section_notify", contentType = { "section" }) {
+                            SettingsSectionCard(title = "通知与提醒") {
+                            ToggleRow(
+                                icon = Icons.Filled.Notifications,
+                                title = "主动消息",
+                                subtitle = if (settings.proactiveMessageEnabled) "已开启（全局总开关，会话内可单独启用）"
+                                else "关闭后所有会话的主动消息停止",
+                                checked = settings.proactiveMessageEnabled,
+                                onCheckedChange = { enabled ->
+                                    if (enabled) {
+                                        // Android 13+ 需要通知权限：开启时一并请求，保证到点能弹通知
+                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                                            ContextCompat.checkSelfPermission(
+                                                context,
+                                                Manifest.permission.POST_NOTIFICATIONS
+                                            ) != PackageManager.PERMISSION_GRANTED
+                                        ) {
+                                            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                        }
+                                        // 仅表知晓：先弹提示，确认后才保存总开关状态
+                                        showProactiveDialog = true
+                                    } else {
+                                        viewModel.setProactiveMessageEnabled(false)
+                                    }
+                                },
+                                showSavedToast = false
+                            )
+                        // 系统条件引导：总开关开启后展示精确闹钟 / 电池优化状态与一键跳转
+                        if (settings.proactiveMessageEnabled) {
+                                ActiveMessagePermissionCard(
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 3.dp)
+                                )
+                        }
+                            ToggleRow(
+                                icon = Icons.Filled.Notifications,
+                                title = "回复悬浮窗",
+                                subtitle = if (settings.overlayEnabled) "已开启：离开应用时展示 AI 回复状态"
+                                else "关闭：AI 回复时不显示悬浮窗",
+                                checked = settings.overlayEnabled,
+                                onCheckedChange = { enabled ->
+                                    if (enabled) {
+                                        if (!Settings.canDrawOverlays(context)) {
+                                            // 未授权：跳系统悬浮窗设置页，返回后自动开启
+                                            overlayRequestTimestamp = System.currentTimeMillis()
+                                            runCatching {
+                                                context.startActivity(
+                                                    Intent(
+                                                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                                        Uri.parse("package:${context.packageName}")
+                                                    )
+                                                )
+                                            }
+                                        } else {
+                                            viewModel.setOverlayEnabled(true)
+                                        }
+                                    } else {
+                                        viewModel.setOverlayEnabled(false)
+                                    }
+                                },
+                                showSavedToast = false
+                            )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                AvatarPicker(
+                                    avatarUri = settings.overlayAvatarUri,
+                                    onPicked = { viewModel.setOverlayAvatarUri(it) },
+                                    size = 56.dp,
+                                    imageNamePrefix = "overlay_avatar"
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column {
+                                    Text(
+                                        text = "悬浮窗头像",
+                                        style = MaterialTheme.typography.bodyLarge
+                                    )
+                                    Text(
+                                        text = "点击更换（默认应用图标）",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
                             }
                         }
                         // ===== Section 5: 数据 =====
@@ -840,9 +913,10 @@ fun SettingsBottomSheet(
         if (showProactiveDialog) {
             ConfirmDialog(
                 title = "主动消息",
-                message = "为确保到点准时触发，建议同时完成：1) 将本应用的【电池优化】设为“不受限制”；" +
-                    "2) Android 12+ 在【闹钟和提醒】中允许本应用使用精确闹钟；3) 允许【自启动】。下方设置项会实时显示这几项状态并提供一键跳转。" +
-                    "总设置仅表示您已了解该功能，您需前往对应会话中单独开启该会话的时间库功能。",
+                message = "开启后，你可以在各会话的菜单中单独启用/停用主动消息；" +
+                    "关闭后所有会话的主动消息立即停止（会话内开关同时置灰）。" +
+                    "为确保到点准时触发，建议同时完成：1) 将本应用的【电池优化】设为“不受限制”；" +
+                    "2) Android 12+ 在【闹钟和提醒】中允许本应用使用精确闹钟；3) 允许【自启动】。下方设置项会实时显示这几项状态并提供一键跳转。",
                 confirmText = "我知道了",
                 cancelText = "取消",
                 onConfirm = {
@@ -922,7 +996,7 @@ fun SettingsBottomSheet(
                             color = com.quiddity.app.ui.components.glassCardColor()
                         ) {
                             Text(
-                                text = "提示：你也可以在会话内汉堡菜单中单独导入人设卡或对话记录",
+                                text = "提示：你也可以在会话内汉堡菜单中单独导入角色卡或对话记录",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(12.dp)
@@ -980,7 +1054,7 @@ fun SettingsBottomSheet(
                                     val ok = viewModel.importAllPayload(restored, mode = ImportMode.REPLACE)
                                     val totalSkips = p.skipItems.size + assetSkips.size
                                     toastMsg = if (!ok) {
-                                        "导入失败：写入数据失败，已回滚本机数据"
+                                        "导入失败：写入数据失败，请重试"
                                     } else if (totalSkips == 0) {
                                         "导入成功（已替换）"
                                     } else {
@@ -1004,439 +1078,3 @@ fun SettingsBottomSheet(
     }
 }
 
-@Composable
-private fun CenterGrabBar(
-    dragOffsetYState: androidx.compose.runtime.MutableFloatState,
-    dismissThreshold: Float,
-    onClose: () -> Unit
-) {
-    val scope = rememberCoroutineScope()
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 10.dp)
-    ) {
-        // 顶部抓手：支持向下拖动关闭面板。
-        // 增大可拖动区域到 48dp 高，视觉指示器仍保持 4dp，避免用户很难命中。
-        // 拖动偏移由外部 MutableFloatState 持有，整个面板 graphicsLayer.translationY 跟随。
-        Box(
-            modifier = Modifier
-                .align(Alignment.CenterHorizontally)
-                .fillMaxWidth()
-                .height(48.dp)
-                .pointerInput(Unit) {
-                    detectVerticalDragGestures(
-                        onVerticalDrag = { _, dragAmount ->
-                            // 直接同步赋值，零协程，draw phase 读取
-                            dragOffsetYState.floatValue = (dragOffsetYState.floatValue + dragAmount).coerceAtLeast(0f)
-                        },
-                        onDragEnd = {
-                            if (dragOffsetYState.floatValue > dismissThreshold) {
-                                onClose()
-                            } else {
-                                // 回弹：使用 Animatable 做 0.4s 动画
-                                scope.launch {
-                                    val anim = androidx.compose.animation.core.Animatable(dragOffsetYState.floatValue)
-                                    anim.animateTo(
-                                        targetValue = 0f,
-                                        animationSpec = tween(
-                                            Motion.DurationPageTransition,
-                                            easing = Motion.EasingStandard
-                                        )
-                                    ) { dragOffsetYState.floatValue = this.value }
-                                }
-                            }
-                        },
-                        onDragCancel = {
-                            scope.launch {
-                                val anim = androidx.compose.animation.core.Animatable(dragOffsetYState.floatValue)
-                                anim.animateTo(
-                                    targetValue = 0f,
-                                    animationSpec = tween(
-                                        Motion.DurationPageTransition,
-                                        easing = Motion.EasingStandard
-                                    )
-                                ) { dragOffsetYState.floatValue = this.value }
-                            }
-                        }
-                    )
-                },
-            contentAlignment = Alignment.TopCenter
-        ) {
-            Box(
-                modifier = Modifier
-                    .padding(top = 12.dp)
-                    .width(40.dp)
-                    .height(4.dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f))
-            )
-        }
-        Spacer(modifier = Modifier.height(8.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "设置",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Box(
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(CircleShape)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) { onClose() },
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Clear,
-                    contentDescription = "关闭",
-                    tint = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-        }
-    }
-}
-
-/**
- * 设置页大类分组卡片：带边框与浅色底，标题用主题色竖条 + 主色文字，
- * 与内部各行的小圆角框形成层级区分。
- */
-@Composable
-private fun SettingsSectionCard(
-    title: String,
-    modifier: Modifier = Modifier,
-    content: @Composable ColumnScope.() -> Unit
-) {
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 6.dp)
-            .clip(RoundedCornerShape(20.dp))
-            .background(com.quiddity.app.ui.components.glassCardColor())
-            .border(
-                width = 1.dp,
-                color = com.quiddity.app.ui.components.glassCardBorderColor(),
-                shape = RoundedCornerShape(20.dp)
-            )
-            .padding(horizontal = 4.dp, vertical = 6.dp)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    .width(4.dp)
-                    .height(16.dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(MaterialTheme.colorScheme.primary)
-            )
-            Spacer(modifier = Modifier.size(10.dp))
-            Text(
-                text = title,
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary
-            )
-        }
-        content()
-        Spacer(modifier = Modifier.height(4.dp))
-    }
-}
-
-/**
- * 字体大小调节行。
- *
- * 本地状态驱动拖动，仅在 [onValueChangeFinished] 时写入 ViewModel，减少 DataStore 写频率。
- * 离散步进（0.1 一档），避免连续写入与精度漂移。跟随系统字体时整行禁用。
- */
-@Composable
-private fun FontSizeRow(
-    fontScale: Float,
-    enabled: Boolean,
-    onValueChangeFinished: (Float) -> Unit
-) {
-    // 本地拖动状态：拖动时即时跟随，松手才落盘
-    var sliderValue by remember(fontScale) { mutableFloatStateOf(fontScale) }
-    val percent = (sliderValue * 100).roundToInt()
-    val sizeLabel = when {
-        sliderValue < 0.95f -> "小"
-        sliderValue <= 1.05f -> "标准"
-        sliderValue <= 1.2f -> "大"
-        else -> "特大"
-    }
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 3.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(com.quiddity.app.ui.components.glassCardColor())
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 14.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Filled.FormatSize,
-                        contentDescription = null,
-                        tint = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant
-                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.size(14.dp))
-                    Text(
-                        text = "字体大小",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = if (enabled) MaterialTheme.colorScheme.onSurface
-                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                    )
-                }
-                Text(
-                    text = "$sizeLabel · $percent%",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-                )
-            }
-            Spacer(modifier = Modifier.size(8.dp))
-            Slider(
-                value = sliderValue,
-                onValueChange = { sliderValue = it },
-                onValueChangeFinished = {
-                    // 离散化到 0.1 一档，落盘
-                    val stepped = (sliderValue * 10f).roundToInt() / 10f
-                    sliderValue = stepped
-                    onValueChangeFinished(stepped)
-                },
-                valueRange = QuiddityConstants.MIN_FONT_SCALE..QuiddityConstants.MAX_FONT_SCALE,
-                steps = 5,
-                enabled = enabled
-            )
-        }
-    }
-}
-
-@Composable
-private fun ToggleRow(
-    icon: ImageVector,
-    title: String,
-    subtitle: String = "",
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
-) {
-    val context = LocalContext.current
-    // Box 替代 Surface：行内无 elevation 需求，Box+background+clip 跳过 Surface 的 CompositionLocalProvider 开销
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 3.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(com.quiddity.app.ui.components.glassCardColor())
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(20.dp)
-            )
-            Spacer(modifier = Modifier.size(14.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                if (subtitle.isNotEmpty()) {
-                    Text(
-                        text = subtitle,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                    )
-                }
-            }
-            // 切换时显示"已保存"Toast 反馈
-            QuiddityToggleSwitch(
-                checked = checked,
-                onCheckedChange = {
-                    onCheckedChange(it)
-                    Toast.makeText(context, "已保存", Toast.LENGTH_SHORT).show()
-                }
-            )
-        }
-    }
-}
-
-/**
- * 可展开设置组：把「设置行 + 展开的子面板」框进同一个容器，
- * 用连续边框表明子面板归属于上方这一行（母设置框），避免展开面板看起来是独立悬浮卡片。
- */
-@Composable
-private fun ExpandableSettingGroup(
-    icon: ImageVector,
-    title: String,
-    subtitle: String = "",
-    expanded: Boolean,
-    onClick: () -> Unit,
-    content: @Composable () -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 3.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(com.quiddity.app.ui.components.glassCardColor())
-            .border(
-                width = 1.dp,
-                color = com.quiddity.app.ui.components.glassCardBorderColor(),
-                shape = RoundedCornerShape(14.dp)
-            )
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = onClick
-                )
-                .padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(20.dp)
-            )
-            Spacer(modifier = Modifier.size(14.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                if (subtitle.isNotEmpty()) {
-                    Text(
-                        text = subtitle,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                    )
-                }
-            }
-            Icon(
-                imageVector = Icons.Filled.ChevronRight,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-                modifier = Modifier.size(20.dp)
-            )
-        }
-        AnimatedVisibility(visible = expanded) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 12.dp, end = 12.dp, bottom = 12.dp)
-            ) {
-                // 行与子面板之间的连接线：强调两者同属一个设置框
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(1.dp)
-                        .background(com.quiddity.app.ui.components.glassCardBorderColor())
-                )
-                Spacer(modifier = Modifier.size(10.dp))
-                content()
-            }
-        }
-    }
-}
-
-@Composable
-private fun ClickableRow(
-    icon: ImageVector,
-    title: String,
-    subtitle: String = "",
-    onClick: () -> Unit,
-    expandableSubtitle: Boolean = false,
-    trailingContent: @Composable (() -> Unit)? = null
-) {
-    // Box 替代 Surface：clickable 移到 Box，避免 Surface 包裹的额外开销
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 3.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(com.quiddity.app.ui.components.glassCardColor())
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick
-            )
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(20.dp)
-            )
-            Spacer(modifier = Modifier.size(14.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                if (subtitle.isNotEmpty()) {
-                    if (expandableSubtitle) {
-                        ExpandableText(
-                            text = subtitle,
-                            style = MaterialTheme.typography.bodySmall,
-                            maxCollapsedLines = 1
-                        )
-                    } else {
-                        Text(
-                            text = subtitle,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                        )
-                    }
-                }
-            }
-            // 自定义尾部内容（如加载指示器）；默认显示右箭头
-            trailingContent?.invoke() ?: Icon(
-                imageVector = Icons.Filled.ChevronRight,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-                modifier = Modifier.size(20.dp)
-            )
-        }
-    }
-}

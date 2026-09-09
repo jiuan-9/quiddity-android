@@ -91,6 +91,8 @@ class SettingsStore(private val context: Context) {
         val GLOBAL_MAX_TOKENS = intPreferencesKey("global_max_tokens")
         val GLOBAL_SINGLE_MSG_TOKENS = intPreferencesKey("global_single_msg_tokens")
         val GLOBAL_CONTEXT_LIMIT = intPreferencesKey("global_context_limit")
+        val GLOBAL_TEMPERATURE = floatPreferencesKey("global_temperature")
+        val QUICK_SETUP_TEMPERATURE = floatPreferencesKey("quick_setup_temperature")
         val MULTILINE_SPLIT = booleanPreferencesKey("multiline_split")
         val ENTER_TO_SEND = booleanPreferencesKey("enter_to_send")
         val ACTIVE_CATALOG_ID = stringPreferencesKey("active_catalog_id")
@@ -102,8 +104,6 @@ class SettingsStore(private val context: Context) {
         val MARKDOWN_ENABLED = booleanPreferencesKey("markdown_enabled")
         val LIST_WALLPAPER_URI = stringPreferencesKey("list_wallpaper_uri")
         val LIST_WALLPAPER_DARKEN = floatPreferencesKey("list_wallpaper_darken")
-        val TYPING_DELAY_ENABLED = booleanPreferencesKey("typing_delay_enabled")
-        val TYPING_DELAY_MS_PER_CHAR = intPreferencesKey("typing_delay_ms_per_char")
         val SEND_DELAY_ENABLED = booleanPreferencesKey("send_delay_enabled")
         val SEND_DELAY_SECONDS = intPreferencesKey("send_delay_seconds")
         val FOLLOW_SYSTEM_FONT = booleanPreferencesKey("follow_system_font")
@@ -111,8 +111,11 @@ class SettingsStore(private val context: Context) {
         val PROACTIVE_MESSAGE_ENABLED = booleanPreferencesKey("proactive_message_enabled")
         val PROACTIVE_MESSAGE_LAST_RESET_DATE = stringPreferencesKey("proactive_message_last_reset_date")
         val GROUP_TUTORIAL_SEEN = booleanPreferencesKey("group_tutorial_seen")
+        val AGENT_TUTORIAL_SEEN = booleanPreferencesKey("agent_tutorial_seen")
         val SOLO_CHAT_COUNTER = intPreferencesKey("solo_chat_counter")
         val GROUP_CHAT_COUNTER = intPreferencesKey("group_chat_counter")
+        val OVERLAY_ENABLED = booleanPreferencesKey("overlay_enabled")
+        val OVERLAY_AVATAR_URI = stringPreferencesKey("overlay_avatar_uri")
     }
 
     /** 从 Preferences 还原 [AppSettings]，缺省值统一来自 [AppSettings.Default]。 */
@@ -126,6 +129,8 @@ class SettingsStore(private val context: Context) {
                 globalMaxTokens = this[Keys.GLOBAL_MAX_TOKENS] ?: d.globalMaxTokens,
                 globalSingleMessageTokens = this[Keys.GLOBAL_SINGLE_MSG_TOKENS] ?: d.globalSingleMessageTokens,
                 globalContextLimit = this[Keys.GLOBAL_CONTEXT_LIMIT] ?: d.globalContextLimit,
+                globalTemperature = this[Keys.GLOBAL_TEMPERATURE]?.toDouble() ?: d.globalTemperature,
+                quickSetupTemperature = this[Keys.QUICK_SETUP_TEMPERATURE]?.toDouble() ?: d.quickSetupTemperature,
                 multilineAutoSplit = this[Keys.MULTILINE_SPLIT] ?: d.multilineAutoSplit,
                 enterToSend = this[Keys.ENTER_TO_SEND] ?: d.enterToSend,
                 activeCatalogId = this[Keys.ACTIVE_CATALOG_ID] ?: d.activeCatalogId,
@@ -138,8 +143,6 @@ class SettingsStore(private val context: Context) {
                 markdownEnabled = this[Keys.MARKDOWN_ENABLED] ?: d.markdownEnabled,
                 listWallpaperUri = this[Keys.LIST_WALLPAPER_URI] ?: d.listWallpaperUri,
                 listWallpaperDarken = this[Keys.LIST_WALLPAPER_DARKEN] ?: d.listWallpaperDarken,
-                typingDelayEnabled = this[Keys.TYPING_DELAY_ENABLED] ?: d.typingDelayEnabled,
-                typingDelayMsPerChar = this[Keys.TYPING_DELAY_MS_PER_CHAR] ?: d.typingDelayMsPerChar,
                 sendDelayEnabled = this[Keys.SEND_DELAY_ENABLED] ?: d.sendDelayEnabled,
                 sendDelaySeconds = this[Keys.SEND_DELAY_SECONDS] ?: d.sendDelaySeconds,
                 followSystemFont = this[Keys.FOLLOW_SYSTEM_FONT] ?: d.followSystemFont,
@@ -148,8 +151,11 @@ class SettingsStore(private val context: Context) {
                 proactiveMessageLastResetDate =
                     this[Keys.PROACTIVE_MESSAGE_LAST_RESET_DATE] ?: d.proactiveMessageLastResetDate,
                 groupTutorialSeen = this[Keys.GROUP_TUTORIAL_SEEN] ?: d.groupTutorialSeen,
+                agentTutorialSeen = this[Keys.AGENT_TUTORIAL_SEEN] ?: d.agentTutorialSeen,
                 soloChatCounter = this[Keys.SOLO_CHAT_COUNTER] ?: d.soloChatCounter,
-                groupChatCounter = this[Keys.GROUP_CHAT_COUNTER] ?: d.groupChatCounter
+                groupChatCounter = this[Keys.GROUP_CHAT_COUNTER] ?: d.groupChatCounter,
+                overlayEnabled = this[Keys.OVERLAY_ENABLED] ?: d.overlayEnabled,
+                overlayAvatarUri = this[Keys.OVERLAY_AVATAR_URI] ?: d.overlayAvatarUri
             )
         } catch (t: Throwable) {
             android.util.Log.e("SettingsStore", "解析设置失败，回退默认值", t)
@@ -191,6 +197,8 @@ class SettingsStore(private val context: Context) {
                 prefs[Keys.GLOBAL_MAX_TOKENS] = next.globalMaxTokens
                 prefs[Keys.GLOBAL_SINGLE_MSG_TOKENS] = next.globalSingleMessageTokens
                 prefs[Keys.GLOBAL_CONTEXT_LIMIT] = next.globalContextLimit
+                prefs[Keys.GLOBAL_TEMPERATURE] = next.globalTemperature.toFloat()
+                prefs[Keys.QUICK_SETUP_TEMPERATURE] = next.quickSetupTemperature.toFloat()
                 prefs[Keys.MULTILINE_SPLIT] = next.multilineAutoSplit
                 prefs[Keys.ENTER_TO_SEND] = next.enterToSend
                 next.activeCatalogId?.let { prefs[Keys.ACTIVE_CATALOG_ID] = it } ?: prefs.remove(Keys.ACTIVE_CATALOG_ID)
@@ -202,8 +210,6 @@ class SettingsStore(private val context: Context) {
                 prefs[Keys.MARKDOWN_ENABLED] = next.markdownEnabled
                 next.listWallpaperUri?.let { prefs[Keys.LIST_WALLPAPER_URI] = it } ?: prefs.remove(Keys.LIST_WALLPAPER_URI)
                 prefs[Keys.LIST_WALLPAPER_DARKEN] = next.listWallpaperDarken
-                prefs[Keys.TYPING_DELAY_ENABLED] = next.typingDelayEnabled
-                prefs[Keys.TYPING_DELAY_MS_PER_CHAR] = next.typingDelayMsPerChar
                 prefs[Keys.SEND_DELAY_ENABLED] = next.sendDelayEnabled
                 prefs[Keys.SEND_DELAY_SECONDS] = next.sendDelaySeconds
                 prefs[Keys.FOLLOW_SYSTEM_FONT] = next.followSystemFont
@@ -211,8 +217,12 @@ class SettingsStore(private val context: Context) {
                 prefs[Keys.PROACTIVE_MESSAGE_ENABLED] = next.proactiveMessageEnabled
                 prefs[Keys.PROACTIVE_MESSAGE_LAST_RESET_DATE] = next.proactiveMessageLastResetDate
                 prefs[Keys.GROUP_TUTORIAL_SEEN] = next.groupTutorialSeen
+                prefs[Keys.AGENT_TUTORIAL_SEEN] = next.agentTutorialSeen
                 prefs[Keys.SOLO_CHAT_COUNTER] = next.soloChatCounter
                 prefs[Keys.GROUP_CHAT_COUNTER] = next.groupChatCounter
+                prefs[Keys.OVERLAY_ENABLED] = next.overlayEnabled
+                next.overlayAvatarUri?.let { prefs[Keys.OVERLAY_AVATAR_URI] = it }
+                    ?: prefs.remove(Keys.OVERLAY_AVATAR_URI)
                 prefs[Keys.CATALOG_JSON] = catalogJson
             }
             true
@@ -223,10 +233,6 @@ class SettingsStore(private val context: Context) {
     }
 
     /** 预加载设置数据，确保首次写入前磁盘数据已加载到内存。 */
-    suspend fun ensureLoaded() {
-        context.appSettingsDataStore.data.first()
-    }
-
     private fun parseCatalog(jsonStr: String?): List<ApiCatalogEntry> {
         if (jsonStr.isNullOrEmpty()) return emptyList()
         return runCatching {

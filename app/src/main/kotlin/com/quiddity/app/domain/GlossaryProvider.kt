@@ -69,7 +69,7 @@ class GlossaryProvider {
             name = "模型",
             pinyin = "moxing",
             explanation = "AI 的「大脑」。不同的模型有不同的能力、速度和价格。" +
-                "比如通义千问、文心一言、DeepSeek、GPT 等都是不同的模型。" +
+                "比如Kimi、文心一言、DeepSeek、GPT 等都是不同的模型。" +
                 "你可以在「模型配置」中添加自己常用的模型。",
             category = "基础概念"
         ),
@@ -242,7 +242,7 @@ class GlossaryProvider {
             category = "数据与备份"
         ),
         Term(
-            name = "人设卡导出",
+            name = "角色卡导出",
             pinyin = "rensekadaochu",
             explanation = "仅导出人设相关数据（AI 人设、用户人设、场景、记忆），" +
                 "不包含消息记录。方便把人设分享给其他会话使用。",
@@ -281,13 +281,6 @@ class GlossaryProvider {
             category = "交互功能"
         ),
         Term(
-            name = "延迟输出",
-            pinyin = "yanchishuchu",
-            explanation = "根据 AI 输出字数延迟显示，营造对面是真人打字的感觉。" +
-                "默认每个字延迟 20ms。可在「总设置」中关闭。",
-            category = "交互功能"
-        ),
-        Term(
             name = "发送延迟",
             pinyin = "fasongyanchi",
             explanation = "发送消息后等待 N 秒再发出 API 请求。" +
@@ -313,7 +306,9 @@ class GlossaryProvider {
             name = "撤回",
             pinyin = "chehui",
             explanation = "点击你自己的消息气泡，会弹出「撤回」按钮。" +
-                "点击后删除该消息及其后所有消息（包括 AI 回复）。",
+                "点击后删除该消息及其后所有消息（包括 AI 回复）。" +
+                "撤回后最后一条消息下方会出现灰色「重新编辑」气泡，" +
+                "点它可以编辑原文并作为新消息重新发出（Agent 模式只允许撤回最后一条用户消息）。",
             category = "交互功能"
         ),
         Term(
@@ -334,7 +329,8 @@ class GlossaryProvider {
             name = "改写",
             pinyin = "gaixie",
             explanation = "单击 AI 最后一条回复，会弹出「改写」按钮。" +
-                "点击后进入改写界面，可直接编辑 AI 的回复内容并保存替换原消息。",
+                "点击后进入改写界面，可直接编辑 AI 的回复内容并保存替换原消息。" +
+                "Agent 模式同样支持：AI 消息旁有「改写」图标，编辑后原位替换。",
             category = "交互功能"
         ),
 

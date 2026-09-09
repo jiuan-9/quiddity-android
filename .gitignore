@@ -52,3 +52,6 @@ gradle-*-bin.zip
 .gradle/
 .kotlin/
 .kotlin/
+
+# 调试用 APK（不入仓）
+remote-check.apk

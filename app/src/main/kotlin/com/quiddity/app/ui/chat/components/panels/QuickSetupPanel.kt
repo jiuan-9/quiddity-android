@@ -273,9 +273,9 @@ fun QuickSetupPanel(
         )
         Spacer(modifier = Modifier.size(12.dp))
 
-        // 独立温度：温度越高发散性越强，避免每次生成同一套人设
+        // 独立温度：仅影响本次人设剖析生成，不会改变会话内的回复温度
         Text(
-            text = "温度越高，每次生成的人设差异越大（0～2）。",
+            text = "仅影响本次剖析生成的发散度（0～2），不会改变会话内回复的温度。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
         )
@@ -294,7 +294,7 @@ fun QuickSetupPanel(
         )
         Spacer(modifier = Modifier.size(4.dp))
         Text(
-            text = "可以很模糊，AI 会在不曲解你原意的范围内自然填充，字数是上限而非必须达到。${selectedTier.summary}。",
+            text = "可以很模糊：AI 会剖析你的描述、把设定归位到对应字段，不扩写不注水，字数是上限而非目标。${selectedTier.summary}。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
         )
@@ -493,7 +493,7 @@ private fun QuickSetupResultDialog(
     fun buildText(): String {
         val sb = StringBuilder()
         sb.append("【AI人设】\n")
-        sb.append("[名字]").append(aiName).append("\n")
+        sb.append("[AI名字]").append(aiName).append("\n")
         sb.append("[身份背景]").append(aiPersona).append("\n")
         sb.append("[性格]").append(aiCharacter).append("\n")
         if (AiPersonaField.APPEARANCE in aiFields) sb.append("[外观]").append(aiAppearance).append("\n")
@@ -501,11 +501,11 @@ private fun QuickSetupResultDialog(
         if (AiPersonaField.DESIRED in aiFields) sb.append("[期望特质]").append(aiDesired).append("\n")
         sb.append("\n")
         sb.append("【用户人设】\n")
-        sb.append("[名字]").append(userName).append("\n")
-        sb.append("[身份]").append(userIdentity).append("\n")
-        sb.append("[性别]").append(userGender).append("\n")
-        sb.append("[年龄]").append(userAge).append("\n")
-        sb.append("[外观]").append(userAppearance).append("\n")
+        sb.append("[用户名字]").append(userName).append("\n")
+        sb.append("[用户身份]").append(userIdentity).append("\n")
+        sb.append("[用户性别]").append(userGender).append("\n")
+        sb.append("[用户年龄]").append(userAge).append("\n")
+        sb.append("[用户外观]").append(userAppearance).append("\n")
         sb.append("\n")
         sb.append("【场景设置】\n")
         sb.append("[当前场景]").append(scene).append("\n")

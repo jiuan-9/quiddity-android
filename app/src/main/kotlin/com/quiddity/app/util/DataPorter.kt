@@ -180,7 +180,17 @@ object DataPorter {
             wallpapers = wallpapers,
             listWallpaper = listWallpaperData,
             userAvatar = userAvatarData,
-            aiAvatars = aiAvatars
+            aiAvatars = aiAvatars,
+            // v1 导出同样剥离撤回追踪字段（与 v2 一致：创建物路径不随备份迁移）
+            messages = payload.messages.mapValues { (_, list) ->
+                list.map { msg ->
+                    if (msg.createdPaths.isEmpty() && msg.changedItems.isEmpty()) {
+                        msg
+                    } else {
+                        msg.copy(createdPaths = emptyList(), changedItems = emptyList())
+                    }
+                }
+            }
         )
         val text = withContext(Dispatchers.Default) {
             json.encodeToString(ExportPayload.serializer(), payloadWithAssets)
@@ -208,6 +218,18 @@ object DataPorter {
                     messages = payload.messages[conv.id].orEmpty()
                 )
             }
+        }.map { bundle ->
+            // 撤回追踪字段不随备份导出：创建物位于设备存储上，路径不可迁移；
+            // 导入后撤回一律只问「确认撤回？」（不携带「本轮有创建/更改项目」清单）
+            bundle.copy(
+                messages = bundle.messages.map { msg ->
+                    if (msg.createdPaths.isEmpty() && msg.changedItems.isEmpty()) {
+                        msg
+                    } else {
+                        msg.copy(createdPaths = emptyList(), changedItems = emptyList())
+                    }
+                }
+            )
         }
 
         // 会话级壁纸

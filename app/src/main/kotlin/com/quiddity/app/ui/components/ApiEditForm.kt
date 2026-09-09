@@ -103,13 +103,13 @@ import kotlinx.coroutines.launch
 fun ApiEditForm(
     initial: ApiCatalogEditFormState?,
     catalogManager: ApiCatalogManager,
+    modifier: Modifier = Modifier,
     providers: List<ApiCatalogManager.Provider> = catalogManager.providers,
     testConnection: suspend (apiUrl: String, apiKey: String, model: String) -> Result<String>,
     testVision: (suspend (apiUrl: String, apiKey: String, model: String) -> Result<String>)? = null,
     hasStoredKey: Boolean = false,
     onDismiss: () -> Unit,
     onSave: (ApiCatalogEditFormState) -> Unit,
-    modifier: Modifier = Modifier
 ) {
     val initialProvider = providers.firstOrNull { it.id == initial?.providerId }
         ?: catalogManager.customProvider
@@ -127,8 +127,8 @@ fun ApiEditForm(
     var apiKey by remember { mutableStateOf(initial?.apiKey ?: "") }
     var providerPickerVisible by remember { mutableStateOf(false) }
     var modelPickerVisible by remember { mutableStateOf(false) }
-    // 新增时 Key 可见（鼓励用户核对），编辑时默认隐藏
-    var keyVisible by rememberSaveable { mutableStateOf(initial == null) }
+    // Key 默认可见：编辑时回显已保存密钥，用户可直接核对是否已填
+    var keyVisible by rememberSaveable { mutableStateOf(true) }
     var testing by remember { mutableStateOf(false) }
     var testResult by remember { mutableStateOf<String?>(null) }
     var testIsSuccess by remember { mutableStateOf(false) }
@@ -914,10 +914,6 @@ private data class AcquisitionInfo(val steps: List<String>, val url: String)
 
 private object ApiKeyAcquisitionInfo {
     fun forProvider(id: String): AcquisitionInfo = when (id) {
-        "alibaba" -> AcquisitionInfo(
-            listOf("访问阿里云百炼/灵积控制台", "登录阿里云账号", "在 API-KEY 管理页面创建新密钥", "将 Key 粘贴到上方输入框即可"),
-            "https://dashscope.aliyun.com"
-        )
         "baidu" -> AcquisitionInfo(
             listOf("访问百度智能云千帆平台", "登录百度账号", "进入应用接入并创建应用", "在应用详情页获取 API Key"),
             "https://qianfan.cloud.baidu.com"
@@ -949,10 +945,6 @@ private object ApiKeyAcquisitionInfo {
         "moonshot" -> AcquisitionInfo(
             listOf("访问 Moonshot AI 开放平台", "注册/登录账号", "进入 API Key 管理", "创建 API Key 并复制"),
             "https://platform.moonshot.cn"
-        )
-        "bytedance" -> AcquisitionInfo(
-            listOf("访问火山引擎方舟控制台", "登录火山引擎账号", "进入 API Key 管理", "创建并复制 API Key"),
-            "https://console.volcengine.com/ark"
         )
         "zhipu" -> AcquisitionInfo(
             listOf("访问智谱 AI 开放平台", "注册/登录账号", "进入 API Keys 页面", "添加新 API Key 并复制"),

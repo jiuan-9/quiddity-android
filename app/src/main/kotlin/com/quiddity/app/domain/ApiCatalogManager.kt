@@ -86,7 +86,7 @@ class ApiCatalogManager(
     /**
      * 内置模型能力分级表。
      *
-     * 以 provider 模型 ID 为键，覆盖 [providers] 中全部 54 个内置模型。
+     * 以 provider 模型 ID 为键，覆盖 [providers] 中全部内置模型。
      * 单表维护可避免三个独立 set 出现遗漏或重复，并确保“应用内支持的模型
      * 与分级表完全一致”。
      *
@@ -101,8 +101,6 @@ class ApiCatalogManager(
      */
     private val MODEL_TIER_MAP: Map<String, ModelTier> = mapOf(
         // ==================== 完整级（总分 ≥ 36.1 或便宜主流） ====================
-        "doubao-seed-evolving" to ModelTier.FULL,
-        "doubao-seed-2-1-pro-260628" to ModelTier.FULL,
         "moonshotai/Kimi-K3" to ModelTier.FULL,
         "deepseek-ai/DeepSeek-V4-Pro" to ModelTier.FULL,
         "deepseek-ai/DeepSeek-V4-Flash" to ModelTier.FULL, // 便宜且主流
@@ -110,17 +108,14 @@ class ApiCatalogManager(
         "kimi-k3" to ModelTier.FULL,
         "deepseek-v4-pro" to ModelTier.FULL,
         "deepseek-v4-flash" to ModelTier.FULL, // 便宜且主流
-        "doubao-seed-2-1-turbo-260628" to ModelTier.FULL,
+        "deepseek-v4-flash-vision-exp" to ModelTier.FULL, // 多模态实验版，文本能力与 v4-flash 持平
+        "glm-5.3" to ModelTier.FULL, // 智谱最新旗舰（与 GLM-5.2 同基座，后训练大幅提升）
+        "hy3" to ModelTier.FULL, // 腾讯混元 Hy3 正式版旗舰
         "ernie-5.1" to ModelTier.FULL,
         "glm-5.2" to ModelTier.FULL,
-        "qwen-plus" to ModelTier.FULL, // 阿里云主流平价模型
         "hunyuan-role-latest" to ModelTier.FULL, // 腾讯混元角色模型，成本友好
-        "doubao-seed-2-0-lite-260428" to ModelTier.FULL, // 豆包轻量主流模型
-        "ByteDance-Seed/Seed-OSS-36B-Instruct" to ModelTier.FULL, // 开源低成本
 
         // ==================== 进阶级（总分 31.0 - 35.6） ====================
-        "qwen3.7-max" to ModelTier.ADVANCED,
-        "Qwen/Qwen3.5-397B-A17B" to ModelTier.ADVANCED,
         "zai-org/GLM-5.1" to ModelTier.ADVANCED,
         "ernie-x1.1" to ModelTier.ADVANCED,
         "MiniMax-M3" to ModelTier.ADVANCED,
@@ -129,7 +124,7 @@ class ApiCatalogManager(
         "ernie-5.0" to ModelTier.ADVANCED,
         "kimi-k2.6" to ModelTier.ADVANCED,
         "tencent/Hy3" to ModelTier.ADVANCED,
-        "qwen3.7-plus" to ModelTier.ADVANCED,
+        "spark-x2" to ModelTier.ADVANCED, // 讯飞星火最新深度推理模型
         "zai-org/GLM-5" to ModelTier.ADVANCED,
         "4.0Ultra" to ModelTier.ADVANCED,
         "MiniMax-M2.7" to ModelTier.ADVANCED,
@@ -137,25 +132,19 @@ class ApiCatalogManager(
         "ernie-4.5-turbo-128k" to ModelTier.ADVANCED,
         "glm-5" to ModelTier.ADVANCED,
         "glm-4-plus" to ModelTier.ADVANCED,
-        "Qwen/Qwen3.6-35B-A3B" to ModelTier.ADVANCED,
-        "doubao-seed-2-0-code-preview-260215" to ModelTier.ADVANCED,
         "MiniMaxAI/MiniMax-M2.5" to ModelTier.ADVANCED,
         "kimi-k2.7-code" to ModelTier.ADVANCED,
-        "qwen3-coder-plus" to ModelTier.ADVANCED,
         "MiniMax-M2.7-highspeed" to ModelTier.ADVANCED,
-        "qwen3.6-35b-a3b" to ModelTier.ADVANCED,
         "MiniMax-M2.5" to ModelTier.ADVANCED,
 
         // ==================== 基础级（总分 ≤ 30.9） ====================
         "kimi-k2.7-code-highspeed" to ModelTier.BASIC,
-        "qwen3.6-flash" to ModelTier.BASIC,
         "spark-x" to ModelTier.BASIC,
+        "spark-x2-flash" to ModelTier.BASIC, // 星火 X2 快速版（Agent 高频场景）
         "step-3.7-flash" to ModelTier.BASIC,
         "glm-4-air" to ModelTier.BASIC,
         "step-3.5-flash" to ModelTier.BASIC,
-        "doubao-seed-2-0-mini-260428" to ModelTier.BASIC,
         "generalv3.5" to ModelTier.BASIC,
-        "qwen-flash" to ModelTier.BASIC,
         "glm-4-flash" to ModelTier.BASIC,
         "pro-128k" to ModelTier.BASIC,
         "lite" to ModelTier.BASIC
@@ -182,11 +171,12 @@ class ApiCatalogManager(
         "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro",
         // Anthropic Claude（全系支持视觉）
         "claude-sonnet-4-6", "claude-sonnet-4-5", "claude-opus-4-8",
-        // 阿里云通义千问 VL / Omni
+        // 阿里云通义千问 VL / Omni（视觉 OCR 独立功能，与聊天风控无关）
         "qwen-vl-max", "qwen-vl-plus", "qwen3.5-omni-plus",
         "qwen2.5-vl-72b-instruct", "qwen2.5-vl-7b-instruct",
         "Qwen/Qwen2.5-VL-72B-Instruct", "Qwen/Qwen2.5-VL-7B-Instruct",
         "Qwen/Qwen3-Omni-30B-A3B-Instruct",
+        "qwen3.8-max",
         // 智谱 GLM 视觉
         "glm-4.1v-thinking-flash",
         "glm-4.6v-flash", "glm-4.6v", "glm-4v-plus", "glm-4v-flash",
@@ -194,13 +184,18 @@ class ApiCatalogManager(
         // 月之暗面 Kimi（K3 / K2.6 / K2.5 原生视觉）
         "kimi-k3", "kimi-k2.6", "kimi-k2.5", "moonshot-v1-32k-vision-preview",
         "moonshotai/Kimi-K3", "moonshotai/Kimi-K2.6",
-        // 字节豆包视觉
+        // 字节豆包视觉（视觉 OCR 独立功能，与聊天风控无关）
         "doubao-seed-1-6-vision-250815", "doubao-1.5-thinking-vision-pro",
         "doubao-1.5-vision-pro", "doubao-1.5-vision-lite",
+        "doubao-seed-2-1-pro-260628", "doubao-seed-2-1-turbo-260628",
         // 百度文心 ERNIE-VL
         "ernie-4.5-turbo-vl", "ernie-4.5-turbo-vl-32k",
         // MiniMax 多模态
         "MiniMax-M3", "MiniMaxAI/MiniMax-M3",
+        // DeepSeek 官方多模态（实验版，图文混合输入）
+        "deepseek-v4-flash-vision-exp",
+        // 小米 MiMo（自定义条目仍可做视觉识图）
+        "mimo-v2.5",
         // 硅基流动 OCR / 视觉专用模型
         "deepseek-ai/DeepSeek-OCR", "PaddlePaddle/PaddleOCR-VL"
     )
@@ -356,20 +351,6 @@ class ApiCatalogManager(
      */
     val providers: List<Provider> = listOf(
         Provider(
-            "alibaba", "通义千问",
-            "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-            "https://dashscope.aliyun.com",
-            listOf(
-                "qwen3.7-max",
-                "qwen3.7-plus",
-                "qwen3.6-flash",
-                "qwen3.6-35b-a3b",
-                "qwen-plus",
-                "qwen-flash",
-                "qwen3-coder-plus"
-            )
-        ),
-        Provider(
             "baidu", "文心一言",
             "https://qianfan.baidubce.com/v2/chat/completions",
             "https://qianfan.cloud.baidu.com",
@@ -390,13 +371,10 @@ class ApiCatalogManager(
                 "zai-org/GLM-5.2",
                 "zai-org/GLM-5.1",
                 "zai-org/GLM-5",
-                "Qwen/Qwen3.5-397B-A17B",
-                "Qwen/Qwen3.6-35B-A3B",
                 "moonshotai/Kimi-K3",
                 "moonshotai/Kimi-K2.6",
                 "MiniMaxAI/MiniMax-M2.5",
-                "tencent/Hy3",
-                "ByteDance-Seed/Seed-OSS-36B-Instruct"
+                "tencent/Hy3"
             )
         ),
         Provider(
@@ -414,6 +392,8 @@ class ApiCatalogManager(
             "https://xinghuo.xfyun.cn",
             listOf(
                 "4.0Ultra",
+                "spark-x2",
+                "spark-x2-flash",
                 "spark-x",
                 "generalv3.5",
                 "pro-128k",
@@ -438,7 +418,8 @@ class ApiCatalogManager(
             responsesUrl = QuiddityConstants.DEEPSEEK_RESPONSES_URL,
             models = listOf(
                 "deepseek-v4-flash",
-                "deepseek-v4-pro"
+                "deepseek-v4-pro",
+                "deepseek-v4-flash-vision-exp"
             )
         ),
         Provider(
@@ -447,6 +428,7 @@ class ApiCatalogManager(
             "https://console.cloud.tencent.com/hunyuan",
             listOf(
                 "hy3-preview",
+                "hy3",
                 "hunyuan-role-latest"
             )
         ),
@@ -462,24 +444,12 @@ class ApiCatalogManager(
             )
         ),
         Provider(
-            "bytedance", "豆包",
-            "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
-            "https://console.volcengine.com/ark",
-            listOf(
-                "doubao-seed-evolving",
-                "doubao-seed-2-1-pro-260628",
-                "doubao-seed-2-1-turbo-260628",
-                "doubao-seed-2-0-lite-260428",
-                "doubao-seed-2-0-mini-260428",
-                "doubao-seed-2-0-code-preview-260215"
-            )
-        ),
-        Provider(
             "zhipu", "智谱",
             "https://open.bigmodel.cn/api/paas/v4/chat/completions",
             "https://open.bigmodel.cn",
             listOf(
                 "glm-5.2",
+                "glm-5.3",
                 "glm-5.1",
                 "glm-5",
                 "glm-4-plus",
@@ -574,6 +544,15 @@ class ApiCatalogManager(
             )
         ),
         Provider(
+            "baidu", "百度（文心 ERNIE-VL）\nBaidu ERNIE-VL",
+            "https://qianfan.baidubce.com/v2/chat/completions",
+            "https://qianfan.cloud.baidu.com",
+            listOf(
+                "ernie-4.5-turbo-vl",
+                "ernie-4.5-turbo-vl-32k"
+            )
+        ),
+        Provider(
             "bytedance", "字节跳动（豆包视觉）\nByteDance Doubao-Vision",
             "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
             "https://console.volcengine.com/ark",
@@ -582,15 +561,6 @@ class ApiCatalogManager(
                 "doubao-1.5-thinking-vision-pro",
                 "doubao-1.5-vision-pro",
                 "doubao-1.5-vision-lite"
-            )
-        ),
-        Provider(
-            "baidu", "百度（文心 ERNIE-VL）\nBaidu ERNIE-VL",
-            "https://qianfan.baidubce.com/v2/chat/completions",
-            "https://qianfan.cloud.baidu.com",
-            listOf(
-                "ernie-4.5-turbo-vl",
-                "ernie-4.5-turbo-vl-32k"
             )
         ),
         Provider(
@@ -615,18 +585,8 @@ class ApiCatalogManager(
         Provider("custom", "自定义", "", "", emptyList())
     )
 
-    fun findVisionProvider(id: String?): Provider =
-        visionProviders.firstOrNull { it.id == id } ?: customProvider
-
     fun visionDisplayNameOf(providerId: String): String =
         visionProviders.firstOrNull { it.id == providerId }?.name ?: "自定义"
-
-    /**
-     * 获取指定服务商的官方 API-KEY 控制台地址。
-     * 自定义或未知服务商返回空字符串。
-     */
-    fun keyUrlFor(providerId: String): String =
-        providers.firstOrNull { it.id == providerId }?.keyUrl ?: ""
 
     // ==================== ID 生成（统一格式） ====================
 

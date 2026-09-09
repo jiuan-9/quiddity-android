@@ -45,6 +45,7 @@ import kotlin.math.abs
  * 设计原则（最简单、最直接）：
  * - 右滑退出会话：内容层 1:1 跟手，松手超过 30% 屏宽（或速度足够）则 0.4s 滑出屏外并触发返回。
  * - 左滑打开菜单：菜单用 0.4s 淡入淡出（透明度 0→1），聊天内容完全不动。
+ * - 角色卡打开时：右滑只用于关闭角色卡（松手判定），不再触发会话退出。
  * - 拖动期间直接同步赋值（mutableFloatStateOf），graphicsLayer 在 draw phase 读取，零重组。
  * - 多指由 NativeHorizontalSwipeDetector 拦截，controller 不关心。
  */
@@ -56,7 +57,8 @@ class ChatDragController(
     val menuOpenThresholdFraction: Float = 0.50f,
     val velocityThresholdPxPerSec: Float = 400f,
     private val onBack: () -> Unit,
-    private val onMenuVisibilityChange: (Boolean) -> Unit
+    private val onMenuVisibilityChange: (Boolean) -> Unit,
+    private val onCharacterPickerDismiss: (() -> Unit)? = null
 ) {
     // ===== 三条开发规范（位于文件中间位置） =====
     // 1. 问题修复规范：所有代码问题修复必须采用系统性解决方案，严禁使用临时性补丁或 hack 手段。
@@ -81,8 +83,15 @@ class ChatDragController(
     var menuOpen: Boolean by mutableStateOf(false)
         private set
 
+    var characterPickerOpen: Boolean by mutableStateOf(false)
+        private set
+
     private val backThresholdPx: Float = screenWidthPx * backThresholdFraction
     private val menuOpenThresholdPx: Float = screenWidthPx * menuOpenThresholdFraction
+
+    fun updateCharacterPickerOpen(open: Boolean) {
+        characterPickerOpen = open
+    }
 
     // ===== 手势回调 =====
     // 当前规则（menuOpen 状态决定手势语义）：
@@ -91,6 +100,10 @@ class ChatDragController(
     //   这样菜单打开后仍可用滑动关闭，不再因 swipeEnabled=false 卡死。
 
     fun onDrag(totalDx: Float) {
+        if (characterPickerOpen) {
+            // 角色卡打开：右滑只做关闭判定（onDragEnd），不拖动聊天内容
+            return
+        }
         if (menuOpen) {
             // 菜单已打开：右滑跟手减小 menuAlpha（1→0），左滑无操作（菜单已开）
             if (totalDx > 0f) {
@@ -117,15 +130,33 @@ class ChatDragController(
         val absVelocity = abs(velocityDx)
         val velocityCommit = absVelocity > velocityThresholdPxPerSec
 
+        if (characterPickerOpen) {
+            // 角色卡打开：右滑关闭面板，返回语义不落到会话退出
+            val shouldDismiss = totalDx > backThresholdPx ||
+                (velocityCommit && velocityDx > 0f)
+            if (shouldDismiss) {
+                onCharacterPickerDismiss?.invoke()
+                contentOffsetX = 0f
+            }
+            return
+        }
+
         if (menuOpen) {
-            // 菜单已打开：右滑判定关菜单，左滑/无位移保持打开
+            // 菜单已打开：右滑判定关菜单；左滑/无位移也用阈值判定是否回弹关闭，
+            // 避免轻微左滑（刚过 touchSlop）就弹出菜单（此前 menuOpen 被提前置 true，
+            // 使 menuOpenThresholdFraction 这一段成为死代码）。
             when {
                 totalDx > 0f -> {
                     val shouldClose = totalDx > backThresholdPx ||
                         (velocityCommit && velocityDx > 0f)
                     animateMenuTo(open = !shouldClose)
                 }
-                else -> animateMenuTo(open = true)
+                else -> {
+                    val absDx = -totalDx
+                    val shouldOpen = absDx > menuOpenThresholdPx ||
+                        (velocityCommit && velocityDx < 0f)
+                    animateMenuTo(open = shouldOpen)
+                }
             }
             return
         }

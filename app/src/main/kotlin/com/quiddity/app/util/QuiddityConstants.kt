@@ -69,10 +69,24 @@ object QuiddityConstants {
     const val DEEPSEEK_RESPONSES_MODEL = "deepseek-v4-flash"
     /** DeepSeek 官方 Responses API 端点（服务端执行 web_search）。 */
     const val DEEPSEEK_RESPONSES_URL = "https://api.deepseek.com/responses"
+
+    // ===== api-key 认证端点（自定义条目兜底） =====
+    /** 使用 api-key 认证头的官方端点主机（如小米 MiMo；内置名册已移除，自定义条目仍可用）。 */
+    const val XIAOMI_MIMO_API_HOST = "api.xiaomimimo.com"
+
+    /** 判定 URL 是否指向小米 MiMo 官方端点（自定义条目填官方 URL 时同样生效）。 */
+    fun isXiaomiMimoUrl(url: String): Boolean = url.contains(XIAOMI_MIMO_API_HOST)
+
     /** 思考深度：浅（默认，reasoning_effort=low）。 */
     const val THINKING_DEPTH_SHALLOW = "SHALLOW"
     /** 思考深度：深（reasoning_effort=high）。 */
     const val THINKING_DEPTH_DEEP = "DEEP"
+    /** 思考深度 → API reasoning_effort（浅=low，深=high；null = 不携带，模型默认）。 */
+    fun reasoningEffortForDepth(depth: String?): String? = when (depth) {
+        THINKING_DEPTH_DEEP -> "high"
+        THINKING_DEPTH_SHALLOW -> "low"
+        else -> null
+    }
 
     /** 单条消息 Token 上下界。 */
     const val MIN_SINGLE_MESSAGE_TOKENS = 32
@@ -195,14 +209,6 @@ object QuiddityConstants {
     const val TIER_ADVANCED_CONTEXT_LIMIT = 20
     /** 基础级（BASIC）默认上下文记忆轮数（默认压缩轮数同此值）。 */
     const val TIER_BASIC_CONTEXT_LIMIT = 6
-
-    // ===== 延迟输出（打字机效果） =====
-    /** 延迟输出默认开启。 */
-    const val DEFAULT_TYPING_DELAY_ENABLED = true
-    /** 每个字符延迟毫秒数（营造真人打字感）。 */
-    const val DEFAULT_TYPING_DELAY_MS_PER_CHAR = 20
-    const val MIN_TYPING_DELAY_MS_PER_CHAR = 0
-    const val MAX_TYPING_DELAY_MS_PER_CHAR = 200
 
     // ===== 发送延迟 =====
     /** 发送延迟默认开启。 */

@@ -7,6 +7,7 @@ import com.quiddity.app.data.model.ConversationType
 import com.quiddity.app.data.model.ImportMode
 import com.quiddity.app.data.model.Message
 import com.quiddity.app.data.model.Persona
+import com.quiddity.app.data.model.UserPersona
 import com.quiddity.app.domain.ApiCatalogManager
 import com.quiddity.app.domain.GroupChatRules
 import com.quiddity.app.util.IdGenerator
@@ -55,6 +56,11 @@ class ConversationRepository(
     private val apiCatalogManager: ApiCatalogManager? = null,
     private val characterRepository: CharacterRepository? = null
 ) {
+
+    companion object {
+        /** Fixed title for Agent conversations. */
+        private const val AGENT_DEFAULT_TITLE = "Agent"
+    }
 
     val conversations: StateFlow<List<Conversation>> = store.conversations
 
@@ -115,9 +121,31 @@ class ConversationRepository(
         return conv
     }
 
+    /**
+     * Create an Agent-mode conversation (type = AGENT).
+     * Reuses the shared Conversation/Message storage; fixed title "Agent".
+     */
+    suspend fun createAgentConversation(): Conversation {
+        val now = System.currentTimeMillis()
+        val conv = Conversation(
+            id = IdGenerator.newId(IdGenerator.Prefix.CONVERSATION),
+            title = AGENT_DEFAULT_TITLE,
+            createdAt = now,
+            updatedAt = now,
+            persona = com.quiddity.app.data.model.Persona.Empty,
+            userPersona = com.quiddity.app.data.model.UserPersona.Empty,
+            type = com.quiddity.app.data.model.ConversationType.AGENT,
+            contextLimit = resolveDefaultContextLimit()
+        ).let {
+            it.copy(memoryBankRounds = it.contextLimit)
+        }
+        store.createConversation(conv)
+        return conv
+    }
+
     /** 创建指定内容的会话（小应用邀请角色等场景使用）。 */
     suspend fun createConversation(conv: Conversation) {
-        store.createConversation(conv)
+        store.createConversation(syncCharacterFor(conv))
     }
 
     /**
@@ -201,11 +229,22 @@ class ConversationRepository(
     }
 
     /** @return 是否写盘成功（失败仅记录日志，调用方按需提示） */
-    suspend fun updateConversation(conv: Conversation): Boolean =
-        store.updateConversation(conv.copy(updatedAt = System.currentTimeMillis()))
+    suspend fun updateConversation(conv: Conversation): Boolean {
+        val resolved = syncCharacterFor(conv)
+        return store.updateConversation(resolved.copy(updatedAt = System.currentTimeMillis()))
+    }
+
+    /** 删除单条消息（重复消息去重用）。 */
+    suspend fun deleteMessage(convId: String, messageId: String): Boolean =
+        store.deleteMessage(convId, messageId)
 
     /** @return 是否写盘成功 */
-    suspend fun deleteConversation(convId: String): Boolean = store.deleteConversation(convId)
+    suspend fun deleteConversation(convId: String): Boolean {
+        val deleted = store.conversations.value.filter { it.id == convId }
+        val ok = store.deleteConversation(convId)
+        if (ok) cascadeDeleteCharacters(deleted)
+        return ok
+    }
 
     /**
      * 批量删除多个会话（多选用）。
@@ -218,7 +257,91 @@ class ConversationRepository(
     /** @return 是否写盘成功 */
     suspend fun deleteConversations(convIds: List<String>): Boolean {
         if (convIds.isEmpty()) return true
-        return store.deleteConversations(convIds)
+        val target = convIds.toSet()
+        val deleted = store.conversations.value.filter { it.id in target }
+        val ok = store.deleteConversations(convIds)
+        if (ok) cascadeDeleteCharacters(deleted)
+        return ok
+    }
+
+    /**
+     * 私聊人设 -> 角色库唯一角色卡（uid）同步。
+     *
+     * - 每个私聊（SOLO）会话只要存在人设内容（AI 人设 / 用户人设 / 固定记忆任一非空），
+     *   就在角色库中维护一张唯一角色卡，id 即 [Conversation.characterId]；
+     * - 群聊、Agent、小应用统一通过 characterId 直接引用这张卡，不再各自内嵌副本；
+     * - 人设内容未变化时不写盘，避免无谓重写。
+     */
+    suspend fun syncCharacterFor(conv: Conversation): Conversation {
+        if (conv.type != ConversationType.SOLO || !hasPersonaContent(conv)) return conv
+        val repo = characterRepository ?: return conv
+        val characterId = conv.characterId?.takeIf { it.isNotBlank() }
+            ?: IdGenerator.newId(IdGenerator.Prefix.CHARACTER)
+        val target = Character(
+            id = characterId,
+            persona = conv.persona,
+            userPersona = conv.userPersona,
+            memory = conv.memory,
+            aiAvatarUri = conv.persona.aiAvatarUri
+        )
+        val existing = repo.getCharacter(characterId)
+        if (existing == target && conv.characterId == characterId) return conv
+        repo.saveCharacter(target)
+        return if (conv.characterId == characterId) conv else conv.copy(characterId = characterId)
+    }
+
+    /** 启动迁移：为已有私聊补齐角色卡引用（历史数据一次性回填）。 */
+    suspend fun syncAllSoloCharacters() {
+        store.conversations.value
+            .filter { it.type == ConversationType.SOLO }
+            .forEach { conv ->
+                val resolved = syncCharacterFor(conv)
+                if (resolved.characterId != conv.characterId) {
+                    store.updateConversation(resolved)
+                }
+            }
+    }
+
+    private fun hasPersonaContent(conv: Conversation): Boolean {
+        val p = conv.persona
+        val u = conv.userPersona
+        return p.name.isNotBlank() || p.desired.isNotBlank() || p.persona.isNotBlank() ||
+            p.character.isNotBlank() || p.appearance.isNotBlank() || p.worldBackground.isNotBlank() ||
+            u.name.isNotBlank() || u.identity.isNotBlank() || u.gender.isNotBlank() ||
+            u.age.isNotBlank() || u.appearance.isNotBlank() || conv.memory.isNotBlank()
+    }
+
+    /**
+     * 删除级联（角色删除 / 会话删除）：
+     *
+     * - 角色卡的「所有者」是创建它的私聊（SOLO）会话：仅当所有者被删除时，
+     *   才从角色库移除该卡，并把仍引用它的其他会话（如 Agent 会话）重置为
+     *   默认人设（无人设），避免悬空引用影响角色卡数据；
+     * - 仅删除消费方（如 Agent 会话）时保留角色卡，不影响私聊所有者的引用。
+     */
+    private suspend fun cascadeDeleteCharacters(deleted: List<Conversation>) {
+        val removedIds = deleted.mapNotNull { it.characterId }.toSet()
+        if (removedIds.isEmpty()) return
+        val repo = characterRepository ?: return
+        val remaining = store.conversations.value
+        removedIds.forEach { id ->
+            val ownerDeleted = deleted.any { it.type == ConversationType.SOLO && it.characterId == id }
+            if (ownerDeleted) {
+                repo.deleteCharacter(id)
+                remaining
+                    .filter { it.characterId == id }
+                    .forEach { conv ->
+                        store.updateConversation(
+                            conv.copy(
+                                characterId = null,
+                                persona = Persona.Empty,
+                                userPersona = UserPersona.Empty,
+                                memory = ""
+                            )
+                        )
+                    }
+            }
+        }
     }
 
     suspend fun appendMessage(message: Message): Boolean = store.appendMessage(message)
@@ -234,12 +357,6 @@ class ConversationRepository(
     suspend fun renameConversation(convId: String, newTitle: String) {
         getConversation(convId)?.let {
             updateConversation(it.copy(title = newTitle))
-        }
-    }
-
-    suspend fun togglePin(convId: String) {
-        getConversation(convId)?.let {
-            updateConversation(it.copy(pinned = !it.pinned))
         }
     }
 
@@ -285,14 +402,18 @@ class ConversationRepository(
     ) {
         when (mode) {
             ImportMode.REPLACE -> {
-                characterRepository?.replaceCharacters(characters)
+                // write conversations/messages first (store.replaceAll has .bak backup+rollback), then characters;
+                // if conversation write fails, characters untouched -> both stay consistent.
                 store.replaceAll(conversations, messages)
+                characterRepository?.replaceCharacters(characters)
+                syncAllSoloCharacters()
             }
             ImportMode.MERGE -> {
                 characterRepository?.mergeCharacters(characters)
                 if (!store.importAll(conversations, messages)) {
                     throw IllegalStateException("合并导入写盘失败")
                 }
+                syncAllSoloCharacters()
             }
             ImportMode.CHARACTERS_ONLY -> {
                 // 只登记 characters，其余不动（3.1）

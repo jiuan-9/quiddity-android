@@ -57,11 +57,14 @@ sealed class ApiAccess {
      * - [apiUrl]：完整 chat/completions URL（已规范化为非空）。
      * - [apiKey]：解密的明文 API Key（可能为空字符串表示未配置 Key 的服务）。
      * - [model]：当前会话选用的模型 id。
+     * - [providerId]：所属服务商 id（用于按服务商适配认证头 / 请求体等协议差异）。
      */
     data class Resolved(
         val apiUrl: String,
         val apiKey: String,
         val model: String,
+        /** 服务商 id（默认 custom，兼容直接构造的场景）。 */
+        val providerId: String = "custom",
         /**
          * 该模型支持的最高采样温度（来自 [ApiCatalogEntry.maxTemperature]，
          * 未配置时按全局 [com.quiddity.app.util.QuiddityConstants.MAX_TEMPERATURE]）。
@@ -174,10 +177,27 @@ sealed class ApiAccess {
                 apiUrl = entry.apiUrl,
                 apiKey = apiKey,
                 model = entry.apiModel,
-                maxTemperature = entry.maxTemperature
-                    ?: com.quiddity.app.util.QuiddityConstants.MAX_TEMPERATURE
+                providerId = entry.providerId,
+                maxTemperature = resolveMaxTemperature(entry)
             )
         }
+    }
+
+}
+
+/**
+ * 解析条目支持的最高采样温度：条目显式配置时优先；
+ * 未配置时按接口 URL 推断常见厂商限制（智谱 GLM 仅支持 [0,1]，
+ * 未识别厂商按全局上限 2.0）。重说会在此基础上 +0.3，
+ * 若不按厂商钳制，超限请求会被服务端 400 拒绝。
+ */
+private fun resolveMaxTemperature(entry: ApiCatalogEntry): Double {
+    entry.maxTemperature?.let { return it }
+    val url = entry.apiUrl.lowercase()
+    return when {
+        // 智谱开放平台：temperature 参数限制数值范围 [0,1]
+        url.contains("bigmodel.cn") -> 1.0
+        else -> com.quiddity.app.util.QuiddityConstants.MAX_TEMPERATURE
     }
 }
 

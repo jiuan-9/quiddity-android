@@ -95,6 +95,23 @@ object ImageUtils {
     }
 
     /**
+     * 安全删除持久化的聊天图片（file:// chat_images/msg_*）。
+     * 供删除会话/消息时回收空间；非 file:// 或非聊天图片子目录的 URI 忽略。
+     */
+    fun deleteChatImage(uri: Uri?) {
+        if (uri == null) return
+        runCatching {
+            val path = uri.path
+            if (path != null && uri.scheme == "file") {
+                val file = File(path)
+                if (file.parentFile?.name == "chat_images" && file.name.startsWith("msg_")) {
+                    file.delete()
+                }
+            }
+        }
+    }
+
+    /**
      * 所有合法的图片存储子目录名。
      * - avatars：用户头像 / AI 头像
      * - wallpapers：会话专属壁纸

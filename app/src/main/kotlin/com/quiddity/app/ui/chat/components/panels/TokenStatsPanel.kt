@@ -73,7 +73,7 @@ import com.quiddity.app.util.TokenEstimator
  *
  * 显示内容：
  * - 当前会话统计：对话轮数、Token 用量（估算）
- * - 人设卡统计：总字量（含系统指令）、Token 估算
+ * - 角色卡统计：总字量（含系统指令）、Token 估算
  * - 上下文使用情况：已用 / 限制
  *
  * 会话压缩设置已迁出到汉堡菜单"数据 → 会话压缩"。
@@ -165,7 +165,7 @@ fun TokenStatsPanel(
 
         Spacer(modifier = Modifier.size(10.dp))
 
-        // ===== 人设卡统计 =====
+        // ===== 角色卡统计 =====
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(14.dp),
@@ -173,7 +173,7 @@ fun TokenStatsPanel(
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(
-                    text = "人设卡统计",
+                    text = "角色卡统计",
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.primary
@@ -211,7 +211,7 @@ fun TokenStatsPanel(
 
                 Spacer(modifier = Modifier.size(8.dp))
 
-                // 人设卡各部分字量明细
+                // 角色卡各部分字量明细
                 StatsRow(
                     label = "用户填写字量",
                     value = "${stats.userPersonaChars} 字"
@@ -253,8 +253,8 @@ fun TokenStatsPanel(
 private fun StatsCard(
     title: String,
     value: String,
+    modifier: Modifier = Modifier,
     subtitle: String = "",
-    modifier: Modifier = Modifier
 ) {
     Surface(
         modifier = modifier,
@@ -460,7 +460,7 @@ data class SessionTokenStats(
 /**
  * 计算会话统计数据。
  *
- * 人设卡总字量包括系统给的字量。
+ * 角色卡总字量包括系统给的字量。
  * - 用户填写字量：人设字段（name/persona/character/appearance/worldBackground/desired）
  *   + 用户人设 + 场景 + 记忆
  * - 系统指令字量：段落标题（【你的名字】【身份背景】等）
@@ -484,7 +484,7 @@ fun calculateStats(
     val contextUsed = messages.size
     val contextLimit = conversation.contextLimit
 
-    // 人设卡统计（含系统指令）
+    // 角色卡统计（含系统指令）
     val systemPrompt = PromptBuilder.buildSystemPrompt(conversation)
     val systemStats = TokenEstimator.analyze(systemPrompt)
 

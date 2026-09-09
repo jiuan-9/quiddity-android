@@ -44,6 +44,13 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- list_apps 工具需枚举全部已安装应用（Play 政策已按用途声明），lint 提示改用 queries 不满足全量枚举需求。 -->
+    <uses-permission
+        android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <!--
         hardwareAccelerated：显式声明硬件加速，确保高刷新率下合成走 GPU。
@@ -91,8 +98,16 @@
         <receiver
             android:name=".active.ActiveMessageReceiver"
             android:exported="false" />
+        <receiver
+            android:name=".active.AgentReminderReceiver"
+            android:exported="false" />
         <service
             android:name=".active.ActiveMessageService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+        <!-- Agent 任务前台服务：回复期间后台存活保障（Android 8+ 一致的通知表现） -->
+        <service
+            android:name=".active.AgentTaskService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
         <receiver
@@ -102,5 +117,43 @@
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
+
+        <!-- Agent 模式：屏幕文本读取（只读） -->
+        <service
+            android:name=".active.ScreenReaderService"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <!-- Agent 模式：通知读取（只读） -->
+        <service
+            android:name=".active.NotificationBridge"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <!-- Agent 模式：Shizuku 通道（Android 8-10 通过 provider 获取 Binder） -->
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:enabled="true"
+            android:exported="true"
+            android:multiprocess="false"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL"
+            tools:ignore="ProtectedPermissions" />
+
+        <!-- 回复悬浮窗：应用不可见时展示 AI 回复状态与完成气泡 -->
+        <service
+            android:name=".active.ReplyOverlayService"
+            android:exported="false" />
     </application>
 </manifest>

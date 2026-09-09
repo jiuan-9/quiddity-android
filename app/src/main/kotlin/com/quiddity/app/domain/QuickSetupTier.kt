@@ -53,7 +53,7 @@ enum class QuickSetupTier(
         maxWords = 300,
         requiredTier = ApiCatalogManager.ModelTier.BASIC,
         includesMemory = false,
-        densityRequirement = "内容精炼：每个字段用 1-3 句具体信息填充完整，禁止敷衍。"
+        densityRequirement = "剖析提炼：把用户原话归位到各字段，用 1-3 句精炼讲清，禁止扩写与注水。"
     ),
     CONCRETE(
         chineseName = "具体",
@@ -61,7 +61,7 @@ enum class QuickSetupTier(
         maxWords = 1200,
         requiredTier = ApiCatalogManager.ModelTier.ADVANCED,
         includesMemory = true,
-        densityRequirement = "内容充实：每个字段展开为一段有细节的完整描述。"
+        densityRequirement = "剖析归位：用户原话的细节全部保留并按字段归位，内容充实；缺失处只做最小推断，禁止自行添加设定。"
     ),
     COMPREHENSIVE(
         chineseName = "全面",
@@ -69,7 +69,7 @@ enum class QuickSetupTier(
         maxWords = 3500,
         requiredTier = ApiCatalogManager.ModelTier.FULL,
         includesMemory = true,
-        densityRequirement = "内容详尽：每个字段充分展开，细节丰富、自成体系。"
+        densityRequirement = "深度剖析：从用户描述中挖掘并结构化全部信息，原话细节完整保留，内容详尽；推断必须源于原意，禁止注水。"
     );
 
     // ===== 三条开发规范（位于文件中间位置） =====
@@ -133,9 +133,14 @@ enum class QuickSetupTier(
     }
 }
 
-/** AI 人设字段标识（与 [Persona] 字段一一对应，用于提示词与解析）。 */
+/**
+ * AI 人设字段标识（与 [Persona] 字段一一对应，用于提示词与解析）。
+ *
+ * 标签带「AI」前缀与用户人设区分：旧版 AI/用户共用 [名字] 标签导致模型
+ * 归位错乱（用户信息被写进 AI 人设等）。当前标签对下游提示词与解析器唯一。
+ */
 enum class AiPersonaField(val label: String) {
-    NAME("[名字]"),
+    NAME("[AI名字]"),
     PERSONA("[身份背景]"),
     CHARACTER("[性格]"),
     APPEARANCE("[外观]"),
@@ -143,13 +148,13 @@ enum class AiPersonaField(val label: String) {
     DESIRED("[期望特质]")
 }
 
-/** 用户人设字段标识（与 [UserPersona] 字段一一对应）。 */
+/** 用户人设字段标识（与 [UserPersona] 字段一一对应，带「用户」前缀避免与 AI 字段混淆）。 */
 enum class UserPersonaField(val label: String) {
-    NAME("[名字]"),
-    IDENTITY("[身份]"),
-    GENDER("[性别]"),
-    AGE("[年龄]"),
-    APPEARANCE("[外观]")
+    NAME("[用户名字]"),
+    IDENTITY("[用户身份]"),
+    GENDER("[用户性别]"),
+    AGE("[用户年龄]"),
+    APPEARANCE("[用户外观]")
 }
 
 /**

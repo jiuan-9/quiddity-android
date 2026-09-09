@@ -81,6 +81,8 @@ object CryptoUtils {
      * JVM 单元测试（returnDefaultValues）中 [Build.VERSION.SDK_INT] 返回 0，
      * 走派生密钥分支；真机返回真实 SDK 版本，走 Keystore 分支。
      */
+    // JVM ???? Build.VERSION.SDK_INT ? 0??????? Android ?????????? minSdk ?????
+    @android.annotation.SuppressLint("ObsoleteSdkInt")
     private fun isAndroidKeystoreAvailable(): Boolean =
         try {
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
@@ -218,10 +220,6 @@ object CryptoUtils {
             }
         }
     }
-
-    /** 供测试使用的旧版加密入口（与生产迁移路径对应）。 */
-    internal fun encryptLegacy(plain: String): String =
-        if (plain.isEmpty()) "" else encryptWith(legacyKey, plain)
 
     private fun encryptWith(key: SecretKey, plain: String): String {
         val cipher = Cipher.getInstance(TRANSFORMATION)

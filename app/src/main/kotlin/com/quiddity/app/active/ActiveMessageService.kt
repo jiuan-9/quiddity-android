@@ -9,8 +9,6 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
-import androidx.core.app.NotificationCompat
-import com.quiddity.app.R
 import com.quiddity.app.di.ServiceLocator
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -63,6 +61,9 @@ class ActiveMessageService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var runningJob: Job? = null
+    // 并发任务计数：多个闹钟（不同会话）在 1-2 秒内先后触发时，
+    // 只有全部任务结束才 stopSelf，避免先完成任务的延迟 stopSelf 取消仍在执行的后续任务。
+    private val activeJobCount = java.util.concurrent.atomic.AtomicInteger(0)
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -74,6 +75,7 @@ class ActiveMessageService : Service() {
             return START_NOT_STICKY
         }
         startAsForeground()
+        activeJobCount.incrementAndGet()
         runningJob = scope.launch {
             try {
                 // 进程被闹钟拉起时 Application.onCreate 已初始化 ServiceLocator，
@@ -84,7 +86,15 @@ class ActiveMessageService : Service() {
                 if (t is CancellationException) throw t
                 Log.e("ActiveMessageService", "主动消息处理失败", t)
             } finally {
-                stopSelf()
+                // 只有全部并发任务都结束才延迟 stopSelf：
+                // - 延迟 1 秒避免 startForegroundService 后立即 stopSelf 的
+                //   ForegroundServiceDidNotStartInTimeException 竞态（1.6.2 加固）；
+                // - 若延迟回调触发时又有新的 onStartCommand 到达（activeJobCount > 0），
+                //   则放弃停止，保证后续任务的主动消息不被取消。
+                if (activeJobCount.decrementAndGet() == 0) {
+                    android.os.Handler(android.os.Looper.getMainLooper())
+                        .postDelayed({ if (activeJobCount.get() <= 0) stopSelf() }, 1000)
+                }
             }
         }
         return START_NOT_STICKY
@@ -111,24 +121,16 @@ class ActiveMessageService : Service() {
     }
 
     private fun ensureNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val manager = getSystemService(NotificationManager::class.java)
-            if (manager.getNotificationChannel(CHANNEL_ID) == null) {
-                manager.createNotificationChannel(
-                    NotificationChannel(CHANNEL_ID, "主动消息", NotificationManager.IMPORTANCE_LOW)
-                )
-            }
-        }
+        NotificationChannels.ensure(
+            this,
+            CHANNEL_ID,
+            "主动消息",
+            NotificationManager.IMPORTANCE_LOW
+        )
     }
 
     private fun buildNotification(): Notification =
-        NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle("主动消息")
-            .setContentText("正在处理定时消息…")
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setOngoing(true)
-            .build()
+        NotificationChannels.buildForeground(this, CHANNEL_ID)
 
     companion object {
         private const val CHANNEL_ID = "active_message"

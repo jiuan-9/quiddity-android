@@ -44,8 +44,8 @@ android {
         applicationId = "com.quiddity.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 14
-        versionName = "1.5.1"
+        versionCode = 18
+        versionName = "1.6.2"
         vectorDrawables.useSupportLibrary = true
     }
 
@@ -102,6 +102,7 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+        aidl = true
     }
 
     composeCompiler {
@@ -119,8 +120,8 @@ android {
     }
 
     lint {
-        checkReleaseBuilds = false
-        abortOnError = false
+        checkReleaseBuilds = true
+        abortOnError = true
     }
 
     sourceSets {
@@ -156,10 +157,12 @@ dependencies {
     implementation(libs.okhttp.sse)
     implementation(libs.coil.compose)
     implementation(libs.collections.immutable)
+    implementation(libs.shizuku.api)
+    implementation(libs.shizuku.provider)
 
     debugImplementation(libs.bundles.compose.debug)
 
     testImplementation(libs.coroutines.core)
-    testImplementation("org.jetbrains.kotlin:kotlin-test:2.0.21")
-    testImplementation("org.jetbrains.kotlin:kotlin-test-junit:2.0.21")
+    testImplementation(libs.kotlin.test)
+    testImplementation(libs.kotlin.test.junit)
 }

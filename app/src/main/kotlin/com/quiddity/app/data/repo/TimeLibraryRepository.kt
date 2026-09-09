@@ -4,16 +4,17 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
-import android.content.Intent
 import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import com.quiddity.app.MainActivity
 import com.quiddity.app.R
 import com.quiddity.app.active.AlarmScheduler
+import com.quiddity.app.active.NotificationChannels
 import com.quiddity.app.data.model.Conversation
+import com.quiddity.app.data.model.ConversationType
 import com.quiddity.app.data.model.Message
 import com.quiddity.app.data.model.Role
+import com.quiddity.app.data.model.TimePoint
 import com.quiddity.app.domain.TimeLibraryEngine
 import com.quiddity.app.util.IdGenerator
 import com.quiddity.app.util.QuiddityConstants
@@ -106,8 +107,18 @@ class TimeLibraryRepository(
      * - 新库旧库均为空 → 静默（[GenerationOutcome.TriggeredSilent]），不更新生成日期，下次打开再次触发
      */
     suspend fun ensureLibraryGeneratedToday(convId: String): GenerationOutcome {
+        // 全局总开关（1.6.2）：总设置关闭时，任何会话都不生成、不触发
+        if (!settingsRepository.currentSnapshot().proactiveMessageEnabled) {
+            alarmScheduler.cancelAll(convId)
+            return GenerationOutcome.NotEnabled
+        }
         val conv = conversationRepository.getConversation(convId)
             ?: return GenerationOutcome.NotEnabled
+        // Agent 会话不参与主动消息（时间库）：一律不生成、不注册闹钟
+        if (conv.type == ConversationType.AGENT) {
+            alarmScheduler.cancelAll(convId)
+            return GenerationOutcome.NotEnabled
+        }
         val today = LocalDate.now().toString()
         if (!TimeLibraryEngine.shouldGenerate(conv.activeMessageEnabled, conv.timeLibraryGeneratedDate, today)) {
             return if (conv.activeMessageEnabled) GenerationOutcome.UpToDate else GenerationOutcome.NotEnabled
@@ -115,7 +126,12 @@ class TimeLibraryRepository(
         if (!generatingInFlight.add(convId)) return GenerationOutcome.Generating
         return try {
             val raw = runCatching { chatRepository.generateTimeLibrary(conv) }.getOrNull()
-            val generatedTimes = raw?.let { TimeLibraryEngine.parseGeneratedTimes(it) }.orEmpty()
+            val generatedTimes = raw?.let {
+                TimeLibraryEngine.parseGeneratedTimes(
+                    it,
+                    disabledSlots = conv.disabledTimeSlots.toSet()
+                )
+            }.orEmpty()
             val merged = TimeLibraryEngine.mergeGenerated(conv.timeLibrary, generatedTimes)
             if (merged.isEmpty()) {
                 if (raw == null && conv.timeLibrary.isEmpty()) {
@@ -126,42 +142,13 @@ class TimeLibraryRepository(
                     GenerationOutcome.TriggeredSilent
                 }
             } else {
-                // 生成成功：一并更新查看密码与是否告知（AI 制定）。
-                // 密码无效或缺失时使用按会话+日期稳定的兜底密码，保证"查看时间库"始终可用；
-                // 生成失败沿用旧库时保持原密码不变。
-                val hasNewLibrary = raw != null && generatedTimes.isNotEmpty()
-                val passwordExisted = conv.timeLibraryPassword.isNotBlank()
-                // 密码一旦生成就固定不变（不要求唯一）；只有从未设置过时才会在本次生成时制定
-                val password = if (passwordExisted) {
-                    conv.timeLibraryPassword
-                } else if (hasNewLibrary) {
-                    TimeLibraryEngine.sanitizePassword(
-                        TimeLibraryEngine.parseGeneratedPassword(raw)
-                    ).ifBlank { TimeLibraryEngine.fallbackPassword(conv.id + today) }
-                } else {
-                    conv.timeLibraryPassword
-                }
-                val revealed = if (passwordExisted) {
-                    conv.timeLibraryPasswordRevealed
-                } else if (hasNewLibrary) {
-                    TimeLibraryEngine.parsePasswordRevealed(raw)
-                } else {
-                    conv.timeLibraryPasswordRevealed
-                }
                 conversationRepository.updateConversation(
                     conv.copy(
                         timeLibrary = merged,
-                        timeLibraryGeneratedDate = today,
-                        timeLibraryPassword = password,
-                        timeLibraryPasswordRevealed = revealed
+                        timeLibraryGeneratedDate = today
                     )
                 )
                 scheduleFromLibrary(conv.copy(timeLibrary = merged))
-                // 首次生成且 AI 决定告知时：由 App 用真实存储的密码生成一条 AI 气泡消息，
-                // 保证告知的密码与「查看时间库」校验的密码完全一致；密码固定后不再重复告知
-                if (hasNewLibrary && !passwordExisted && revealed && password.isNotBlank()) {
-                    appendPasswordNotice(conv, password)
-                }
                 GenerationOutcome.Triggered
             }
         } finally {
@@ -177,6 +164,16 @@ class TimeLibraryRepository(
      * - 关闭：注销该会话所有定时闹钟
      */
     suspend fun setConversationEnabled(conv: Conversation, enabled: Boolean): GenerationOutcome {
+        // Agent 会话不支持主动消息：无论开关状态一律停用
+        if (conv.type == ConversationType.AGENT) {
+            alarmScheduler.cancelAll(conv.id)
+            return GenerationOutcome.NotEnabled
+        }
+        // 全局总开关关闭时，会话内禁止开启（UI 层同步置灰，此处双保险）
+        if (enabled && !settingsRepository.currentSnapshot().proactiveMessageEnabled) {
+            alarmScheduler.cancelAll(conv.id)
+            return GenerationOutcome.NotEnabled
+        }
         if (enabled) {
             conversationRepository.updateConversation(conv.copy(activeMessageEnabled = true))
             val today = LocalDate.now().toString()
@@ -195,6 +192,30 @@ class TimeLibraryRepository(
         }
     }
 
+    /** 用户手动保存时间库：写入时间点与禁用框，并立即重新注册闹钟。 */
+    suspend fun saveTimeLibrary(
+        conv: Conversation,
+        times: List<String>,
+        disabledSlots: List<Int>
+    ) {
+        val sanitizedTimes = times.mapNotNull { raw ->
+            val minutes = TimeLibraryEngine.parseMinutes(raw) ?: return@mapNotNull null
+            val hour = (minutes / 60).toString().padStart(2, '0')
+            val minute = (minutes % 60).toString().padStart(2, '0')
+            "$hour:$minute"
+        }
+        val sanitizedDisabled = disabledSlots
+            .filter { it in 0 until TimeLibraryEngine.SLOT_COUNT }
+            .distinct()
+            .sorted()
+        val updated = conv.copy(
+            timeLibrary = sanitizedTimes.map { TimePoint(it) },
+            disabledTimeSlots = sanitizedDisabled
+        )
+        conversationRepository.updateConversation(updated)
+        scheduleFromLibrary(updated)
+    }
+
     // ===== 定时触发执行流程 =====
 
     /**
@@ -205,6 +226,11 @@ class TimeLibraryRepository(
      * @param timePoint 触发的时间点（"HH:mm"）
      */
     suspend fun onAlarmTriggered(convId: String, timePoint: String) {
+        // 全局总开关关闭（运行期被用户关闭）：不发送，注销闹钟
+        if (!settingsRepository.currentSnapshot().proactiveMessageEnabled) {
+            alarmScheduler.cancelAll(convId)
+            return
+        }
         val conv = conversationRepository.getConversation(convId) ?: return
         if (!conv.activeMessageEnabled) {
             alarmScheduler.cancelAll(convId)
@@ -261,8 +287,22 @@ class TimeLibraryRepository(
      * - 为所有启用会话补齐当天时间库（见 [refreshLibrariesForEnabledSessions]）
      */
     suspend fun onAppStart() {
+        onAppStartLight()
+        // 全局总开关关闭时 onAppStartLight 已注销全部闹钟并提前返回，无需再补齐
+        if (settingsRepository.currentSnapshot().proactiveMessageEnabled) {
+            refreshLibrariesForEnabledSessions()
+        }
+    }
+
+    /** 启动/开机 goAsync 轻量窗口调用：每日重置 + 重注册闹钟（本地操作，不等待网络型 LLM 补齐）。 */
+    suspend fun onAppStartLight() {
         runCatching {
             settingsRepository.ensureInitialized()
+            // 全局总开关关闭：不重置、不注册、不补齐，注销全部会话闹钟
+            if (!settingsRepository.currentSnapshot().proactiveMessageEnabled) {
+                conversationRepository.conversations.value.forEach { alarmScheduler.cancelAll(it.id) }
+                return
+            }
             val today = LocalDate.now().toString()
             val settings = settingsRepository.currentSnapshot()
             if (TimeLibraryEngine.shouldReset(settings.proactiveMessageLastResetDate, today)) {
@@ -279,7 +319,6 @@ class TimeLibraryRepository(
             }
         }
         reRegisterAlarms()
-        refreshLibrariesForEnabledSessions()
     }
 
     /**
@@ -290,11 +329,11 @@ class TimeLibraryRepository(
      * 开机后自动为所有启用会话补齐，已生成当天库的会话由
      * [TimeLibraryEngine.shouldGenerate] 判定为无需生成直接跳过（无多余 LLM 调用）。
      */
-    private suspend fun refreshLibrariesForEnabledSessions() {
+    suspend fun refreshLibrariesForEnabledSessions() {
         // 开机/冷启动时网络可能尚未就绪：先延迟再批量补齐，避免全部生成失败
         kotlinx.coroutines.delay(QuiddityConstants.ACTIVE_MESSAGE_STARTUP_DELAY_MS)
         conversationRepository.conversations.value
-            .filter { it.activeMessageEnabled }
+            .filter { it.activeMessageEnabled && it.type != ConversationType.AGENT }
             .forEach { ensureLibraryGeneratedToday(it.id) }
     }
 
@@ -307,6 +346,16 @@ class TimeLibraryRepository(
      * - 无未来 pending（全部已过）→ 注销（留待次日重置或再次打开重新生成）
      */
     private fun scheduleFromLibrary(conv: Conversation) {
+        // Agent 会话不参与主动消息：一律注销闹钟
+        if (conv.type == ConversationType.AGENT) {
+            alarmScheduler.cancelAll(conv.id)
+            return
+        }
+        // 全局总开关关闭：一律注销（覆盖重注册/手动保存等所有注册路径）
+        if (!settingsRepository.currentSnapshot().proactiveMessageEnabled) {
+            alarmScheduler.cancelAll(conv.id)
+            return
+        }
         if (!conv.activeMessageEnabled || conv.timeLibrary.isEmpty() ||
             TimeLibraryEngine.allDone(conv.timeLibrary)
         ) {
@@ -324,9 +373,23 @@ class TimeLibraryRepository(
 
     private fun reRegisterAlarms() {
         conversationRepository.conversations.value.forEach { conv ->
-            if (conv.activeMessageEnabled) {
+            if (conv.activeMessageEnabled && conv.type != ConversationType.AGENT) {
                 scheduleFromLibrary(conv)
             }
+        }
+    }
+
+    /**
+     * 全局总开关变化（1.6.2）：
+     * - 开启：重注册全部启用会话的闹钟，并补齐当天时间库；
+     * - 关闭：立即注销所有会话闹钟（主动消息全局停止）。
+     */
+    suspend fun onGlobalEnabledChanged(enabled: Boolean) {
+        if (enabled) {
+            reRegisterAlarms()
+            refreshLibrariesForEnabledSessions()
+        } else {
+            conversationRepository.conversations.value.forEach { alarmScheduler.cancelAll(it.id) }
         }
     }
 
@@ -373,40 +436,22 @@ class TimeLibraryRepository(
     }
 
     /**
-     * 密码告知气泡：App 用已存储的真实密码生成一条 AI 消息，
-     * 避免模型在对话中随口编造一个与校验不一致的密码。
-     */
-    private suspend fun appendPasswordNotice(conv: Conversation, password: String) {
-        val message = Message(
-            id = IdGenerator.newId(IdGenerator.Prefix.AI_MESSAGE),
-            conversationId = conv.id,
-            role = Role.ASSISTANT,
-            content = "我设置的时间库查看密码是 $password，你可以用它查看今天的时间安排（会话菜单 → 主动消息 → 查看时间库）。",
-            timestamp = System.currentTimeMillis()
-        )
-        conversationRepository.appendMessage(message)
-    }
-
-    /**
      * 主动消息发送成功后发一条通知栏消息（微信/QQ 风格）：
      * - 无论 App 是否在前台都发送，确保用户从通知栏就能看到；
-     * - 点击通知回到 App。
+     * - 点击通知直接进入该会话的聊天框（而非只打开应用）。
      */
     private fun postSentNotification(conv: Conversation, content: String) {
         try {
             val channelId = "active_message_sent"
+            NotificationChannels.ensure(
+                context,
+                channelId,
+                "主动消息",
+                NotificationManager.IMPORTANCE_DEFAULT
+            )
             val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                if (manager.getNotificationChannel(channelId) == null) {
-                    manager.createNotificationChannel(
-                        NotificationChannel(channelId, "主动消息", NotificationManager.IMPORTANCE_DEFAULT)
-                    )
-                }
-            }
             val aiName = conv.persona.name.ifBlank { conv.title }
-            val intent = Intent(context, MainActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-            }
+            val intent = com.quiddity.app.MainActivity.conversationIntent(context, conv.id, conv.type)
             val pending = PendingIntent.getActivity(
                 context,
                 conv.id.hashCode(),

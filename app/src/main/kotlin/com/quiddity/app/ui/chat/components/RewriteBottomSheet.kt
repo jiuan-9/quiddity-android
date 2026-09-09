@@ -97,6 +97,7 @@ import kotlinx.coroutines.launch
  * - 输入时允许按回车换行（ImeAction.Default）
  *
  * @param initialText 原消息内容（作为改写的初始值）
+ * @param placeholder 输入框占位文案（默认「改写 AI 的回复…」；编辑用户消息时可传入「编辑消息…」）
  * @param onSave 保存回调，传入改写后的新内容
  * @param onDismiss 取消回调（用户退回）
  */
@@ -104,7 +105,8 @@ import kotlinx.coroutines.launch
 fun RewriteBottomSheet(
     initialText: String,
     onSave: (String) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    placeholder: String = "改写 AI 的回复…"
 ) {
     val configuration = LocalConfiguration.current
     val screenHeight = configuration.screenHeightDp.dp
@@ -206,7 +208,7 @@ fun RewriteBottomSheet(
                             .focusRequester(focusRequester),
                         placeholder = {
                             Text(
-                                text = "改写 AI 的回复…",
+                                text = placeholder,
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                             )
@@ -232,20 +234,22 @@ fun RewriteBottomSheet(
 
                     Spacer(modifier = Modifier.size(8.dp))
 
+                    // 有实际改动（非空且与原文不同）才允许保存，未改动时按钮置灰禁用
                     val canSave = textFieldValue.text.isNotBlank() && textFieldValue.text != initialText
                     Box(
                         modifier = Modifier
                             .size(40.dp)
                             .clip(CircleShape)
                             .background(
-                                if (textFieldValue.text.isNotBlank()) MaterialTheme.colorScheme.primary
+                                if (canSave) MaterialTheme.colorScheme.primary
                                 else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
                             )
                             .clickable(
+                                enabled = canSave,
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null
                             ) {
-                                if (textFieldValue.text.isNotBlank()) {
+                                if (canSave) {
                                     val saved = textFieldValue.text
                                     closeWithAction { onSave(saved) }
                                 }
@@ -255,7 +259,7 @@ fun RewriteBottomSheet(
                         Icon(
                             imageVector = Icons.Filled.Check,
                             contentDescription = "保存改写",
-                            tint = if (textFieldValue.text.isNotBlank()) MaterialTheme.colorScheme.onPrimary
+                            tint = if (canSave) MaterialTheme.colorScheme.onPrimary
                             else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                             modifier = Modifier.size(20.dp)
                         )

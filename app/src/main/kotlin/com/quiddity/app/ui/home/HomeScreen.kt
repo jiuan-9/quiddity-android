@@ -1,7 +1,6 @@
 package com.quiddity.app.ui.home
 
 import android.os.Build
-import android.graphics.drawable.BitmapDrawable
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
@@ -73,6 +72,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -101,11 +101,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
-import coil.imageLoader
-import coil.request.ImageRequest
 import com.quiddity.app.data.model.Conversation
 import com.quiddity.app.data.model.ConversationType
 import com.quiddity.app.domain.GlobalChatSearch
+import com.quiddity.app.ui.agent.AgentTab
+import com.quiddity.app.ui.agent.AgentSettingsScreen
 import com.quiddity.app.ui.components.AiAvatar
 import com.quiddity.app.ui.components.ConfirmDialog
 import com.quiddity.app.ui.settings.SettingsBottomSheet
@@ -113,6 +113,7 @@ import com.quiddity.app.ui.settings.SettingsViewModel
 import com.quiddity.app.ui.theme.Motion
 import com.quiddity.app.util.DateUtils
 import com.quiddity.app.util.WallpaperContrast
+import com.quiddity.app.util.rememberWallpaperBrightness
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -161,19 +162,24 @@ fun HomeScreen(
     val conversations by viewModel.conversations.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
-    val context = LocalContext.current
+    val newConversationId by viewModel.newConversationId.collectAsStateWithLifecycle()
     var showSettings by rememberSaveable { mutableStateOf(false) }
+    var showAgentSettings by rememberSaveable { mutableStateOf(false) }
 
     // ===== 私聊 / 群聊双 Tab（方案十四） =====
-    val pagerState = rememberPagerState(pageCount = { 2 })
+    val pagerState = rememberPagerState(initialPage = 1, pageCount = { 3 })
     val pagerScope = rememberCoroutineScope()
     var showGroupTutorial by rememberSaveable { mutableStateOf(false) }
+    var showAgentTutorial by rememberSaveable { mutableStateOf(false) }
 
     // 首次进入群聊页弹教程（记录已看过，只弹一次，方案十.9）
     LaunchedEffect(pagerState.currentPage) {
-        if (pagerState.currentPage == 1 && !settings.groupTutorialSeen) {
+        if (pagerState.currentPage == 2 && !settings.groupTutorialSeen) {
             showGroupTutorial = true
             settingsViewModel.setGroupTutorialSeen(true)
+        } else if (pagerState.currentPage == 0 && !settings.agentTutorialSeen) {
+            showAgentTutorial = true
+            settingsViewModel.setAgentTutorialSeen(true)
         }
     }
 
@@ -189,30 +195,7 @@ fun HomeScreen(
     val listWallpaperDarken = settings.listWallpaperDarken
     val hasListWallpaper = listWallpaperUri != null
     // ===== 列表壁纸自动对比度：采样亮度，自动叠加保证文字可读的遮罩基线 =====
-    val imageLoader = LocalContext.current.imageLoader
-    var listWallpaperBrightness by remember(listWallpaperUri) {
-        mutableFloatStateOf(WallpaperContrast.DEFAULT_BRIGHTNESS)
-    }
-    LaunchedEffect(listWallpaperUri) {
-        if (listWallpaperUri == null) {
-            listWallpaperBrightness = WallpaperContrast.DEFAULT_BRIGHTNESS
-            return@LaunchedEffect
-        }
-        val brightness = withContext(Dispatchers.IO) {
-            runCatching {
-                val request = ImageRequest.Builder(context)
-                    .data(listWallpaperUri)
-                    .size(64)
-                    .allowHardware(false)
-                    .build()
-                val drawable = imageLoader.execute(request).drawable
-                val bitmap = (drawable as? BitmapDrawable)?.bitmap
-                    ?: return@runCatching WallpaperContrast.DEFAULT_BRIGHTNESS
-                WallpaperContrast.sampleBrightness(bitmap)
-            }.getOrDefault(WallpaperContrast.DEFAULT_BRIGHTNESS)
-        }
-        listWallpaperBrightness = brightness
-    }
+    val listWallpaperBrightness = rememberWallpaperBrightness(listWallpaperUri)
     val listWallpaperScrim = remember(
         listWallpaperBrightness, listWallpaperDarken, settings.darkMode
     ) {
@@ -242,6 +225,7 @@ fun HomeScreen(
 
     val soloConversations by viewModel.soloConversations.collectAsStateWithLifecycle()
     val groupConversations by viewModel.groupConversations.collectAsStateWithLifecycle()
+    val agentConversations by viewModel.agentConversations.collectAsStateWithLifecycle()
 
     fun filterByQuery(list: List<Conversation>): List<Conversation> {
         if (searchQuery.isBlank()) return list
@@ -253,16 +237,26 @@ fun HomeScreen(
     }
     val soloFiltered = remember(soloConversations, searchQuery) { filterByQuery(soloConversations) }
     val groupFiltered = remember(groupConversations, searchQuery) { filterByQuery(groupConversations) }
+    val agentFiltered = remember(agentConversations, searchQuery) { filterByQuery(agentConversations) }
 
     // ===== 搜索会话仅对当前模式有效（方案十四 + 需求） =====
     val currentTab = pagerState.currentPage
+    val agentIds = remember(agentConversations) { agentConversations.map { it.id }.toSet() }
     val soloIds = remember(soloConversations) { soloConversations.map { it.id }.toSet() }
     val groupIds = remember(groupConversations) { groupConversations.map { it.id }.toSet() }
-    val scopedMessageHits = remember(messageHits, currentTab, soloIds, groupIds) {
-        val ids = if (currentTab == 0) soloIds else groupIds
+    val scopedMessageHits = remember(messageHits, currentTab, agentIds, soloIds, groupIds) {
+        val ids = when (currentTab) {
+            0 -> agentIds
+            1 -> soloIds
+            else -> groupIds
+        }
         messageHits.filter { it.conversationId in ids }
     }
-    val searchScopeConversations = if (currentTab == 0) soloFiltered else groupFiltered
+    val searchScopeConversations = when (currentTab) {
+        0 -> agentFiltered
+        1 -> soloFiltered
+        else -> groupFiltered
+    }
 
     // ===== 顶部 UI 模式切换"重新加载"动画：整体淡出 → 淡入并轻微下落复位。
     // 由 graphicsLayer 在 draw phase 驱动（零重组）；速度放缓避免闪动。 =====
@@ -331,23 +325,24 @@ fun HomeScreen(
     val density = LocalDensity.current
     val maxPullDp = 150f
     val thresholdDp = 108f
-    var pullDp by remember { mutableStateOf(0f) }
+    var pullDp by remember { mutableFloatStateOf(0f) }
     var pullTriggered by remember { mutableStateOf(false) }
     // 时间闸：一次下拉手势只推一次小应用中心，防止手指未抬起时跨阈值重复 navigate
-    var lastOpenTriggerMs by remember { mutableStateOf(0L) }
+    var lastOpenTriggerMs by remember { mutableLongStateOf(0L) }
+    val agentListState = rememberLazyListState()
     val soloListState = rememberLazyListState()
     val groupListState = rememberLazyListState()
     val atTop by remember(conversations, searchQuery, pagerState.currentPage, isMultiSelect) {
         derivedStateOf {
-            val pageEmpty = if (pagerState.currentPage == 0) {
-                soloFiltered.isEmpty()
-            } else {
-                groupFiltered.isEmpty()
+            val pageEmpty = when (pagerState.currentPage) {
+                0 -> agentFiltered.isEmpty()
+                1 -> soloFiltered.isEmpty()
+                else -> groupFiltered.isEmpty()
             }
-            val pageAtTop = if (pagerState.currentPage == 0) {
-                soloListState.firstVisibleItemIndex == 0 && soloListState.firstVisibleItemScrollOffset == 0
-            } else {
-                groupListState.firstVisibleItemIndex == 0 && groupListState.firstVisibleItemScrollOffset == 0
+            val pageAtTop = when (pagerState.currentPage) {
+                0 -> agentListState.firstVisibleItemIndex == 0 && agentListState.firstVisibleItemScrollOffset == 0
+                1 -> soloListState.firstVisibleItemIndex == 0 && soloListState.firstVisibleItemScrollOffset == 0
+                else -> groupListState.firstVisibleItemIndex == 0 && groupListState.firstVisibleItemScrollOffset == 0
             }
             !isMultiSelect && searchQuery.isBlank() && (
                 isLoading || conversations.isEmpty() || pageEmpty || pageAtTop
@@ -385,7 +380,11 @@ fun HomeScreen(
     }
     // 空状态（无会话/搜索无结果）下没有可滚动子组件，nestedScroll 收不到手势，
     // 这里用根层指针手势兜底：仅在没有列表内容时启用，不与 LazyColumn 抢手势。
-    val pageEmpty = if (pagerState.currentPage == 0) soloFiltered.isEmpty() else groupFiltered.isEmpty()
+    val pageEmpty = when (pagerState.currentPage) {
+        0 -> agentFiltered.isEmpty()
+        1 -> soloFiltered.isEmpty()
+        else -> groupFiltered.isEmpty()
+    }
     val noScrollContent = isLoading || conversations.isEmpty() || pageEmpty ||
         (searchQuery.isNotBlank() && searchScopeConversations.isEmpty() && scopedMessageHits.isEmpty())
     val usePointerPull = atTop && noScrollContent
@@ -426,13 +425,19 @@ fun HomeScreen(
         }
     }
 
+    // 当前 Tab 的会话列表（多选「全选/反选」只作用于当前页，避免跨 Tab 误删其它会话）
+    val currentTabIds = when (pagerState.currentPage) {
+        0 -> agentFiltered.map { it.id }.toSet()
+        1 -> soloFiltered.map { it.id }.toSet()
+        else -> groupFiltered.map { it.id }.toSet()
+    }
+
     fun selectAll() {
-        syncMultiSelect(true, conversations.map { it.id }.toSet())
+        syncMultiSelect(true, currentTabIds)
     }
 
     fun invertSelection() {
-        val allIds = conversations.map { it.id }.toSet()
-        val newIds = allIds - selectedIds
+        val newIds = currentTabIds - selectedIds
         if (newIds.isEmpty() && isMultiSelect) {
             syncMultiSelect(false, newIds)
         } else {
@@ -476,19 +481,13 @@ fun HomeScreen(
         // 注：hasListWallpaper 已包含 listWallpaperUri != null 判断
         if (hasListWallpaper) {
             AsyncImage(
-                model = listWallpaperUri,
+                model = coil.request.ImageRequest.Builder(LocalContext.current)
+                    .data(listWallpaperUri)
+                    .size(1080)
+                    .build(),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
-                // API 31+ 对列表壁纸做轻模糊，配合半透明卡片形成毛玻璃质感
-                modifier = Modifier
-                    .fillMaxSize()
-                    .then(
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                            Modifier.blur(3.dp)
-                        } else {
-                            Modifier
-                        }
-                    )
+                modifier = Modifier.fillMaxSize()
             )
             // 暗化遮罩：确保上层文字可读
             Box(
@@ -535,7 +534,7 @@ fun HomeScreen(
                 if (multiSelect) {
                     MultiSelectTopBar(
                         selectedCount = selectedIds.size,
-                        totalCount = conversations.size,
+                        totalCount = currentTabIds.size,
                         onBack = { exitMultiSelect() },
                         onSelectAll = { selectAll() },
                         onInvert = { invertSelection() },
@@ -557,14 +556,15 @@ fun HomeScreen(
                             userAvatarUri = userAvatarUri,
                             searchQuery = searchQuery,
                             onSearchQueryChange = { searchQuery = it },
-                            onSettingsClick = { showSettings = true },
+                            onSettingsClick = {
+                                // Agent 页：设置直接在会话列表上方滑出（与总设置同款底部弹层）
+                                if (pagerState.currentPage == 0) showAgentSettings = true else showSettings = true
+                            },
                             onNewConversation = {
-                                if (pagerState.currentPage == 0) {
-                                    viewModel.createConversation()
-                                } else {
-                                    // 群聊：与私聊一致只创建列表项（新群聊 N），不直接进入；
-                                    // 进入后经设置-成员管理添加成员
-                                    viewModel.createGroupConversation()
+                                when (pagerState.currentPage) {
+                                    0 -> viewModel.createAgentConversation()
+                                    1 -> viewModel.createConversation()
+                                    else -> viewModel.createGroupConversation()
                                 }
                             },
                             hasListWallpaper = hasListWallpaper
@@ -617,9 +617,23 @@ fun HomeScreen(
                         } else {
                             HorizontalPager(
                                 state = pagerState,
+                                // 多选模式下禁用左右滑动：避免把当前 Tab 的选中项带到他 Tab 造成误删
+                                userScrollEnabled = !isMultiSelect,
                                 modifier = Modifier.fillMaxSize()
                             ) { page ->
                                 if (page == 0) {
+                                    AgentTab(
+                                        conversations = agentFiltered,
+                                        listState = agentListState,
+                                        isMultiSelect = isMultiSelect,
+                                        selectedIds = selectedIds,
+                                        toggleSelection = ::toggleSelection,
+                                        syncMultiSelect = ::syncMultiSelect,
+                                        onOpenConversation = onOpenConversation,
+                                        hasListWallpaper = hasListWallpaper,
+                                        newConversationId = newConversationId
+                                    )
+                                } else if (page == 1) {
                                     ChatListPage(
                                         conversations = soloFiltered,
                                         listState = soloListState,
@@ -631,7 +645,8 @@ fun HomeScreen(
                                         toggleSelection = ::toggleSelection,
                                         syncMultiSelect = ::syncMultiSelect,
                                         onOpenConversation = onOpenConversation,
-                                        hasListWallpaper = hasListWallpaper
+                                        hasListWallpaper = hasListWallpaper,
+                                        newConversationId = newConversationId
                                     )
                                 } else {
                                     ChatListPage(
@@ -645,7 +660,8 @@ fun HomeScreen(
                                         toggleSelection = ::toggleSelection,
                                         syncMultiSelect = ::syncMultiSelect,
                                         onOpenConversation = onOpenConversation,
-                                        hasListWallpaper = hasListWallpaper
+                                        hasListWallpaper = hasListWallpaper,
+                                        newConversationId = newConversationId
                                     )
                                 }
                             }
@@ -738,7 +754,7 @@ fun HomeScreen(
 
         // ===== 群聊教程问号按钮（群聊模式淡入，随时可再开教程，方案三.8） =====
         androidx.compose.animation.AnimatedVisibility(
-            visible = pagerState.currentPage == 1 && !isMultiSelect && searchQuery.isBlank(),
+            visible = pagerState.currentPage == 2 && !isMultiSelect && searchQuery.isBlank(),
             enter = fadeIn(tween(Motion.DurationMedium)),
             exit = fadeOut(tween(Motion.DurationShort)),
             modifier = Modifier
@@ -779,8 +795,20 @@ fun HomeScreen(
         )
     }
 
+    // ===== Agent 设置：与总设置同款，直接在会话列表上方滑出 =====
+    if (showAgentSettings) {
+        AgentSettingsScreen(
+            settingsViewModel = settingsViewModel,
+            onBack = { showAgentSettings = false }
+        )
+    }
+
     if (showGroupTutorial) {
         GroupTutorialDialog(onDismiss = { showGroupTutorial = false })
+    }
+
+    if (showAgentTutorial) {
+        AgentTutorialDialog(onDismiss = { showAgentTutorial = false })
     }
 
     pendingDeleteIds?.let { ids ->
@@ -824,950 +852,4 @@ fun HomeScreen(
             onDismiss = { pendingReferencedDelete = null }
         )
     }
-}
-
-@Composable
-private fun HomeTopBar(
-    userAvatarUri: String?,
-    searchQuery: String,
-    onSearchQueryChange: (String) -> Unit,
-    onSettingsClick: () -> Unit,
-    onNewConversation: () -> Unit,
-    hasListWallpaper: Boolean = false
-) {
-    // - 实现策略：顶部栏背景使用 surfaceContainerLow 半透明叠加，让壁纸透出
-    // - 图标/文字颜色保持 onSurface，确保可读性
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .windowInsetsPadding(WindowInsets.statusBars)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Box(
-            modifier = Modifier
-                .size(44.dp)
-                .clip(CircleShape)
-                .background(
-                    if (hasListWallpaper) {
-                        MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.65f)
-                    } else Color.Transparent
-                )
-                .combinedClickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = onSettingsClick
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            if (userAvatarUri != null) {
-                AsyncImage(
-                    model = userAvatarUri,
-                    contentDescription = "设置",
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.size(36.dp).clip(CircleShape)
-                )
-            } else {
-                Icon(
-                    imageVector = Icons.Filled.Settings,
-                    contentDescription = "设置",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
-                    modifier = Modifier.size(22.dp)
-                )
-            }
-        }
-
-        SearchConversationBar(
-            query = searchQuery,
-            onQueryChange = onSearchQueryChange,
-            modifier = Modifier.weight(1f),
-            hasListWallpaper = hasListWallpaper
-        )
-
-        Box(
-            modifier = Modifier
-                .size(44.dp)
-                .clip(CircleShape)
-                .background(
-                    if (hasListWallpaper) {
-                        MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.65f)
-                    } else Color.Transparent
-                )
-                .combinedClickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = onNewConversation
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.Filled.AddComment,
-                contentDescription = "新建对话",
-                tint = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.size(24.dp)
-            )
-        }
-    }
-}
-
-@Composable
-private fun MultiSelectTopBar(
-    selectedCount: Int,
-    totalCount: Int,
-    onBack: () -> Unit,
-    onSelectAll: () -> Unit,
-    onInvert: () -> Unit,
-    onDelete: () -> Unit,
-    hasListWallpaper: Boolean = false
-) {
-    val isAllSelected = selectedCount == totalCount && totalCount > 0
-    // 多选栏的按钮背景使用半透明色，保持视觉一致性。
-    val iconBgColor = if (hasListWallpaper) {
-        MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.65f)
-    } else Color.Transparent
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .windowInsetsPadding(WindowInsets.statusBars)
-            .padding(horizontal = 8.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(
-            modifier = Modifier
-                .size(44.dp)
-                .clip(CircleShape)
-                .background(iconBgColor)
-                .combinedClickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = onBack
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = "取消多选",
-                tint = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.size(22.dp)
-            )
-        }
-
-        Spacer(modifier = Modifier.size(4.dp))
-
-        Text(
-            text = if (selectedCount == 0) "选择会话" else "已选 $selectedCount 项",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.weight(1f).padding(start = 8.dp)
-        )
-
-        Box(
-            modifier = Modifier
-                .size(44.dp)
-                .clip(CircleShape)
-                .background(iconBgColor)
-                .combinedClickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = onInvert
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.Filled.RemoveDone,
-                contentDescription = "反选",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(22.dp)
-            )
-        }
-
-        Box(
-            modifier = Modifier
-                .size(44.dp)
-                .clip(CircleShape)
-                .background(iconBgColor)
-                .combinedClickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = onSelectAll
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = if (isAllSelected) Icons.Filled.RemoveDone else Icons.Filled.DoneAll,
-                contentDescription = if (isAllSelected) "全不选" else "全选",
-                tint = if (isAllSelected) MaterialTheme.colorScheme.primary
-                       else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(22.dp)
-            )
-        }
-
-        val deleteEnabled = selectedCount > 0
-        Box(
-            modifier = Modifier
-                .size(44.dp)
-                .clip(CircleShape)
-                .background(
-                    if (deleteEnabled) MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.6f)
-                    else iconBgColor
-                )
-                .combinedClickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    enabled = deleteEnabled,
-                    onClick = onDelete
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.Filled.Delete,
-                contentDescription = "删除",
-                tint = if (deleteEnabled) MaterialTheme.colorScheme.onErrorContainer
-                       else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-                modifier = Modifier.size(22.dp)
-            )
-        }
-    }
-}
-
-@Composable
-private fun ConversationCard(
-    conversation: Conversation,
-    isMultiSelect: Boolean,
-    isSelected: Boolean,
-    onTap: () -> Unit,
-    onLongClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    hasListWallpaper: Boolean = false
-) {
-    // 实现策略：
-    // - 壁纸不存在时：保持原有不透明 surfaceContainerLow（视觉无变化）
-    // - 壁纸存在时：
-    //   * 普通态：surfaceContainerLow @ 0.78f 透明度，让壁纸透出形成毛玻璃质感
-    //   * 多选未选：surfaceContainerLow @ 0.55f 透明度（更透，弱化未选项）
-    //   * 多选已选：primaryContainer @ 0.80f 透明度（保留选中高亮）
-    // - tonalElevation 在壁纸存在时设为 0，避免 M3 自动叠加的不透明色调破坏透明效果
-    val cardColor = when {
-        isMultiSelect && isSelected -> {
-            if (hasListWallpaper) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.80f)
-            else MaterialTheme.colorScheme.primaryContainer
-        }
-        isMultiSelect -> {
-            if (hasListWallpaper) MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.55f)
-            else MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.5f)
-        }
-        else -> {
-            if (hasListWallpaper) MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.78f)
-            else MaterialTheme.colorScheme.surfaceContainerLow
-        }
-    }
-
-    // - 仅保留头像 + 名字
-    // - 多选模式下右侧显示选中状态勾选框
-    val aiName = conversation.persona?.name?.ifBlank { null } ?: conversation.title
-    val aiAvatarUri = conversation.persona?.aiAvatarUri
-
-    // Box 替代 Surface：cardColor 已计算最终色值，Box+background+clip 跳过 Surface 的 CompositionLocalProvider 与 elevation 处理开销
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(cardColor)
-            .combinedClickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onTap,
-                onLongClick = onLongClick
-            )
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            if (isMultiSelect) {
-                Box(
-                    modifier = Modifier
-                        .size(48.dp)
-                        .clip(CircleShape)
-                        .background(
-                            if (isSelected) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.surface
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (isSelected) {
-                        Icon(
-                            imageVector = Icons.Filled.Check,
-                            contentDescription = "已选中",
-                            tint = MaterialTheme.colorScheme.onPrimary,
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.size(14.dp))
-            } else {
-                // 名字首字头像兜底：未设置头像但有 AI 名时显示首字（方案二十一）
-                AiAvatar(
-                    avatarUri = aiAvatarUri,
-                    name = conversation.persona?.name.orEmpty(),
-                    size = 48.dp
-                )
-                Spacer(modifier = Modifier.size(14.dp))
-            }
-
-            Text(
-                text = aiName,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
-            )
-        }
-    }
-}
-
-@Composable
-private fun WelcomeContent() {
-    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
-    val screenWidthDp = configuration.screenWidthDp.dp
-    val screenHeightDp = configuration.screenHeightDp.dp
-    val isLandscape = screenWidthDp > screenHeightDp
-
-    val titleFontSize = (screenWidthDp.value * 0.20f).sp
-    val maxTitleSize = 72.sp
-    val finalTitleSize = if (titleFontSize.value > maxTitleSize.value) maxTitleSize else titleFontSize
-
-    val subtitleFontSize = 18.sp
-
-    val titleColor = MaterialTheme.colorScheme.onSurface
-    val subtitleColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.78f)
-    val verticalSpacing = if (isLandscape) 12.dp else 20.dp
-    val horizontalPadding = if (isLandscape) 40.dp else 24.dp
-
-    var visible by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        delay(40)
-        visible = true
-    }
-
-    AnimatedVisibility(
-        visible = visible,
-        enter = fadeIn(
-            animationSpec = tween(
-                durationMillis = 300,
-                easing = Motion.EasingEmphasizedDecelerate
-            )
-        ) + slideInVertically(
-            initialOffsetY = { it / 6 },
-            animationSpec = tween(
-                durationMillis = 320,
-                easing = Motion.EasingEmphasizedDecelerate
-            )
-        ),
-        modifier = Modifier.fillMaxSize()
-    ) {
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.CenterStart
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = horizontalPadding),
-                horizontalAlignment = Alignment.Start,
-                verticalArrangement = Arrangement.spacedBy(verticalSpacing)
-            ) {
-                Text(
-                    text = "Quiddity",
-                    fontSize = finalTitleSize,
-                    fontWeight = FontWeight.Bold,
-                    color = titleColor,
-                    textAlign = TextAlign.Start,
-                    letterSpacing = (-1.2).sp,
-                    lineHeight = (finalTitleSize.value * 1.05f).sp,
-                    maxLines = 1,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Text(
-                    text = "开始你的旅程",
-                    fontSize = subtitleFontSize,
-                    fontWeight = FontWeight.Medium,
-                    color = subtitleColor,
-                    textAlign = TextAlign.Start,
-                    letterSpacing = 0.sp,
-                    maxLines = 1,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun SearchConversationBar(
-    query: String,
-    onQueryChange: (String) -> Unit,
-    modifier: Modifier = Modifier,
-    hasListWallpaper: Boolean = false
-) {
-    Surface(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp)),
-        shape = RoundedCornerShape(8.dp),
-        // 壁纸存在时半透明叠加，让壁纸透出
-        color = if (hasListWallpaper) {
-            MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.7f)
-        } else {
-            MaterialTheme.colorScheme.surfaceContainerLow
-        },
-        // 壁纸存在时 tonalElevation=0，避免 M3 强制不透明色调
-        tonalElevation = 0.dp
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Box(modifier = Modifier.weight(1f)) {
-                if (query.isEmpty()) {
-                    Text(
-                        text = "搜索会话",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                    )
-                }
-                BasicTextField(
-                    value = query,
-                    onValueChange = onQueryChange,
-                    textStyle = MaterialTheme.typography.bodyLarge.copy(
-                        color = MaterialTheme.colorScheme.onSurface
-                    ),
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-            if (query.isNotEmpty()) {
-                Icon(
-                    imageVector = Icons.Filled.Clear,
-                    contentDescription = "清除",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier
-                        .size(20.dp)
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                            onClick = { onQueryChange("") }
-                        )
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun SearchEmptyContent(query: String) {
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = "未找到与“${query}”相关的会话或消息",
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-            textAlign = TextAlign.Center,
-            modifier = Modifier.padding(horizontal = 32.dp)
-        )
-    }
-}
-
-/** 搜索结果分区标题（会话 / 消息）。 */
-@Composable
-private fun SectionHeader(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.labelLarge,
-        fontWeight = FontWeight.SemiBold,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(vertical = 2.dp)
-    )
-}
-
-/** 全局消息搜索命中行：会话标题 + 角色/内容摘录 + 时间。 */
-@Composable
-private fun MessageHitRow(
-    hit: GlobalChatSearch.Hit,
-    query: String,
-    onClick: () -> Unit
-) {
-    val roleLabel = if (hit.message.role == com.quiddity.app.data.model.Role.USER) "我" else "AI"
-    val colorScheme = MaterialTheme.colorScheme
-    val excerpt = remember(hit.message.content, query) {
-        com.quiddity.app.domain.ChatRecordSearch.buildExcerpt(hit.message.content, query)
-    }
-    val displayText = remember(excerpt, hit.message.content, roleLabel, colorScheme) {
-        val fallback = hit.message.content.replace("\n", " ").trim()
-            .let { if (it.length > 80) it.take(80) + "…" else it }
-        val prefix = "$roleLabel："
-        buildAnnotatedString {
-            append(prefix)
-            append(excerpt?.text ?: fallback)
-            if (excerpt != null) {
-                excerpt.highlights.forEach { range ->
-                    addStyle(
-                        SpanStyle(
-                            background = colorScheme.primary.copy(alpha = 0.15f),
-                            fontWeight = FontWeight.SemiBold
-                        ),
-                        start = prefix.length + range.first,
-                        end = prefix.length + range.last + 1
-                    )
-                }
-            }
-        }
-    }
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick
-            ),
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        tonalElevation = 0.dp
-    ) {
-        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = hit.conversationTitle.ifBlank { "未命名会话" },
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.primary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
-                )
-                Text(
-                    text = DateUtils.formatSearchTime(hit.message.timestamp),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                )
-            }
-            Spacer(modifier = Modifier.size(4.dp))
-            Text(
-                text = displayText,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-    }
-}
-
-// ============================================================
-// 群聊 1.5.0：私聊/群聊双 Tab、群卡片、建群弹窗、教程
-// ============================================================
-
-/**
- * 全局搜索结果列表（搜索时替代双 Tab 内容，跨私聊/群聊展示）。
- */
-@Composable
-private fun GlobalSearchResultList(
-    conversations: List<Conversation>,
-    messageHits: List<GlobalChatSearch.Hit>,
-    query: String,
-    isMultiSelect: Boolean,
-    selectedIds: Set<String>,
-    toggleSelection: (String) -> Unit,
-    syncMultiSelect: (Boolean, Set<String>) -> Unit,
-    onOpenConversation: (String) -> Unit,
-    onOpenMessage: (String, String) -> Unit,
-    hasListWallpaper: Boolean
-) {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        if (conversations.isNotEmpty()) {
-            item(key = "header_conversations", contentType = { "section" }) {
-                SectionHeader(text = "会话")
-            }
-            items(conversations, key = { it.id }, contentType = { "conversation" }) { conv ->
-                ConversationCard(
-                    conversation = conv,
-                    isMultiSelect = isMultiSelect,
-                    isSelected = conv.id in selectedIds,
-                    onTap = {
-                        if (isMultiSelect) toggleSelection(conv.id) else onOpenConversation(conv.id)
-                    },
-                    onLongClick = {
-                        if (!isMultiSelect) syncMultiSelect(true, setOf(conv.id)) else toggleSelection(conv.id)
-                    },
-                    hasListWallpaper = hasListWallpaper
-                )
-            }
-        }
-        if (messageHits.isNotEmpty()) {
-            item(key = "header_messages", contentType = { "section" }) {
-                SectionHeader(text = "消息")
-            }
-            items(messageHits, key = { it.message.id }, contentType = { "message_hit" }) { hit ->
-                MessageHitRow(
-                    hit = hit,
-                    query = query,
-                    onClick = { onOpenMessage(hit.conversationId, hit.message.id) }
-                )
-            }
-        }
-    }
-}
-
-/**
- * 单个列表页（私聊 / 群聊），切换 Tab 时整体淡入淡出（方案十四.7）。
- */
-@Composable
-private fun ChatListPage(
-    conversations: List<Conversation>,
-    listState: LazyListState,
-    isMultiSelect: Boolean,
-    selectedIds: Set<String>,
-    isGroup: Boolean,
-    userAvatarUri: String?,
-    memberResolver: (List<String>) -> List<Conversation>,
-    toggleSelection: (String) -> Unit,
-    syncMultiSelect: (Boolean, Set<String>) -> Unit,
-    onOpenConversation: (String) -> Unit,
-    hasListWallpaper: Boolean
-) {
-    if (conversations.isEmpty()) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(
-                text = if (isGroup) "还没有群聊\n点击右上角新建群聊" else "还没有私聊\n点击右上角新建私聊",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                textAlign = TextAlign.Center
-            )
-        }
-        return
-    }
-    LazyColumn(
-        state = listState,
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        items(conversations, key = { it.id }, contentType = { if (isGroup) "group" else "conversation" }) { conv ->
-            // 性能：去掉 per-item 动画修饰（animateItem），滚动/增删零动画开销
-            val onTap = {
-                if (isMultiSelect) toggleSelection(conv.id) else onOpenConversation(conv.id)
-            }
-            val onLongClick = {
-                if (!isMultiSelect) syncMultiSelect(true, setOf(conv.id)) else toggleSelection(conv.id)
-            }
-            if (isGroup) {
-                GroupConversationCard(
-                    conversation = conv,
-                    isMultiSelect = isMultiSelect,
-                    isSelected = conv.id in selectedIds,
-                    userAvatarUri = userAvatarUri,
-                    memberResolver = memberResolver,
-                    onTap = onTap,
-                    onLongClick = onLongClick,
-                    hasListWallpaper = hasListWallpaper
-                )
-            } else {
-                ConversationCard(
-                    conversation = conv,
-                    isMultiSelect = isMultiSelect,
-                    isSelected = conv.id in selectedIds,
-                    onTap = onTap,
-                    onLongClick = onLongClick,
-                    hasListWallpaper = hasListWallpaper
-                )
-            }
-        }
-    }
-}
-
-/**
- * 底部「私聊 / 群聊」Tab 栏（方案十四.1-4）：
- * 两个词靠近居中排列，无滑动指示块；高亮由文字颜色表达——
- * 当前页文字高亮（浅色黑 / 深色白），滑动时颜色随滑动方向在两个词之间渐变过渡。
- */
-@Composable
-private fun ChatTypeTabBar(
-    pagerState: PagerState,
-    darkMode: Boolean,
-    onSelect: (Int) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Row(
-        modifier = modifier,
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        ChatTypeTabWord(
-            label = "私聊",
-            invert = true,
-            pagerState = pagerState,
-            darkMode = darkMode,
-            onClick = { onSelect(0) }
-        )
-        Spacer(modifier = Modifier.size(24.dp))
-        ChatTypeTabWord(
-            label = "群聊",
-            invert = false,
-            pagerState = pagerState,
-            darkMode = darkMode,
-            onClick = { onSelect(1) }
-        )
-    }
-}
-
-@Composable
-private fun ChatTypeTabWord(
-    label: String,
-    invert: Boolean,
-    pagerState: PagerState,
-    darkMode: Boolean,
-    onClick: () -> Unit
-) {
-    val highlightColor = if (darkMode) Color.White else Color.Black
-    Box(
-        modifier = Modifier
-            .height(40.dp)
-            // 性能：高亮随滑动进度用 graphicsLayer alpha 在 draw phase 插值，
-            // 滑动过程中零重组（视觉上等效于颜色从灰渐变到高亮）
-            .graphicsLayer {
-                val continuous = pagerState.currentPage + pagerState.currentPageOffsetFraction
-                val fraction = if (invert) {
-                    (1f - continuous).coerceIn(0f, 1f)
-                } else {
-                    continuous.coerceIn(0f, 1f)
-                }
-                alpha = 0.55f + 0.45f * fraction
-            }
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick
-            ),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.SemiBold,
-            color = highlightColor
-        )
-    }
-}
-
-/**
- * 群聊卡片：群名称 + 更新时间 + 头像拼合图（用户头像 + 成员头像，方案十四.5），
- * 不显示消息预览。
- */
-@Composable
-private fun GroupConversationCard(
-    conversation: Conversation,
-    isMultiSelect: Boolean,
-    isSelected: Boolean,
-    userAvatarUri: String?,
-    memberResolver: (List<String>) -> List<Conversation>,
-    onTap: () -> Unit,
-    onLongClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    hasListWallpaper: Boolean = false
-) {
-    val members = remember(conversation.memberConversationIds) {
-        memberResolver(conversation.memberConversationIds)
-    }
-    val cardColor = when {
-        isMultiSelect && isSelected -> {
-            if (hasListWallpaper) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.80f)
-            else MaterialTheme.colorScheme.primaryContainer
-        }
-        isMultiSelect -> {
-            if (hasListWallpaper) MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.55f)
-            else MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.5f)
-        }
-        else -> {
-            if (hasListWallpaper) MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.78f)
-            else MaterialTheme.colorScheme.surfaceContainerLow
-        }
-    }
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(cardColor)
-            .combinedClickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onTap,
-                onLongClick = onLongClick
-            )
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            if (isMultiSelect) {
-                Box(
-                    modifier = Modifier
-                        .size(48.dp)
-                        .clip(CircleShape)
-                        .background(
-                            if (isSelected) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.surface
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (isSelected) {
-                        Icon(
-                            imageVector = Icons.Filled.Check,
-                            contentDescription = "已选中",
-                            tint = MaterialTheme.colorScheme.onPrimary,
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.size(14.dp))
-            } else {
-                GroupAvatarComposite(
-                    userAvatarUri = userAvatarUri,
-                    members = members
-                )
-                Spacer(modifier = Modifier.size(14.dp))
-            }
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = conversation.title.ifBlank { "新群聊" },
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(modifier = Modifier.size(2.dp))
-                Text(
-                    text = DateUtils.formatTimestamp(conversation.updatedAt),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                )
-            }
-        }
-    }
-}
-
-/**
- * 头像拼合图：用户头像 + 成员头像（最多 3 个），按人数自适应宽度重叠排列。
- */
-@Composable
-private fun GroupAvatarComposite(
-    userAvatarUri: String?,
-    members: List<Conversation>
-) {
-    val memberList = members.take(3)
-    val overlap = 16.dp
-    Box(
-        modifier = Modifier.size(
-            width = (28.dp.value + memberList.size * overlap.value).dp,
-            height = 28.dp
-        )
-    ) {
-        Box(
-            modifier = Modifier
-                .align(Alignment.CenterStart)
-                .size(28.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
-            contentAlignment = Alignment.Center
-        ) {
-            if (userAvatarUri != null) {
-                AsyncImage(
-                    model = userAvatarUri,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize().clip(CircleShape)
-                )
-            } else {
-                Icon(
-                    imageVector = Icons.Filled.Person,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(16.dp)
-                )
-            }
-        }
-        memberList.forEachIndexed { index, member ->
-            Box(
-                modifier = Modifier
-                    .align(Alignment.CenterStart)
-                    .offset(x = ((index + 1) * overlap.value).dp)
-                    .size(28.dp)
-            ) {
-                AiAvatar(
-                    avatarUri = member.persona?.aiAvatarUri,
-                    name = member.persona?.name.orEmpty(),
-                    size = 28.dp
-                )
-            }
-        }
-    }
-}
-
-/**
- * 群聊教程弹窗（方案三.8）：首次进入群聊模式列表页弹出，右下角问号可再次打开。
- */
-@Composable
-private fun GroupTutorialDialog(onDismiss: () -> Unit) {
-    val lines = listOf(
-        "发送消息后，点一下成员的头像，TA 才会回复你",
-        "可以连着点好几个头像，TA 们会排队依次回复（最多 1 个在回复、2 个在排队）",
-        "不点头像就没人回；想听谁说，就点谁",
-        "成员管理、上下文条数等都可以在群聊设置里调整",
-        "用户名、AI 名没设置或 API 测试没通过的角色不能加入群聊，会收到通知，可重试",
-        "点头像没反应的可能原因：成员已被踢出、群聊没有成员、或已到排队上限",
-        "私聊没设置用户名就无法聊天，也不能加入群聊",
-        "输入框里没发送的文字不参与回复，成员只基于已发送的群聊记录回答",
-        "回复失败会自动重试 5 次并逐次提示；任一成员 5 次失败后整个队列取消",
-        "成员回复的上下文在点头像那一刻定格，之后的新消息不影响正在进行的回复"
-    )
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("群聊玩法") },
-        text = {
-            Column(
-                modifier = Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                lines.forEachIndexed { index, line ->
-                    Text(
-                        text = "${index + 1}. $line",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("知道了") }
-        }
-    )
 }

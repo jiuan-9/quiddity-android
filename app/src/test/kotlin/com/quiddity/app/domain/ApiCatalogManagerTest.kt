@@ -132,9 +132,9 @@ class ApiCatalogManagerTest {
     }
 
     @Test
-    fun `supported model count is exactly 54`() {
+    fun `supported model count is exactly 43`() {
         val total = manager.tieredModels().values.sumOf { it.size }
-        assertEquals(54, total, "应用内置支持的模型总数应为 54")
+        assertEquals(43, total, "应用内置支持的模型总数应为 43")
     }
 
     @Test
@@ -146,6 +146,10 @@ class ApiCatalogManagerTest {
         assertEquals(
             ApiCatalogManager.ModelTier.FULL,
             manager.getModelTier("deepseek-ai/DeepSeek-V4-Flash", "siliconflow")
+        )
+        assertEquals(
+            ApiCatalogManager.ModelTier.FULL,
+            manager.getModelTier("deepseek-v4-flash-vision-exp", "deepseek")
         )
     }
 
@@ -213,9 +217,9 @@ class ApiCatalogManagerTest {
             apiModel = "deepseek-v4-flash", apiKey = "k"
         )
         val other = manager.buildEntry(
-            id = null, name = "Qwen", providerId = "alibaba",
-            apiUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-            apiModel = "qwen-plus", apiKey = "k"
+            id = null, name = "GLM", providerId = "zhipu",
+            apiUrl = "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+            apiModel = "glm-5.2", apiKey = "k"
         )
         assertEquals(QuiddityConstants.DEEPSEEK_RESPONSES_URL, manager.responsesApiUrl(deepseek))
         assertNull(manager.responsesApiUrl(other), "无官方 Responses 端点时应返回 null")
@@ -255,14 +259,17 @@ class ApiCatalogManagerTest {
         assertTrue(manager.isVisionModel("kimi-k3", "moonshot"), "Kimi K3 原生视觉")
         assertTrue(manager.isVisionModel("kimi-k2.6", "moonshot"), "Kimi K2.6 原生视觉")
         assertTrue(manager.isVisionModel("MiniMax-M3", "minimax"), "MiniMax M3 原生多模态")
-        assertTrue(manager.isVisionModel("qwen-vl-max", "alibaba"), "通义千问 VL")
+        assertTrue(manager.isVisionModel("qwen-vl-max", "alibaba"), "通义千问 VL（视觉 OCR 保留）")
+        assertTrue(manager.isVisionModel("doubao-seed-1-6-vision-250815", "bytedance"), "豆包视觉（视觉 OCR 保留）")
+        assertTrue(manager.isVisionModel("mimo-v2.5", "xiaomi"), "小米 MiMo 全模态（自定义条目识图）")
         assertTrue(manager.isVisionModel("glm-4.1v-thinking-flash", "zhipu"), "智谱 GLM-4.1V-Thinking-Flash")
         assertTrue(manager.isVisionModel("glm-4.6v-flash", "zhipu"), "智谱 GLM 视觉")
         assertTrue(manager.isVisionModel("gemini-2.5-flash", "google"), "Gemini 全系多模态")
         assertTrue(manager.isVisionModel("gpt-5.4", "openai"), "GPT-5 系列支持视觉")
 
+        assertTrue(manager.isVisionModel("deepseek-v4-flash-vision-exp", "deepseek"), "DeepSeek 官方多模态实验版")
+
         assertFalse(manager.isVisionModel("deepseek-v4-flash", "deepseek"), "DeepSeek 纯文本")
-        assertFalse(manager.isVisionModel("qwen-plus", "alibaba"), "通义千问文本模型")
         assertFalse(manager.isVisionModel("glm-5.2", "zhipu"), "GLM 文本模型")
         assertFalse(manager.isVisionModel("kimi-k3", "custom"), "自定义服务商一律按纯文本处理")
     }
@@ -318,6 +325,14 @@ class ApiCatalogManagerTest {
         assertEquals(1.0, manager.defaultMaxTemperature("claude-opus-4-8"), "Claude 温度上限 1.0")
         assertNull(manager.defaultMaxTemperature("deepseek-v4-flash"), "未知模型不限制")
         assertNull(manager.defaultMaxTemperature("gpt-4o-mini"), "未知模型不限制")
+    }
+
+    @Test
+    fun `newest flagship models are classified by capability`() {
+        assertEquals(ApiCatalogManager.ModelTier.FULL, manager.getModelTier("glm-5.3", "zhipu"))
+        assertEquals(ApiCatalogManager.ModelTier.FULL, manager.getModelTier("hy3", "tencent"))
+        assertEquals(ApiCatalogManager.ModelTier.ADVANCED, manager.getModelTier("spark-x2", "iflytek"))
+        assertEquals(ApiCatalogManager.ModelTier.BASIC, manager.getModelTier("spark-x2-flash", "iflytek"))
     }
 
     @Test

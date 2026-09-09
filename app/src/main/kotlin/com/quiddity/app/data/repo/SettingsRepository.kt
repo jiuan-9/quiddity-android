@@ -133,6 +133,8 @@ class SettingsRepository(private val store: SettingsStore) {
 
     suspend fun setDarkMode(enabled: Boolean) = update { it.copy(darkMode = enabled) }
     suspend fun setUserAvatar(uri: String?) = update { it.copy(userAvatarUri = uri) }
+    suspend fun setOverlayEnabled(enabled: Boolean) = update { it.copy(overlayEnabled = enabled) }
+    suspend fun setOverlayAvatarUri(uri: String?) = update { it.copy(overlayAvatarUri = uri) }
     suspend fun setMultilineSplit(enabled: Boolean) = update { it.copy(multilineAutoSplit = enabled) }
     suspend fun setEnterToSend(enabled: Boolean) = update { it.copy(enterToSend = enabled) }
     suspend fun setMaxTokens(value: Int) = update { it.copy(globalMaxTokens = value) }
@@ -176,19 +178,6 @@ class SettingsRepository(private val store: SettingsStore) {
         it.copy(listWallpaperDarken = value.coerceIn(0f, 1f))
     }
 
-    suspend fun setTypingDelayEnabled(enabled: Boolean) = update {
-        it.copy(typingDelayEnabled = enabled)
-    }
-
-    suspend fun setTypingDelayMsPerChar(value: Int) = update {
-        it.copy(
-            typingDelayMsPerChar = value.coerceIn(
-                com.quiddity.app.util.QuiddityConstants.MIN_TYPING_DELAY_MS_PER_CHAR,
-                com.quiddity.app.util.QuiddityConstants.MAX_TYPING_DELAY_MS_PER_CHAR
-            )
-        )
-    }
-
     suspend fun setSendDelayEnabled(enabled: Boolean) = update {
         it.copy(sendDelayEnabled = enabled)
     }
@@ -219,12 +208,12 @@ class SettingsRepository(private val store: SettingsStore) {
         it.copy(proactiveMessageEnabled = enabled)
     }
 
-    suspend fun setProactiveMessageLastResetDate(date: String) = update {
-        it.copy(proactiveMessageLastResetDate = date)
-    }
-
     suspend fun setGroupTutorialSeen(seen: Boolean) = update {
         it.copy(groupTutorialSeen = seen)
+    }
+
+    suspend fun setAgentTutorialSeen(seen: Boolean) = update {
+        it.copy(agentTutorialSeen = seen)
     }
 
     /** 下一个私聊默认名（新会话 N），计数器递增、删除不补号。 */

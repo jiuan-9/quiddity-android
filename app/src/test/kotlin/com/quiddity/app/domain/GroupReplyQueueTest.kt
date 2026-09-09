@@ -5,7 +5,6 @@ import com.quiddity.app.data.model.Role
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /*
@@ -87,7 +86,6 @@ class GroupReplyQueueTest {
         assertEquals(1, q.positionOf("b"))
         assertEquals(2, q.positionOf("c"))
         assertEquals(-1, q.positionOf("d"))
-        assertEquals("a", q.replyingMember())
     }
 
     @Test
@@ -97,7 +95,6 @@ class GroupReplyQueueTest {
         q.enqueue("b", emptyList())
         val done = q.dequeue()
         assertEquals("a", done?.memberId)
-        assertEquals("b", q.replyingMember())
         assertEquals(0, q.positionOf("b"))
     }
 
@@ -108,7 +105,6 @@ class GroupReplyQueueTest {
         q.enqueue("b", emptyList())
         q.clear()
         assertTrue(q.isEmpty)
-        assertNull(q.replyingMember())
     }
 
     @Test
@@ -119,7 +115,6 @@ class GroupReplyQueueTest {
         q.enqueue("c", emptyList())
         val stopped = q.removeReplying()
         assertEquals("a", stopped?.memberId)
-        assertEquals("b", q.replyingMember())
         assertEquals(0, q.positionOf("b"))
         assertEquals(1, q.positionOf("c"))
     }

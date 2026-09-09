@@ -76,6 +76,40 @@ open class ChatApi {
     private val mediaType = "application/json; charset=utf-8".toMediaType()
 
     /**
+     * 按服务商写入认证头：部分官方端点（如 api.xiaomimimo.com）要求 `api-key` 头
+     * （非 Bearer），其余服务商统一 `Authorization: Bearer`。
+     */
+    private fun Request.Builder.applyAuthHeader(apiUrl: String, apiKey: String): Request.Builder {
+        if (apiKey.isEmpty()) return this
+        return if (QuiddityConstants.isXiaomiMimoUrl(apiUrl)) {
+            header("api-key", apiKey)
+        } else {
+            header("Authorization", "Bearer $apiKey")
+        }
+    }
+
+    /** 部分新一代模型使用 max_completion_tokens（含思考 token），与 max_tokens 互斥。 */
+    private fun ChatCompletionRequest.adaptTokensFor(apiUrl: String): ChatCompletionRequest =
+        if (QuiddityConstants.isXiaomiMimoUrl(apiUrl)) {
+            // 幂等转换：调用方已按目标协议设置 max_completion_tokens 时直接保留，
+            // 否则把 max_tokens 迁移过去——避免上层预置字段被二次转换清空
+            if (max_completion_tokens != null) copy(max_tokens = null)
+            else copy(max_tokens = null, max_completion_tokens = max_tokens)
+        } else {
+            this
+        }
+
+    /** 视觉请求同样按服务商切换输出上限字段。 */
+    private fun VisionCompletionRequest.adaptTokensFor(apiUrl: String): VisionCompletionRequest =
+        if (QuiddityConstants.isXiaomiMimoUrl(apiUrl)) {
+            // 幂等转换：与 ChatCompletionRequest 同规则，避免已设字段被二次转换清空
+            if (max_completion_tokens != null) copy(max_tokens = null)
+            else copy(max_tokens = null, max_completion_tokens = max_tokens)
+        } else {
+            this
+        }
+
+    /**
      * 单次流式响应事件。
      */
     sealed class StreamEvent {
@@ -108,7 +142,10 @@ open class ChatApi {
     ): Flow<StreamEvent> = callbackFlow {
         // 每次流独立 parser：工具调用累积器不复用，杜绝并行流串扰
         val parser = ChatStreamParser()
-        val body = json.encodeToString(ChatCompletionRequest.serializer(), request)
+        val body = json.encodeToString(
+            ChatCompletionRequest.serializer(),
+            request.adaptTokensFor(apiUrl)
+        )
             .toRequestBody(mediaType)
 
         val requestBuilder = Request.Builder()
@@ -117,9 +154,7 @@ open class ChatApi {
             .header("Accept", "text/event-stream")
             .header("Cache-Control", "no-cache")
 
-        if (apiKey.isNotEmpty()) {
-            requestBuilder.header("Authorization", "Bearer $apiKey")
-        }
+        requestBuilder.applyAuthHeader(apiUrl, apiKey)
 
         // 幂等关闭 channel：AtomicBoolean 保证 safeClose 只执行一次；
         // Channel.close() 本身亦幂等，已关闭时调用为 no-op。
@@ -174,7 +209,11 @@ open class ChatApi {
                     safeClose()
                     return
                 }
-                if (parsed.finishReason == "length") truncated = true
+                // 部分网关检测到复读时以 repetition_truncation 结束：同样视为被截断，
+                // 走"从断点续写且不要重复"的兜底，正好化解复读类回复
+                if (parsed.finishReason == "length" ||
+                    parsed.finishReason == "repetition_truncation"
+                ) truncated = true
                 val content = parsed.content
                 if (!content.isNullOrEmpty()) {
                     emitContent(content)
@@ -250,9 +289,7 @@ open class ChatApi {
             .header("Accept", "text/event-stream")
             .header("Cache-Control", "no-cache")
 
-        if (apiKey.isNotEmpty()) {
-            requestBuilder.header("Authorization", "Bearer $apiKey")
-        }
+        requestBuilder.applyAuthHeader(apiUrl, apiKey)
 
         val closed = java.util.concurrent.atomic.AtomicBoolean(false)
         val cancelledByConsumer = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -357,16 +394,14 @@ open class ChatApi {
                 max_tokens = 16,
                 temperature = 0.0,
                 stream = false
-            )
+            ).adaptTokensFor(apiUrl)
             val body = json.encodeToString(ChatCompletionRequest.serializer(), request)
                 .toRequestBody(mediaType)
             val requestBuilder = Request.Builder()
                 .url(apiUrl)
                 .post(body)
                 .header("Accept", "application/json")
-            if (apiKey.isNotEmpty()) {
-                requestBuilder.header("Authorization", "Bearer $apiKey")
-            }
+            requestBuilder.applyAuthHeader(apiUrl, apiKey)
             client.newCall(requestBuilder.build()).execute().use { resp ->
                 if (!resp.isSuccessful) {
                     throw ChatException("HTTP ${resp.code}: ${resp.message}")
@@ -421,16 +456,14 @@ open class ChatApi {
             max_tokens = maxTokens,
             temperature = temperature,
             stream = false
-        )
+        ).adaptTokensFor(apiUrl)
         val body = json.encodeToString(ChatCompletionRequest.serializer(), request)
             .toRequestBody(mediaType)
         val requestBuilder = Request.Builder()
             .url(apiUrl)
             .post(body)
             .header("Accept", "application/json")
-        if (apiKey.isNotEmpty()) {
-            requestBuilder.header("Authorization", "Bearer $apiKey")
-        }
+        requestBuilder.applyAuthHeader(apiUrl, apiKey)
         client.newCall(requestBuilder.build()).execute().use { resp ->
             if (!resp.isSuccessful) {
                 val errBody = runCatching { resp.peekBody(2 * 1024)?.string().orEmpty() }
@@ -493,16 +526,14 @@ open class ChatApi {
             max_tokens = maxTokens,
             temperature = temperature,
             stream = false
-        )
+        ).adaptTokensFor(apiUrl)
         val body = json.encodeToString(VisionCompletionRequest.serializer(), request)
             .toRequestBody(mediaType)
         val requestBuilder = Request.Builder()
             .url(apiUrl)
             .post(body)
             .header("Accept", "application/json")
-        if (apiKey.isNotEmpty()) {
-            requestBuilder.header("Authorization", "Bearer $apiKey")
-        }
+        requestBuilder.applyAuthHeader(apiUrl, apiKey)
         client.newCall(requestBuilder.build()).execute().use { resp ->
             if (!resp.isSuccessful) {
                 val errBody = runCatching { resp.peekBody(2 * 1024)?.string().orEmpty() }

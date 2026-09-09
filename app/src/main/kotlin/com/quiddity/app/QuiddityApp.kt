@@ -1,10 +1,13 @@
 package com.quiddity.app
 
 import android.app.Application
+import android.app.Activity
+import android.os.Bundle
 import android.content.res.Configuration
 import com.quiddity.app.data.local.SettingsStore
 import com.quiddity.app.di.ServiceLocator
 import com.quiddity.app.util.CrashLogger
+import com.quiddity.app.active.ReplyOverlayController
 
 /*
  * ============================================================================
@@ -56,6 +59,27 @@ class QuiddityApp : Application() {
         instance = this
         CrashLogger.install(this)
         ServiceLocator.init(this)
+        registerActivityLifecycleCallbacks(
+            object : Application.ActivityLifecycleCallbacks {
+                private var resumedCount = 0
+
+                override fun onActivityResumed(activity: Activity) {
+                    resumedCount++
+                    ReplyOverlayController.setAppVisible(resumedCount > 0)
+                }
+
+                override fun onActivityPaused(activity: Activity) {
+                    resumedCount = (resumedCount - 1).coerceAtLeast(0)
+                    ReplyOverlayController.setAppVisible(resumedCount > 0)
+                }
+
+                override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
+                override fun onActivityStarted(activity: Activity) = Unit
+                override fun onActivityStopped(activity: Activity) = Unit
+                override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
+                override fun onActivityDestroyed(activity: Activity) = Unit
+            }
+        )
     }
 
     /**

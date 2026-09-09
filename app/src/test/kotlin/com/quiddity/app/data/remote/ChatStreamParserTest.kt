@@ -41,12 +41,6 @@ class ChatStreamParserTest {
     private val parser = ChatStreamParser()
 
     @Test
-    fun `parseDelta returns content and null for DONE`() {
-        assertEquals("你好", parser.parseDelta("""{"choices":[{"delta":{"content":"你好"}}]}"""))
-        assertNull(parser.parseDelta("[DONE]"), "[DONE] 应返回 null 表示结束")
-    }
-
-    @Test
     fun `finish reason length is captured as truncation signal`() {
         val chunk = parser.parseChunk(
             """{"choices":[{"delta":{"content":"最后一句"}, "finish_reason":"length"}]}"""

@@ -48,7 +48,7 @@ enum class Role {
  */
 @Serializable
 enum class ConversationType {
-    SOLO, GROUP
+    SOLO, GROUP, AGENT
 }
 
 /**
@@ -269,21 +269,10 @@ data class Conversation(
      */
     val timeLibraryGeneratedDate: String = "",
     /**
-     * 时间库查看密码（由 AI 在生成时间库时制定，纯数字）。
-     * 空字符串表示未设置密码（旧数据可直接查看）。
-     * 一旦生成即固定不变，不要求唯一。
+     * 被永久禁用的时间框下标（0-9，共 10 个框，上午 0-4、下午 5-9）。
+     * 禁用后该框不参与、也不计入可用数量；可用最大数量 = 10 - 禁用框数量。
      */
-    val timeLibraryPassword: String = "",
-    /**
-     * AI 是否决定把查看密码告知用户。
-     * true = 在时间库状态卡上显示；false = 不显示，需向 AI 询问。
-     */
-    val timeLibraryPasswordRevealed: Boolean = false,
-    /**
-     * 用户是否成功打开过"查看时间库"。
-     * true 后，输密码弹窗会直接显示密码，无需再次输入。
-     */
-    val timeLibraryPasswordUnlocked: Boolean = false,
+    val disabledTimeSlots: List<Int> = emptyList(),
     /**
      * 会话类型：SOLO=私聊（默认）/ GROUP=群聊。
      * 1.3.0 仅预留字段与接口，群聊实体不加入。
@@ -341,6 +330,22 @@ data class Conversation(
 )
 
 /**
+ * 会话是否拥有角色卡内容（AI 人设 / 用户人设 / 记忆任一非空；场景单独设置不构成角色卡）。
+ *
+ * 无角色卡的会话（新建后未做任何设定）不弹用户名弹窗，也不被群聊 / Agent
+ * 角色选择等「按内容检测」的入口拾取。
+ */
+val Conversation.hasPersonaContent: Boolean
+    get() {
+        val p = persona
+        val u = userPersona
+        return p.name.isNotBlank() || p.desired.isNotBlank() || p.persona.isNotBlank() ||
+            p.character.isNotBlank() || p.appearance.isNotBlank() || p.worldBackground.isNotBlank() ||
+            u.name.isNotBlank() || u.identity.isNotBlank() || u.gender.isNotBlank() ||
+            u.age.isNotBlank() || u.appearance.isNotBlank() || memory.isNotBlank()
+    }
+
+/**
  * 单条消息。
  */
 @Immutable
@@ -366,6 +371,14 @@ data class Message(
      * - 不发送给 LLM、不参与压缩（避免污染上下文），但保留在本地供回看。
      */
     val isThinking: Boolean = false,
+    /**
+     * 应用内本地思考内容（客户端生成，不依赖厂商服务器）。
+     *
+     * - 非空 = 回复消息头部展示可展开/收起的思考块（默认收起，箭头展开）；
+     * - 思考中（isStreaming 且 content 为空）时以高亮滑块样式提示；
+     * - 不发送给 LLM、不参与压缩。
+     */
+    val thinking: String = "",
     /**
      * 发言人会话 id（2.0.0 群聊消息使用）。
      * - 群聊消息带 senderId（指向成员私聊会话 id）
@@ -401,7 +414,58 @@ data class Message(
      * - 导出/换机后文件可能不存在，渲染时自动降级为占位样式；
      * - null = 普通文本消息。
      */
-    val imageUri: String? = null
+    val imageUri: String? = null,
+    /**
+     * 工具轮正文段边界（合并模式消息专用）：合并模式把多轮工具循环的正文拼成一条消息，
+     * 本字段记录每个工具轮结束时的正文长度（字符偏移），供 UI 把工具痕迹插入正文流
+     * 的对应位置（正文段 → 工具痕迹 → 正文段，与流式输出一致）。
+     * - 空列表 = 普通消息（不拆分渲染）；
+     * - 只写入合并消息，旧数据无此字段自动兼容。
+     */
+    val toolSegmentEnds: List<Int> = emptyList(),
+    /**
+     * DeepSeek 思考原文（reasoning_content，流式期间累积后固化）。
+     *
+     * DeepSeek 官方约束：携带 tools 的思考模式请求，历史中 assistant 消息必须在
+     * 后续所有轮次原样回传 reasoning_content（字段缺失即 400「思考内容需要回传」）。
+     * - 不展示（思考展示由提示词引导的【思考】标记负责）、不参与压缩、不导出；
+     * - 仅在「请求携带 tools + DeepSeek 模型 + 本消息为请求方自己的发言」时回传，
+     *   避免把字段挂在群聊里其他成员的发言上引发新的 400；
+     * - 旧数据无此字段自动兼容（空串 = 未知，回传时按空串占位，官方校验字段存在性）。
+     */
+    val reasoningContent: String = "",
+    /**
+     * 本轮会话创建/更改的文件路径（Agent 模式撤回追踪，1.6.0）。
+     * - 记录该条 AI 消息对应的一轮用户指令中，AI 通过工具创建的文件/目录路径
+     *   （create_file / mkdir / copy_file / move_file / rename_file 的目标）；
+     * - 撤回该轮时按此清单删除创建物；更改项（写入既有文件、应用状态）见 [changedItems]；
+     * - 导出时不携带（文件在设备存储上，路径不可迁移），导入后撤回只问「确认撤回？」。
+     */
+    val createdPaths: List<String> = emptyList(),
+    /**
+     * 本轮会话更改的项目摘要（Agent 模式撤回提示，1.6.0）。
+     * - 如「写入 /sdcard/x.txt」「修改 com.xxx 权限（不可自动恢复）」；
+     * - 撤回确认弹窗中与 [createdPaths] 一起展示，提示用户本轮影响范围；
+     * - 仅展示提示，不参与删除。
+     */
+    val changedItems: List<String> = emptyList(),
+    /**
+     * 工具调用历史（持久化到消息）：生成结束后把本轮的 [com.quiddity.app.ui.chat.ToolTrace]
+     * 固化进消息，之后重新打开会话仍能看到工具调用记录（段间渲染，与正文分界）。
+     * - 空列表 = 无工具调用；
+     * - 旧数据无此字段自动兼容。
+     */
+    val toolTraces: List<MessageToolTrace> = emptyList()
+)
+
+/**
+ * 消息内持久化的工具调用记录（与 [Message.toolTraces] 配套）。
+ */
+@Serializable
+data class MessageToolTrace(
+    val name: String,
+    val ok: Boolean,
+    val summary: String?
 )
 
 /**
@@ -442,7 +506,7 @@ data class AppSettings(
      * - true = AI 输出按句末标点 / 括号切成多条消息（像人一样分多条发送）
      * - false = 整条回复作为单条消息
      */
-    val multilineAutoSplit: Boolean = true,
+    val multilineAutoSplit: Boolean = false,
     val enterToSend: Boolean = true,
     val activeCatalogId: String? = null,
     val catalog: List<ApiCatalogEntry> = emptyList(),
@@ -489,17 +553,6 @@ data class AppSettings(
      */
     val listWallpaperDarken: Float = QuiddityConstants.DEFAULT_WALLPAPER_DARKEN,
     /**
-     * - true = 根据 AI 输出字数延迟显示，营造真人打字感
-     * - 每个字符延迟 [typingDelayMsPerChar] 毫秒
-     * - 默认 [QuiddityConstants.DEFAULT_TYPING_DELAY_ENABLED]
-     */
-    val typingDelayEnabled: Boolean = QuiddityConstants.DEFAULT_TYPING_DELAY_ENABLED,
-    /**
-     * - 范围 [QuiddityConstants.MIN_TYPING_DELAY_MS_PER_CHAR] - [QuiddityConstants.MAX_TYPING_DELAY_MS_PER_CHAR]
-     * - 默认 [QuiddityConstants.DEFAULT_TYPING_DELAY_MS_PER_CHAR]（20ms）
-     */
-    val typingDelayMsPerChar: Int = QuiddityConstants.DEFAULT_TYPING_DELAY_MS_PER_CHAR,
-    /**
      * - true = 发送消息后等待 [sendDelaySeconds] 秒再发出 API 请求
      * - 若等待期间输入框仍不为空，暂停请求直到输入框清空
      * - 可有效节省 Token 消耗（用户连续输入时合并请求）
@@ -544,13 +597,27 @@ data class AppSettings(
      */
     val groupTutorialSeen: Boolean = false,
     /**
+     * Agent 教程弹窗是否已看过（首次进入 Agent 模式列表页弹一次）。
+     */
+    val agentTutorialSeen: Boolean = false,
+    /**
      * 私聊默认名计数器：新会话 1、2、3…，删除不补号（方案二.4）。
      */
     val soloChatCounter: Int = 0,
     /**
      * 群聊默认名计数器：新群聊 1、2、3…，删除不补号（方案二.4）。
      */
-    val groupChatCounter: Int = 0
+    val groupChatCounter: Int = 0,
+    /**
+     * 回复悬浮窗总开关（需系统悬浮窗权限）。
+     * - true = 应用不可见且 AI 回复时显示悬浮窗头像/气泡
+     * - false = 关闭（默认）
+     */
+    val overlayEnabled: Boolean = false,
+    /**
+     * 悬浮窗头像 URI（null = 默认应用图标）。
+     */
+    val overlayAvatarUri: String? = null
 ) {
     companion object {
         val Default = AppSettings()
@@ -626,7 +693,15 @@ data class ExportPayload(
      * 资产节（schema v2）：壁纸 / 头像 Base64 内嵌。
      * v1 文件为 null（资产平铺在顶层字段）。
      */
-    val assets: ExportAssets? = null
+    val assets: ExportAssets? = null,
+    /**
+     * Agent 模式设置（1.6.0 架构重整）：工具开关、黑名单、权限管控、审计日志。
+     * - 旧备份文件为 null（不导入 Agent 设置，保持本机现状）；
+     * - 审计日志随备份导出/导入（执行结果、日期、时间、工具名称）；
+     * - 注意：消息中的撤回追踪字段（createdPaths / changedItems）**不随导出携带**——
+     *   创建物位于设备存储上，无法随备份迁移；导入后撤回只问「确认撤回？」。
+     */
+    val agentSettings: com.quiddity.app.data.local.AgentSettings? = null
 ) {
     companion object {
         const val SCHEMA_VERSION_1 = 1
@@ -638,7 +713,7 @@ data class ExportPayload(
 }
 
 /**
- * 人设卡导出（仅 Persona + UserPersona + Scene + Memory）。
+ * 角色卡导出（覆盖「人设」一栏全部设置：Persona + UserPersona + Scene + Memory + 快速设定内容）。
  */
 @Serializable
 data class PersonaCard(
@@ -647,5 +722,6 @@ data class PersonaCard(
     val persona: Persona,
     val userPersona: UserPersona,
     val scene: String,
-    val memory: String
+    val memory: String,
+    val quickSetupDraft: String = ""
 )

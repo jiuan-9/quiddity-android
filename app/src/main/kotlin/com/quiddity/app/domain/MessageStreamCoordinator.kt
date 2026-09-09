@@ -46,11 +46,18 @@ interface StreamCoordinator {
     }
 
     fun accept(delta: String): List<Signal>
+    /** 追加一段应用内思考（如工具系列使用后的评估），附着到下一条新建消息。 */
+    fun appendThinking(extra: String)
     /**
-     * 接收 DeepSeek 思考内容增量（reasoning_content）。
-     * 思考内容单独成一条 isThinking 消息，普通内容开始或流结束时自动完成。
+     * 设置合并模式：为 true 时后续正文追加到上一条已发消息（工具轮之间正文单条化）。
+     * 默认实现为空操作，各实现按需覆盖。
      */
-    fun acceptReasoning(delta: String): List<Signal>
+    fun setMergeWithPrevious(merge: Boolean) = Unit
+    /**
+     * 标记当前合并正文的段边界（工具轮结束处），供 UI 把工具痕迹插入正文流对应位置。
+     * 默认实现为空操作，各实现按需覆盖。
+     */
+    fun markSegmentEnd() = Unit
     fun finalize(): List<Signal>
     fun snapshot(): List<Message>
 }
@@ -119,11 +126,10 @@ class MessageStreamCoordinator(
     private val splitEnabled: Boolean = true,
     private val startTimestamp: Long = System.currentTimeMillis(),
     /**
-     * 内部思考模式（提示词方式）：要求模型输出「【思考】...【回答】...」，
-     * 客户端把【思考】段拆成独立思考消息，【回答】段作为正式回复。
-     * 任意模型可用，不依赖服务端 reasoning_content 字段。
+     * 应用内本地思考内容（客户端生成）：附着在首条回复消息上，
+     * 界面在气泡内以可展开/收起的方式展示，不发送给模型。
      */
-    private val internalThinking: Boolean = false,
+    private val thinking: String = "",
     /**
      * 发言人会话 id（群聊消息从创建起带发言人，2.0.0 使用）。
      * 私聊为 null（默认值，向后兼容）。
@@ -134,6 +140,10 @@ class MessageStreamCoordinator(
     private val buffer = StringBuilder()
     private val completed: MutableList<Message> = mutableListOf()
     private val knownIds: MutableSet<String> = LinkedHashSet()
+    /** 待附着到下一条新建消息上的思考文本（可被工具系列后的思考追加）。 */
+    private var pendingThinking: String = thinking
+    /** 思考应附着的消息索引（null = 不附着；赋值后该索引消息持续携带）。 */
+    private var thinkingForIndex: Int? = if (thinking.isNotBlank()) 0 else null
     /**
      * 已完整闭合但尚未发出的括号段：`(预占索引, 文本)`。
      * 预占索引保证与后续流式消息的 id 不冲突。
@@ -141,111 +151,125 @@ class MessageStreamCoordinator(
     private val pendingBrackets = mutableListOf<Pair<Int, String>>()
     private var currentIndex = 0
     private var currentStartTs = startTimestamp
-    // ===== 思考消息（DeepSeek reasoning_content）状态 =====
-    private val thinkingBuffer = StringBuilder()
-    private var thinkingIndex = 0
-    private var thinkingEmitted = false
-    private var thinkingStartTs = 0L
-    private var contentStarted = false
     /** 流末尾可能独立补发的 "0" 结束标记：先暂存，后续仍有内容则补回正文，流结束则丢弃。 */
     private var pendingZeroArtifact: String? = null
+    /** 是否处于【思考】段内（提示词引导的模型思考，客户端按标记拆分展示）。 */
+    private var inThinkingMarker = false
+    /** 当前思考段已累积的文本（未闭合前不进入正文 buffer）。 */
+    private val thinkingChunk = StringBuilder()
+    /** 跨 delta 保留的尾部（可能是【思考】/【回答】标记的开头，等待下一个分片补全）。 */
+    private var markerTail = ""
 
-    override fun acceptReasoning(delta: String): List<StreamCoordinator.Signal> {
-        if (delta.isEmpty()) return emptyList()
-        // 思考内容只出现在普通内容之前；内容开始后的异常 reasoning 直接忽略
-        if (contentStarted) return emptyList()
-        val signals = mutableListOf<StreamCoordinator.Signal>()
-        thinkingBuffer.append(delta)
-        if (!thinkingEmitted) {
-            thinkingEmitted = true
-            thinkingStartTs = System.currentTimeMillis()
-            val msg = buildThinkingMessage(streaming = true)
-            knownIds.add(msg.id)
-            signals += StreamCoordinator.Signal.New(msg)
-        } else {
-            signals += StreamCoordinator.Signal.Update(buildThinkingMessage(streaming = true))
+    /** 追加一段思考（如工具系列使用后的第一人称评估），附着到下一条新建消息。 */
+    override fun appendThinking(extra: String) {
+        if (extra.isBlank()) return
+        // 合并模式下没有"下一条新建消息"：思考直接挂到已合并的消息上
+        if (mergeWithPrevious && completed.isNotEmpty()) {
+            val lastIdx = completed.lastIndex
+            val merged = completed[lastIdx].copy(
+                thinking = if (completed[lastIdx].thinking.isBlank()) extra
+                else completed[lastIdx].thinking + "\n" + extra
+            )
+            completed[lastIdx] = merged
+            return
         }
-        // 思考内容硬上限保护：超限即完成当前思考消息（防 OOM）
-        if (thinkingBuffer.length >= hardCharLimit()) {
-            signals += completeThinking()
-        }
-        return signals
+        pendingThinking = if (pendingThinking.isBlank()) extra else "$pendingThinking\n$extra"
+        thinkingForIndex = currentIndex
+    }
+
+    /**
+     * 合并模式：为 true 时新正文（流式与完成段）追加到上一条已发消息。
+     * Agent 多轮工具循环中每轮模型输出的正文合并为一条消息，避免拆成多条。
+     */
+    private var mergeWithPrevious = false
+
+    /** 设置合并模式（工具轮之后的轮次正文合并到上一条消息）。 */
+    override fun setMergeWithPrevious(merge: Boolean) {
+        mergeWithPrevious = merge
+    }
+
+    /** 记录当前已合并正文的段边界（每个工具轮结束处），供 UI 把工具痕迹插入正文流对应位置。 */
+    override fun markSegmentEnd() {
+        if (completed.isEmpty()) return
+        val lastIdx = completed.lastIndex
+        val last = completed[lastIdx]
+        val boundary = last.content.length
+        if (last.toolSegmentEnds.lastOrNull() == boundary) return
+        completed[lastIdx] = last.copy(toolSegmentEnds = last.toolSegmentEnds + boundary)
     }
 
     override fun accept(delta: String): List<StreamCoordinator.Signal> {
         if (delta.isEmpty()) return emptyList()
+        val signals = mutableListOf<StreamCoordinator.Signal>()
+        val combined = markerTail + delta
+        markerTail = ""
+        var cursor = 0
+        while (cursor < combined.length) {
+            if (!inThinkingMarker) {
+                val idx = combined.indexOf(THINK_OPEN, cursor)
+                if (idx < 0) {
+                    val keep = markerPrefixTailLen(combined, cursor, THINK_OPEN)
+                    val end = combined.length - keep
+                    if (end > cursor) {
+                        signals += acceptContent(combined.substring(cursor, end))
+                    }
+                    markerTail = combined.substring(end)
+                    cursor = combined.length
+                } else {
+                    if (idx > cursor) {
+                        signals += acceptContent(combined.substring(cursor, idx))
+                    }
+                    cursor = idx + THINK_OPEN.length
+                    inThinkingMarker = true
+                    thinkingChunk.clear()
+                }
+            } else {
+                val idx = combined.indexOf(THINK_CLOSE, cursor)
+                if (idx < 0) {
+                    val keep = markerPrefixTailLen(combined, cursor, THINK_CLOSE)
+                    val end = combined.length - keep
+                    if (end > cursor) {
+                        thinkingChunk.append(combined.substring(cursor, end))
+                    }
+                    markerTail = combined.substring(end)
+                    cursor = combined.length
+                } else {
+                    if (idx > cursor) {
+                        thinkingChunk.append(combined.substring(cursor, idx))
+                    }
+                    cursor = idx + THINK_CLOSE.length
+                    inThinkingMarker = false
+                    if (thinkingChunk.isNotBlank()) {
+                        appendThinking(thinkingChunk.toString().trim())
+                        thinkingChunk.clear()
+                    }
+                }
+            }
+        }
+        return signals
+    }
+
+    /**
+     * 正文段进入原有切分逻辑（句末标点 + 括号切分，含 "0" 结束标记暂存）。
+     * 与旧 [accept] 主体行为完全一致。
+     */
+    private fun acceptContent(delta: String): List<StreamCoordinator.Signal> {
         // 上一块若是暂存的独立 "0"，说明它并非结束标记（后续还有内容），先补回正文
         pendingZeroArtifact?.let { pending ->
             pendingZeroArtifact = null
             buffer.append(pending)
         }
         val signals = mutableListOf<StreamCoordinator.Signal>()
-        if (internalThinking && !contentStarted) {
-            // 内部思考：正式回答（【回答】标记）出现前，所有内容视为思考
-            thinkingBuffer.append(delta)
-            val accumulated = thinkingBuffer.toString()
-            val answerMarker = "【回答】"
-            val answerIdx = accumulated.indexOf(answerMarker)
-            if (answerIdx < 0) {
-                val stripped = stripThinkingMarker(accumulated)
-                if (accumulated.isNotEmpty() && stripped.isEmpty()) {
-                    // 仍是【思考】标记前缀（跨 delta 未完整）：继续累积，不发出
-                    return signals
-                }
-                thinkingBuffer.setLength(0)
-                thinkingBuffer.append(stripped)
-                if (thinkingBuffer.isNotEmpty()) {
-                    thinkingEmitted = true
-                    if (thinkingStartTs == 0L) thinkingStartTs = System.currentTimeMillis()
-                    val msg = buildThinkingMessage(streaming = true)
-                    if (knownIds.add(msg.id)) {
-                        signals += StreamCoordinator.Signal.New(msg)
-                    } else {
-                        signals += StreamCoordinator.Signal.Update(msg)
-                    }
-                }
-                // 思考内容过长仍无【回答】：强制切分，避免无限累积
-                if (thinkingBuffer.length >= hardCharLimit()) {
-                    signals += completeThinking()
-                    contentStarted = true
-                }
-                return signals
-            }
-            // 找到【回答】：思考段完成，剩余内容进入正式回复 buffer
-            val thinkPart = accumulated.substring(0, answerIdx)
-            val rest = accumulated.substring(answerIdx + answerMarker.length)
-            thinkingBuffer.setLength(0)
-            val thinkContent = stripThinkingMarker(thinkPart).trim()
-            if (thinkContent.isNotEmpty()) {
-                thinkingBuffer.append(thinkContent)
-                thinkingEmitted = true
-                if (thinkingStartTs == 0L) thinkingStartTs = System.currentTimeMillis()
-                signals += completeThinking()
-            } else {
-                // 模型直接回答（未输出思考内容）
-                thinkingEmitted = false
-                thinkingBuffer.clear()
-            }
-            contentStarted = true
-            buffer.append(rest)
+        // 独立内容块 "0" 且前面已有正文：按"结束标记"暂存，等待后续内容或流结束判定
+        if (delta == "0" && buffer.isNotBlank()) {
+            pendingZeroArtifact = delta
         } else {
-            // 普通内容已开始：此后的 reasoning 一律忽略（思考只出现在回复之前）
-            contentStarted = true
-            // 普通内容开始：先完成尚未收尾的思考消息（思考单独占一条消息）
-            if (thinkingEmitted || thinkingBuffer.isNotEmpty()) {
-                signals += completeThinking()
-            }
-            // 独立内容块 "0" 且前面已有正文：按"结束标记"暂存，等待后续内容或流结束判定
-            if (delta == "0" && buffer.isNotBlank()) {
-                pendingZeroArtifact = delta
-            } else {
-                buffer.append(delta)
-            }
+            buffer.append(delta)
         }
 
         // 循环切分：一次 delta 可能包含多个切分点，全部切出
         while (true) {
-            val seg = findNextCompleteSegment()
+            val seg = findNextCompleteSegment(buffer)
             if (seg != null) {
                 // 从 buffer 移除已消费部分
                 consumeFromBuffer(seg.consumeEnd)
@@ -255,10 +279,23 @@ class MessageStreamCoordinator(
                         pendingBrackets += currentIndex to seg.text
                         currentIndex++
                     } else {
-                        flushPendingBrackets(signals)
-                        emitCompleted(signals, seg.text)
+                        // 连续近重复消息去重：模型偶发把同一句台词输出两遍
+                        // （如「（动作）台词。台词」），第二条直接消费不发，避免两条同时加载
+                        if (!isDuplicateOfLast(seg.text)) {
+                            if (pendingBrackets.isNotEmpty() && !mergeWithPrevious) {
+                                // 动作括号 + 紧随其后的台词合并为一条消息：
+                                // 根因修复「（动作）台词」被拆成两条同时弹出 / 只弹动作的体验问题
+                                emitBracketMergedContent(signals, seg.text)
+                            } else {
+                                flushPendingBrackets(signals)
+                                emitCompleted(signals, seg.text)
+                            }
+                        }
                     }
                 }
+                // 每次调用最多完成一条消息：剩余内容留到下一个 delta / finalize，
+                // 避免「第一句。第二句。」在同一个网络分片里两条消息同时加载
+                if (signals.any { it is StreamCoordinator.Signal.Complete }) break
                 continue
             }
             // 无完整切分点：硬上限保护，强制切分防 OOM
@@ -268,15 +305,38 @@ class MessageStreamCoordinator(
                 if (forced.isNotEmpty()) {
                     flushPendingBrackets(signals)
                     emitCompleted(signals, forced)
+                    if (signals.any { it is StreamCoordinator.Signal.Complete }) break
                 }
                 continue
             }
             break
         }
 
-        // 单条更新（当前 buffer 内容）：buffer 为空白时不发出（避免空消息/纯空白气泡）
-        if (buffer.isNotBlank()) {
-            val current = buildMessage(streaming = true)
+        // 单条更新（当前 buffer 内容）：buffer 为空白时不发出（避免空消息/纯空白气泡）。
+        // 本批已发出完成消息时不再发流式 New：同一网络分片只完成一条消息，
+        // 下一句等下一个 delta 到达（或 finalize 收尾）再开始，保证同一时刻
+        // 只有一条消息处于流式输入中——避免「两条同时出现 + 多光标闪烁」。
+        if (buffer.isNotBlank() && signals.none { it is StreamCoordinator.Signal.Complete } &&
+            (mergeWithPrevious || pendingBrackets.isEmpty()) &&
+            !(!mergeWithPrevious && isDuplicateOfLast(buffer.toString())) &&
+            // 独立的「0」结束标记不流式发出（收尾会丢弃；提前发出会留下半截孤儿消息）
+            !(buffer.toString().trim() == "0" && completed.isNotEmpty())
+        ) {
+            val current = if (mergeWithPrevious && completed.isNotEmpty()) {
+                // 合并模式：已发段落（completed 内容）+ 当前 buffer 拼装为流式内容。
+                // 关键：只发 Update 信号、不写回 completed——写回会导致后续 delta
+                // 把已含 buffer 的内容再叠加一遍（内容重复累积）。
+                // 已发段落由 emitCompleted / finalize 真正追加进 completed。
+                val lastIdx = completed.lastIndex
+                val mergedContent = completed[lastIdx].content + buffer.toString()
+                completed[lastIdx].copy(
+                    content = mergedContent,
+                    tokenCount = TokenEstimator.estimate(mergedContent),
+                    isStreaming = true
+                )
+            } else {
+                buildMessage(streaming = true)
+            }
             if (knownIds.add(current.id)) {
                 signals += StreamCoordinator.Signal.New(current)
             } else {
@@ -287,18 +347,78 @@ class MessageStreamCoordinator(
         return signals
     }
 
+    /**
+     * 把延迟的括号段与紧随其后的正文合并为一条消息发出。
+     *
+     * 使用首个括号段的预占索引：若半截括号已以流式消息发出（knownIds 已登记），
+     * 此处走 Update 补全，不会残留半截消息；否则 New + Complete 一次成型。
+     */
+    private fun emitBracketMergedContent(
+        signals: MutableList<StreamCoordinator.Signal>,
+        content: String
+    ) {
+        val firstReservedIndex = pendingBrackets.first().first
+        val trailing = pendingBrackets.joinToString("") { it.second }
+        pendingBrackets.clear()
+        val mergedText = trailing + content
+        if (isDuplicateOfLast(mergedText)) return
+        val finalMsg = buildMessageFromContentAt(firstReservedIndex, mergedText, streaming = false)
+        if (knownIds.add(finalMsg.id)) {
+            signals += StreamCoordinator.Signal.New(finalMsg)
+        } else {
+            signals += StreamCoordinator.Signal.Update(finalMsg)
+        }
+        signals += StreamCoordinator.Signal.Complete(finalMsg)
+        completed += finalMsg
+        currentStartTs = System.currentTimeMillis()
+    }
+
+    /**
+     * 计算 [text] 从 [start] 到末尾中，与 [marker] 开头匹配的最大保留长度
+     * （0 ～ marker.length-1）。用于跨 delta 分片识别【思考】/【回答】标记：
+     * 尾部恰好是标记前缀时留到下一个分片，避免把半个标记当正文输出。
+     */
+    private fun markerPrefixTailLen(text: String, start: Int, marker: String): Int {
+        val remain = text.length - start
+        if (remain <= 0) return 0
+        val maxKeep = minOf(remain, marker.length - 1)
+        for (keep in maxKeep downTo 1) {
+            val tail = text.substring(text.length - keep)
+            if (marker.startsWith(tail)) return keep
+        }
+        return 0
+    }
+
     override fun finalize(): List<StreamCoordinator.Signal> {
         val signals = mutableListOf<StreamCoordinator.Signal>()
-        if (internalThinking && !contentStarted) {
-            // 模型未按格式输出【回答】：把已累积内容作为正式回复（不拆分思考）
-            val full = stripThinkingMarker(thinkingBuffer.toString()).trim()
-            thinkingBuffer.setLength(0)
-            if (full.isNotEmpty()) buffer.append(full)
-            thinkingEmitted = false
-            contentStarted = true
+        // 流结束时仍未闭合的思考段：
+        // - 已有正文 → 附着到 pendingThinking（思考正常展示）；
+        // - 无任何正文 → 视为模型未输出【回答】标记，思考内容转正文，避免整段丢失。
+        if (inThinkingMarker && thinkingChunk.isNotBlank()) {
+            val leftover = thinkingChunk.toString().trim()
+            thinkingChunk.clear()
+            if (buffer.isBlank() && completed.isEmpty()) {
+                buffer.append(leftover)
+            } else {
+                appendThinking(leftover)
+            }
         }
-        // 流结束时思考消息仍未收尾：完成它（思考单独占一条消息）
-        signals += completeThinking()
+        // 跨分片保留的标记尾部在流结束时已无后续：按当前模式收尾
+        if (markerTail.isNotEmpty()) {
+            if (inThinkingMarker) {
+                thinkingChunk.append(markerTail)
+                val leftover = thinkingChunk.toString().trim()
+                thinkingChunk.clear()
+                if (buffer.isBlank() && completed.isEmpty()) {
+                    buffer.append(leftover)
+                } else {
+                    appendThinking(leftover)
+                }
+            } else {
+                signals += acceptContent(markerTail)
+            }
+            markerTail = ""
+        }
         // 流结束时仍有滞留括号段：合并进最后一条已发消息（或作为整条回复发出），
         // 根因修复——不再留下"只有动作没有下文"的悬空气泡。
         if (pendingBrackets.isNotEmpty()) {
@@ -308,7 +428,25 @@ class MessageStreamCoordinator(
             val trailing = pendingBrackets.joinToString("") { it.second }
             pendingBrackets.clear()
             when {
-                buffer.isNotBlank() -> buffer.append(trailing)
+                buffer.isNotBlank() -> {
+                    // 括号 + 剩余正文合成一条消息（括号在前），并清空 buffer，
+                    // 避免流式半句与合并结果同时存在造成重复消息
+                    val mergedText = trailing + buffer.toString()
+                    buffer.setLength(0)
+                    val finalMsg = buildMessageFromContentAt(
+                        firstReservedIndex,
+                        mergedText,
+                        streaming = false
+                    )
+                    if (knownIds.add(finalMsg.id)) {
+                        signals += StreamCoordinator.Signal.New(finalMsg)
+                    } else {
+                        signals += StreamCoordinator.Signal.Update(finalMsg)
+                    }
+                    signals += StreamCoordinator.Signal.Complete(finalMsg)
+                    completed += finalMsg
+                    currentIndex = firstReservedIndex + 1
+                }
                 completed.isNotEmpty() -> {
                     val lastIdx = completed.lastIndex
                     val mergedContent = completed[lastIdx].content + trailing
@@ -318,6 +456,17 @@ class MessageStreamCoordinator(
                     )
                     completed[lastIdx] = merged
                     signals += StreamCoordinator.Signal.Update(merged)
+                    // 半截括号曾以流式消息发出（id 已登记）时，必须同步移除该残留消息：
+                    // 否则界面会留下「完整消息 + 半截括号」两条 AI 消息（同时说两条）。
+                    // 空内容 Complete 由事件层识别为删除标记，直接移除该条消息。
+                    val halfId = buildMessageFromContentAt(
+                        firstReservedIndex, trailing, streaming = false
+                    ).id
+                    if (halfId in knownIds) {
+                        val blank = merged.copy(id = halfId, content = "")
+                        signals += StreamCoordinator.Signal.Update(blank)
+                        signals += StreamCoordinator.Signal.Complete(blank)
+                    }
                 }
                 else -> {
                     // 整条回复只有括号段：用首个预留索引产出最终消息。
@@ -357,14 +506,53 @@ class MessageStreamCoordinator(
         buffer.setLength(0)
         buffer.append(cleaned)
         if (buffer.isBlank()) return signals
+        // 收尾不再按句子批量切分：剩余 buffer 作为当前消息的最终内容一次性完成。
+        // 多句在同批到达时逐句切分发生在流式 accept 阶段（每个 delta 只完成一条），
+        // 收尾批量切分会把整段尾巴同时弹出（两条消息同框出现）。
         val finalMsg = buildMessage(streaming = false)
-        if (finalMsg.id in knownIds) {
+        // 收尾残留若与最后一条已发消息近重复（模型复述）：
+        // - 尚未以流式消息发出（id 未登记）→ 直接丢弃，不产生任何消息；
+        // - 已以流式消息发出（跨多分片才拼成完整重复）→ 派发「空内容 Update +
+        //   Complete」删除标记，由事件层把该条流式消息移除，避免留下永远
+        //   streaming 的半截消息，也不保留重复正文
+        if (isDuplicateOfLast(cleaned)) {
+            android.util.Log.i(
+                "QuiddityDedup",
+                "finalize duplicate cleaned=$cleaned known=${finalMsg.id in knownIds} last=${completed.lastOrNull()?.content}"
+            )
+            if (finalMsg.id !in knownIds) {
+                buffer.clear()
+                return signals
+            }
+            val blank = finalMsg.copy(content = "")
+            signals += StreamCoordinator.Signal.Update(blank)
+            signals += StreamCoordinator.Signal.Complete(blank)
+            buffer.clear()
+            return signals
+        }
+        val merged = mergeWithPrevious && completed.isNotEmpty()
+        if (merged) {
+            // 合并模式：收尾正文追加到上一条已发消息
+            val lastIdx = completed.lastIndex
+            val mergedContent = completed[lastIdx].content + finalMsg.content
+            completed[lastIdx] = completed[lastIdx].copy(
+                content = mergedContent,
+                tokenCount = TokenEstimator.estimate(mergedContent),
+                isStreaming = false
+            )
+            signals += StreamCoordinator.Signal.Update(completed[lastIdx])
+        } else if (finalMsg.id in knownIds) {
             signals += StreamCoordinator.Signal.Complete(finalMsg)
+            // 快照登记：合并模式下没有可合并的上一条消息（如工具轮无正文）时，
+            // 最终消息同样必须进入 completed——否则快照为空、完整正文被误判为空回复
+            completed += finalMsg
+            currentIndex++
         } else {
             signals += StreamCoordinator.Signal.New(finalMsg)
             signals += StreamCoordinator.Signal.Complete(finalMsg)
+            completed += finalMsg
+            currentIndex++
         }
-        completed += finalMsg
         buffer.clear()
         return signals
     }
@@ -386,10 +574,6 @@ class MessageStreamCoordinator(
 
     override fun snapshot(): List<Message> {
         val out = completed.toMutableList()
-        // 尚未完成的思考消息计入快照（与最终发出时一致）
-        if (thinkingEmitted || thinkingBuffer.isNotBlank()) {
-            out += buildThinkingMessage(streaming = thinkingEmitted)
-        }
         // 尚未被后续内容触发的括号段也计入快照（索引已预占，与最终发出时一致）
         pendingBrackets.forEach { (idx, text) ->
             out += buildMessageFromContentAt(idx, text, streaming = false)
@@ -406,14 +590,25 @@ class MessageStreamCoordinator(
      */
     private fun flushPendingBrackets(signals: MutableList<StreamCoordinator.Signal>) {
         pendingBrackets.forEach { (idx, text) ->
-            val completedMsg = buildMessageFromContentAt(idx, text, streaming = false)
-            if (knownIds.add(completedMsg.id)) {
-                signals += StreamCoordinator.Signal.New(completedMsg)
+            if (mergeWithPrevious && completed.isNotEmpty()) {
+                // 合并模式：括号段同样并入已合并消息
+                val lastIdx = completed.lastIndex
+                val mergedContent = completed[lastIdx].content + text
+                completed[lastIdx] = completed[lastIdx].copy(
+                    content = mergedContent,
+                    tokenCount = TokenEstimator.estimate(mergedContent)
+                )
+                signals += StreamCoordinator.Signal.Update(completed[lastIdx])
             } else {
-                signals += StreamCoordinator.Signal.Update(completedMsg)
+                val completedMsg = buildMessageFromContentAt(idx, text, streaming = false)
+                if (knownIds.add(completedMsg.id)) {
+                    signals += StreamCoordinator.Signal.New(completedMsg)
+                } else {
+                    signals += StreamCoordinator.Signal.Update(completedMsg)
+                }
+                signals += StreamCoordinator.Signal.Complete(completedMsg)
+                completed += completedMsg
             }
-            signals += StreamCoordinator.Signal.Complete(completedMsg)
-            completed += completedMsg
             currentStartTs = System.currentTimeMillis()
         }
         pendingBrackets.clear()
@@ -423,6 +618,20 @@ class MessageStreamCoordinator(
      * 用当前索引发出完成消息并推进索引。
      */
     private fun emitCompleted(signals: MutableList<StreamCoordinator.Signal>, text: String) {
+        if (!mergeWithPrevious && isDuplicateOfLast(text)) return
+        if (mergeWithPrevious && completed.isNotEmpty()) {
+            // 合并模式：追加到上一条已发消息（工具轮之间正文单条化，原地 Update）
+            val lastIdx = completed.lastIndex
+            val mergedContent = completed[lastIdx].content + text
+            val merged = completed[lastIdx].copy(
+                content = mergedContent,
+                tokenCount = TokenEstimator.estimate(mergedContent),
+                isStreaming = false
+            )
+            completed[lastIdx] = merged
+            signals += StreamCoordinator.Signal.Update(merged)
+            return
+        }
         val completedMsg = buildMessageFromContentAt(currentIndex, text, streaming = false)
         currentIndex++
         if (knownIds.add(completedMsg.id)) {
@@ -442,9 +651,8 @@ class MessageStreamCoordinator(
      *
      * @return [Segment] 或 null（buffer 中尚无完整段落，等待更多 delta）
      */
-    private fun findNextCompleteSegment(): Segment? {
-        if (!splitEnabled || buffer.isBlank()) return null
-        val text = buffer
+    private fun findNextCompleteSegment(text: CharSequence): Segment? {
+        if (!splitEnabled || text.isBlank()) return null
         val quoteStack = ArrayDeque<QuoteFrame>()
         var i = 0
         while (i < text.length) {
@@ -570,6 +778,16 @@ class MessageStreamCoordinator(
                 val hasContent = seg.any { c -> !c.isWhitespace() && !isSentenceEnder(c) }
                 return Segment(text = seg, consumeEnd = end, emit = hasContent)
             } else {
+                // 换行是天然的消息边界（多消息切分）；「说话人：」后的换行除外
+                if (ch == '\n') {
+                    var p = i - 1
+                    while (p >= 0 && text[p].isWhitespace()) p--
+                    val speakerPrefix = p >= 0 && (text[p] == '：' || text[p] == ':')
+                    if (!speakerPrefix) {
+                        val seg = text.subSequence(0, i).toString().trim()
+                        return Segment(text = seg, consumeEnd = i + 1, emit = seg.isNotBlank())
+                    }
+                }
                 i++
             }
         }
@@ -695,6 +913,16 @@ class MessageStreamCoordinator(
 
     // ==================== 内部 ====================
 
+    /**
+     * 连续消息近重复判定：上一条已发消息与待发内容去掉括号/标点/空白后相同，
+     * 或上一条整体等于「动作括号 + 待发内容」时视为模型复述，丢弃待发内容。
+     */
+    private fun isDuplicateOfLast(content: String): Boolean {
+        val last = completed.lastOrNull()?.content?.trim().orEmpty()
+        if (last.isEmpty()) return false
+        return com.quiddity.app.data.repo.isNearDuplicateContent(last, content)
+    }
+
     private fun hardCharLimit(): Long {
         return (singleMessageTokens.toLong() * HARD_LIMIT_MULTIPLIER * CHARS_PER_TOKEN)
             .coerceAtMost(MAX_HARD_LIMIT_CHARS.toLong())
@@ -710,55 +938,10 @@ class MessageStreamCoordinator(
         timestamp = currentStartTs,
         tokenCount = TokenEstimator.estimate(buffer.toString()),
         isStreaming = streaming,
+        // 本地思考附着到指定索引的消息上（首条或工具系列后追加），随消息一起持久化
+        thinking = if (thinkingForIndex == currentIndex) pendingThinking else "",
         senderId = senderId
     )
-
-    private fun buildThinkingMessage(streaming: Boolean): Message = Message(
-        id = "${conversationId}_${runId}_think_$thinkingIndex",
-        conversationId = conversationId,
-        role = com.quiddity.app.data.model.Role.ASSISTANT,
-        content = thinkingBuffer.toString(),
-        timestamp = if (thinkingStartTs > 0L) thinkingStartTs else startTimestamp,
-        tokenCount = TokenEstimator.estimate(thinkingBuffer.toString()),
-        isStreaming = streaming,
-        isThinking = true,
-        senderId = senderId
-    )
-
-    /**
-     * 剥离内部思考的「【思考】」标记（支持跨 delta 的前缀累积）。
-     * - 文本以完整标记开头 → 去掉标记；
-     * - 文本是标记的不完整前缀（如「【思」）→ 返回空串（继续累积）；
-     * - 其他情况原样返回。
-     */
-    private fun stripThinkingMarker(text: String): String {
-        val marker = "【思考】"
-        if (text.startsWith(marker)) return text.removePrefix(marker)
-        if (marker.startsWith(text)) return ""
-        return text
-    }
-
-    /**
-     * 完成当前思考消息：发出 New/Complete（或对已流式消息 Update+Complete），
-     * 重置思考状态并推进思考索引。
-     */
-    private fun completeThinking(): List<StreamCoordinator.Signal> {
-        if (!thinkingEmitted && thinkingBuffer.isEmpty()) return emptyList()
-        val signals = mutableListOf<StreamCoordinator.Signal>()
-        val completedMsg = buildThinkingMessage(streaming = false)
-        if (knownIds.add(completedMsg.id)) {
-            signals += StreamCoordinator.Signal.New(completedMsg)
-        } else {
-            signals += StreamCoordinator.Signal.Update(completedMsg)
-        }
-        signals += StreamCoordinator.Signal.Complete(completedMsg)
-        completed += completedMsg
-        thinkingEmitted = false
-        thinkingBuffer.clear()
-        thinkingIndex++
-        thinkingStartTs = 0L
-        return signals
-    }
 
     /**
      * 用指定索引与内容构建完成消息（括号段使用预占索引，避免 id 冲突）。
@@ -775,6 +958,8 @@ class MessageStreamCoordinator(
         timestamp = currentStartTs,
         tokenCount = TokenEstimator.estimate(content),
         isStreaming = streaming,
+        // 本地思考附着到指定索引的消息上（首条或工具系列后追加），随消息一起持久化
+        thinking = if (thinkingForIndex == index) pendingThinking else "",
         senderId = senderId
     )
 
@@ -782,5 +967,9 @@ class MessageStreamCoordinator(
         const val HARD_LIMIT_MULTIPLIER = QuiddityConstants.SPLITTER_HARD_LIMIT_MULTIPLIER
         const val CHARS_PER_TOKEN = QuiddityConstants.SPLITTER_CHARS_PER_TOKEN
         const val MAX_HARD_LIMIT_CHARS = QuiddityConstants.SPLITTER_MAX_HARD_LIMIT_CHARS
+        /** 提示词引导的思考开始标记。 */
+        const val THINK_OPEN = "【思考】"
+        /** 提示词引导的思考结束标记。 */
+        const val THINK_CLOSE = "【回答】"
     }
 }

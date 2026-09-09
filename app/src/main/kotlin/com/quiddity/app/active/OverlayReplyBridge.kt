@@ -1,0 +1,187 @@
+package com.quiddity.app.active
+
+import com.quiddity.app.data.model.Conversation
+import com.quiddity.app.data.model.ConversationType
+import com.quiddity.app.data.model.Message
+import com.quiddity.app.data.model.MessageToolTrace
+import com.quiddity.app.data.model.Role
+import com.quiddity.app.data.repo.ChatRepository
+import com.quiddity.app.di.ServiceLocator
+import com.quiddity.app.util.IdGenerator
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+
+/**
+ * 悬浮窗快捷回复桥：从系统悬浮窗直接向会话发送消息并触发 AI 回复。
+ *
+ * - 私聊 / Agent：追加用户消息后调用 [ChatRepository.streamAssistantReply]，
+ *   事件处理器把流式消息落盘并重新入队悬浮窗气泡；
+ * - 群聊：只追加用户消息（群聊回复由群内点名机制触发，悬浮窗不代为调度）；
+ * - Agent 需要确认的工具调用一律自动拒绝（悬浮窗没有确认 UI，安全兜底）。
+ */
+object OverlayReplyBridge {
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    /** 正在发送/回复中的会话集合（按会话互斥，避免全局互斥吞掉其他空闲会话的悬浮窗消息）。 */
+    private val sendingConversations = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    /** 各会话本次回复累计内容（悬浮窗最终气泡用，不落库；按会话隔离，避免并发交叉）。 */
+    private val replyAccumulators = mutableMapOf<String, StringBuilder>()
+
+    fun send(conversationId: String, type: ConversationType, text: String) {
+        val content = text.trim()
+        if (content.isEmpty()) return
+        // 按会话互斥：同一会话已有回复在进行则提示并跳过，且不再用全局互斥吞掉其他空闲会话。
+        if (!sendingConversations.add(conversationId)) {
+            ReplyOverlayController.showTransientStatus("正在回复中，请稍候")
+            return
+        }
+        scope.launch {
+            try {
+                val convRepo = ServiceLocator.conversationRepository
+                val conv = convRepo.getConversation(conversationId) ?: return@launch
+                val now = System.currentTimeMillis()
+                val userMsg = Message(
+                    id = IdGenerator.newId(IdGenerator.Prefix.USER_MESSAGE),
+                    conversationId = conv.id,
+                    role = Role.USER,
+                    content = content,
+                    timestamp = now
+                )
+                convRepo.appendMessage(userMsg)
+                // 群聊快捷发送只追加消息（回复靠群内点名触发）：
+                // 给用户「已发送」反馈，避免发送后毫无提示
+                if (type == ConversationType.GROUP) {
+                    ReplyOverlayController.showTransientStatus("已发送")
+                    return@launch
+                }
+                // 该会话已有回复在进行（应用内流式或悬浮窗流式）：不再并发起第二条流，
+                // 否则两条流交替写消息会产生内容交叉 / 重复两条同时出现。
+                if (conversationId in ReplyOverlayController.activeReplies.value) {
+                    ReplyOverlayController.showTransientStatus("正在回复中，请稍候")
+                    return@launch
+                }
+                ReplyOverlayController.startReply(conv.id, type)
+                val history = convRepo.observeMessages(conv.id).value
+                replyAccumulators[conversationId] = StringBuilder()
+                ServiceLocator.chatRepository.streamAssistantReply(
+                    conv = conv,
+                    history = history,
+                    memoryStrategy = null,
+                    thinking = ""
+                ) { event ->
+                    handleEvent(conv, event)
+                }
+            } catch (c: kotlinx.coroutines.CancellationException) {
+                throw c
+            } catch (t: Throwable) {
+                ReplyOverlayController.endReply(conversationId)
+            } finally {
+                settleInterruptedStreams(conversationId)
+                sendingConversations.remove(conversationId)
+            }
+        }
+    }
+
+    /** 流被中断 / 出错时把残留 streaming 消息标记为完成，避免光标卡死。 */
+    private suspend fun settleInterruptedStreams(conversationId: String) {
+        val convRepo = ServiceLocator.conversationRepository
+        val current = convRepo.observeMessages(conversationId).value
+        if (current.none { it.isStreaming }) return
+        convRepo.replaceMessages(
+            conversationId,
+            current.map { msg -> if (msg.isStreaming) msg.copy(isStreaming = false) else msg }
+        )
+    }
+
+    private suspend fun handleEvent(conv: Conversation, event: ChatRepository.Event) {
+        val convRepo = ServiceLocator.conversationRepository
+        when (event) {
+            is ChatRepository.Event.NewMessage ->
+                convRepo.appendMessage(event.message)
+            is ChatRepository.Event.UpdateMessage ->
+                convRepo.updateMessage(event.message)
+            is ChatRepository.Event.CompleteMessage -> {
+                // 空内容 Complete 是协调器的删除标记（半截残留消息回收）：
+                // 与聊天页事件处理器一致，直接移除该条消息，避免留下空气泡
+                if (event.message.content.isBlank() && !event.message.isNotice &&
+                    !event.message.isThinking
+                ) {
+                    convRepo.deleteMessage(conv.id, event.message.id)
+                    return
+                }
+                convRepo.updateMessage(event.message)
+                replyAccumulators.getOrPut(conv.id) { StringBuilder() }.append(event.message.content)
+            }
+            is ChatRepository.Event.ToolConfirmBatch ->
+                // 悬浮窗无确认 UI：一律拒绝需要确认的工具操作（安全兜底）
+                event.resume(false)
+            is ChatRepository.Event.Done -> {
+                // 回复结束：本轮累计的完整回复作为最终气泡展示
+                val fullReply = replyAccumulators.remove(conv.id)?.toString()?.trim().orEmpty()
+                if (fullReply.isNotBlank()) {
+                    ReplyOverlayController.enqueueBubble(
+                        text = fullReply,
+                        conversationId = conv.id,
+                        conversationType = conv.type
+                    )
+                }
+                ReplyOverlayController.endReply(conv.id)
+            }
+            is ChatRepository.Event.Error -> {
+                replyAccumulators.remove(conv.id)
+                ReplyOverlayController.endReply(conv.id)
+            }
+            is ChatRepository.Event.Truncated -> {
+                replyAccumulators.remove(conv.id)
+                ReplyOverlayController.endReply(conv.id)
+            }
+            is ChatRepository.Event.Notice -> Unit
+            is ChatRepository.Event.ToolUse ->
+                attachToolTrace(conv, MessageToolTrace(event.toolName, ok = false, summary = null))
+            is ChatRepository.Event.ToolResult ->
+                updateToolTrace(conv, event.toolName, event.ok, event.summary)
+            is ChatRepository.Event.AgentRoundEffects -> Unit
+        }
+    }
+
+    /** 工具开始：把「运行中」痕迹实时挂到当前 AI 消息上（悬浮窗桥接路径）。 */
+    private suspend fun attachToolTrace(conv: Conversation, trace: MessageToolTrace) {
+        val msgs = ServiceLocator.conversationRepository.observeMessages(conv.id).value
+        val idx = msgs.indexOfLast {
+            it.role == Role.ASSISTANT && !it.isNotice && !it.isThinking
+        }
+        if (idx < 0) return
+        val target = msgs[idx]
+        ServiceLocator.conversationRepository.updateMessage(
+            target.copy(toolTraces = target.toolTraces + trace)
+        )
+    }
+
+    /** 工具结束：更新对应痕迹的结果状态。 */
+    private suspend fun updateToolTrace(
+        conv: Conversation,
+        name: String,
+        ok: Boolean,
+        summary: String?
+    ) {
+        val msgs = ServiceLocator.conversationRepository.observeMessages(conv.id).value
+        val idx = msgs.indexOfLast {
+            it.role == Role.ASSISTANT && !it.isNotice && !it.isThinking
+        }
+        if (idx < 0) return
+        val target = msgs[idx]
+        val traces = target.toolTraces.toMutableList()
+        val traceIdx = traces.indexOfLast { it.name == name }
+        if (traceIdx >= 0) {
+            traces[traceIdx] = MessageToolTrace(name, ok, summary)
+        } else {
+            traces += MessageToolTrace(name, ok, summary)
+        }
+        ServiceLocator.conversationRepository.updateMessage(target.copy(toolTraces = traces))
+    }
+
+}

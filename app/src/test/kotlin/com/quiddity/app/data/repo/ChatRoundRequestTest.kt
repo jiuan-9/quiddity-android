@@ -97,18 +97,67 @@ class ChatRoundRequestTest {
 
     @Test
     fun `looksTruncated flags obvious continuation endings`() {
-        assertTrue(looksTruncated("声音有点颤抖的说："), "以全角冒号结尾视为截断")
-        assertTrue(looksTruncated("她轻轻地说:"), "以半角冒号结尾视为截断")
         assertTrue(looksTruncated("然后他（"), "以未闭合括号结尾视为截断")
         assertTrue(looksTruncated("他说“"), "以未闭合引号结尾视为截断")
-        assertTrue(looksTruncated("话还没说完，"), "以逗号结尾视为截断")
+        assertTrue(looksTruncated("接着他说「"), "以未闭合直角引号结尾视为截断")
     }
 
     @Test
     fun `looksTruncated does not flag complete endings`() {
         assertFalse(looksTruncated("好的呀"), "完整短句不应误判")
         assertFalse(looksTruncated("今晚月色真美。"), "以句号结尾不应误判")
+        assertFalse(looksTruncated("声音有点颤抖的说："), "以全角冒号结尾是自然结尾，不应误判为截断")
+        assertFalse(looksTruncated("她轻轻地说:"), "以半角冒号结尾是自然结尾，不应误判为截断")
+        assertFalse(looksTruncated("话还没说完，"), "以逗号结尾是自然结尾，不应误判为截断")
+        assertFalse(
+            looksTruncated("好，我跳到微信，一步步点进去。先打开微信:"),
+            "以「先打开微信:」这类预告式冒号结尾不应触发自动续写循环"
+        )
         assertFalse(looksTruncated(""), "空内容不应误判")
         assertFalse(looksTruncated("   "), "纯空白不应误判")
+    }
+
+    @Test
+    fun `isActionOnlyReply flags action-only replies`() {
+        assertTrue(isActionOnlyReply("（轻笑）"), "单括号动作应判定为仅动作")
+        assertTrue(isActionOnlyReply("（点头）（微笑）"), "多个连续动作应判定为仅动作")
+        assertTrue(isActionOnlyReply("（深吸一口气，又缓缓吐出）"), "长动作描写应判定为仅动作")
+        assertTrue(isActionOnlyReply("（轻笑）\n（小声嘟囔）"), "换行分隔的多个动作应判定为仅动作")
+        assertFalse(isActionOnlyReply(""), "空内容不判定")
+        assertFalse(isActionOnlyReply("   "), "纯空白不判定")
+    }
+
+    @Test
+    fun `isActionOnlyReply does not flag speech or mixed replies`() {
+        assertFalse(isActionOnlyReply("（轻笑）你好呀。"), "动作+台词不判定为仅动作")
+        assertFalse(isActionOnlyReply("你好呀"), "纯台词不判定为仅动作")
+        assertFalse(isActionOnlyReply("（心跳加速）怎么办，我好像有点喜欢你。"), "动作+台词不判定为仅动作")
+        assertFalse(isActionOnlyReply("【系统】这是一条系统记录"), "方括号内容可能是系统记录，不判定为仅动作")
+        assertFalse(isActionOnlyReply("我回来了"), "普通文本不判定为仅动作")
+    }
+
+    @Test
+    fun `replySimilarityRatio distinguishes same from different replies`() {
+        assertTrue(
+            replySimilarityRatio("她轻轻笑了下，说：今天天气真好。", "她轻轻笑了下，说：今天天气真好。") >=
+                REGENERATE_SIMILARITY_THRESHOLD,
+            "完全相同的回复应判定为高度相似"
+        )
+        assertTrue(
+            replySimilarityRatio("（轻笑）今天天气真好，我们出去走走吧。", "今天天气真好，我们出去走走吧。") >=
+                REGENERATE_SIMILARITY_THRESHOLD,
+            "仅动作括号不同、台词相同的回复应判定为高度相似"
+        )
+        assertTrue(
+            replySimilarityRatio("我有点紧张，但还是鼓起勇气开口。", "我有点紧张，但还是鼓起勇气开口了。") >=
+                REGENERATE_SIMILARITY_THRESHOLD,
+            "仅个别字词不同的回复应判定为高度相似"
+        )
+        assertTrue(
+            replySimilarityRatio("今天天气真好，我们出去走走吧。", "刚才那件事我仔细想了想，还是先不打扰你了。") <
+                REGENERATE_SIMILARITY_THRESHOLD,
+            "完全不同话题的回复不应判定为高度相似"
+        )
+        assertEquals(0f, replySimilarityRatio("", "内容"), "空内容相似度为 0")
     }
 }

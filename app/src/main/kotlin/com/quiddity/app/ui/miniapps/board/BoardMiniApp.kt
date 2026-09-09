@@ -31,9 +31,13 @@ object BoardMiniApp : MiniApp {
     override val description: String = "五子棋 · 围棋，与角色或 AI 下一盘"
     override val icon: ImageVector = Icons.Rounded.GridOn
 
-    /** 邀请气泡文案（带棋种，供邀请流程使用）。 */
+    /** 邀请气泡文案（带棋种与棋盘大小，供邀请流程使用）。 */
+    fun inviteBubbleText(game: BoardGameType, boardSize: Int, opponentName: String): String =
+        "你邀请了「$opponentName」一起玩《棋盘·${game.displayName} $boardSize×$boardSize》"
+
+    /** 邀请气泡文案（默认棋盘大小，兼容旧调用）。 */
     fun inviteBubbleText(game: BoardGameType, opponentName: String): String =
-        "你邀请了「$opponentName」一起玩《棋盘·${game.displayName}》"
+        inviteBubbleText(game, game.defaultSize, opponentName)
 
     override fun inviteBubbleText(opponentName: String): String =
         "你邀请了「$opponentName」一起玩《棋盘》"
@@ -85,19 +89,28 @@ private fun BoardAppRoot(
                     onSelect = vm::selectGame
                 )
             }
+            is BoardRoute.SizeSelect -> {
+                BoardSizeSelectScreen(
+                    game = route.game,
+                    onBack = { vm.backToGames() },
+                    onSelect = { size -> vm.selectSize(route.game, size) }
+                )
+            }
             is BoardRoute.ModeSelect -> {
                 BoardModeSelectScreen(
                     game = route.game,
-                    onBack = { vm.backToGames() },
-                    onInvite = { vm.onChooseInvite(route.game) },
-                    onVsComputer = { vm.onChooseVsComputer(route.game) }
+                    size = route.size,
+                    onBack = { vm.backToSize(route.game) },
+                    onInvite = { vm.onChooseInvite(route.game, route.size) },
+                    onVsComputer = { vm.onChooseVsComputer(route.game, route.size) }
                 )
             }
             is BoardRoute.DifficultySelect -> {
                 BoardDifficultySelectScreen(
                     game = route.game,
-                    onBack = { vm.backToMode(route.game) },
-                    onSelect = { difficulty -> vm.onStartVsComputer(route.game, difficulty) }
+                    size = route.size,
+                    onBack = { vm.backToMode(route.game, route.size) },
+                    onSelect = { difficulty -> vm.onStartVsComputer(route.game, route.size, difficulty) }
                 )
             }
             is BoardRoute.Invite -> {
@@ -105,8 +118,9 @@ private fun BoardAppRoot(
                 BoardInviteScreen(
                     invitees = invitees,
                     game = route.game,
+                    size = route.size,
                     checking = uiState.inviteChecking,
-                    onBack = { vm.backToMode(route.game) },
+                    onBack = { vm.backToMode(route.game, route.size) },
                     onInvite = vm::inviteFriend
                 )
             }
@@ -119,7 +133,7 @@ private fun BoardAppRoot(
                 BoardGameScreen(
                     session = session,
                     // 对局退出回到当前棋种的"选择对手"页，不跨级跳回棋种选择
-                    onBack = { vm.backToMode(session.gameType) },
+                    onBack = { vm.backToMode(session.gameType, session.board.size) },
                     onCellTap = vm::onUserMove,
                     onPass = vm::onPass,
                     onResign = vm::onResign,
@@ -136,8 +150,9 @@ private fun BoardAppRoot(
 
 private fun routeDepth(route: BoardRoute): Int = when (route) {
     BoardRoute.GameSelect -> 0
-    is BoardRoute.ModeSelect -> 1
-    is BoardRoute.DifficultySelect -> 2
-    is BoardRoute.Invite -> 2
-    is BoardRoute.Playing -> 3
+    is BoardRoute.SizeSelect -> 1
+    is BoardRoute.ModeSelect -> 2
+    is BoardRoute.DifficultySelect -> 3
+    is BoardRoute.Invite -> 3
+    is BoardRoute.Playing -> 4
 }

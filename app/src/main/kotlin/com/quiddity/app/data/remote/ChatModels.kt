@@ -41,6 +41,11 @@ data class ChatCompletionRequest(
     val model: String,
     val messages: List<ChatMessage>,
     val max_tokens: Int? = null,
+    /**
+     * 星火 X2 等新一代模型使用 max_completion_tokens 作为输出上限
+     * （包含思考 token 与最终答案；与 max_tokens 互斥，按服务商二选一携带）。
+     */
+    val max_completion_tokens: Int? = null,
     val temperature: Double = QuiddityConstants.DEFAULT_TEMPERATURE,
     val stream: Boolean = true,
     /**
@@ -49,6 +54,11 @@ data class ChatCompletionRequest(
      */
     val reasoning_effort: String? = null,
     /**
+     * 深度思考开关（星火 X2 系列使用 thinking.type=enabled/disabled，
+     * 默认 enabled；其他服务商不识别该字段时自动忽略）。
+     */
+    val thinking: ThinkingMode? = null,
+    /**
      * 工具定义列表（6.6.2 记忆调用式 read_memory；默认不携带，向后兼容）。
      */
     val tools: List<ToolDefinition>? = null,
@@ -56,6 +66,12 @@ data class ChatCompletionRequest(
      * 工具调用策略（"auto" / "none" / "required"；null = 不携带该字段，兼容不支持工具调用的接口）。
      */
     val tool_choice: String? = null
+)
+
+/** 深度思考模式参数（OpenAI 兼容接口的扩展字段，如星火 X2 的 thinking.type）。 */
+@Serializable
+data class ThinkingMode(
+    val type: String
 )
 
 /**
@@ -92,7 +108,11 @@ data class DeepSeekResponsesRequest(
 data class ResponsesInputItem(
     val type: String = "message",
     val role: String? = null,
-    val content: String? = null,
+    /**
+     * message item：字符串文本；reasoning item：reasoning_text 内容块数组。
+     * （DeepSeek 思考模式工具轮必须回传上一轮的 reasoning item，否则 400）
+     */
+    val content: JsonElement? = null,
     val call_id: String? = null,
     val name: String? = null,
     val arguments: String? = null,
@@ -118,6 +138,12 @@ data class ChatMessage(
     val role: String,
     val content: String? = null,
     /**
+     * DeepSeek 思考模式强制要求：assistant 工具调用消息必须回传上一轮的
+     * reasoning_content（reasoning_text），否则工具轮第二轮请求会被服务端以
+     * "The reasoning_text in the thinking mode must be passed back to the API" 拒绝（HTTP 400）。
+     */
+    val reasoning_content: String? = null,
+    /**
      * 第二次请求回填的 assistant 工具调用（6.6.4）。
      */
     val tool_calls: List<AssistantToolCall>? = null,
@@ -131,7 +157,7 @@ data class ChatMessage(
  * 视觉识图请求体（OpenAI 兼容多模态格式）。
  *
  * 与 [ChatCompletionRequest] 的区别：content 为内容块数组，图片以
- * `data:image/jpeg;base64,...` 形式内嵌，适配 OpenAI / Qwen-VL / GLM-4V /
+ * `data:image/jpeg;base64,...` 形式内嵌，适配 OpenAI / GLM-4V /
  * Gemini（OpenAI 兼容端点）等主流视觉模型接口。
  */
 @Serializable
@@ -139,6 +165,8 @@ data class VisionCompletionRequest(
     val model: String,
     val messages: List<VisionChatMessage>,
     val max_tokens: Int? = null,
+    /** 思考型视觉模型的输出上限字段（与 max_tokens 互斥）。 */
+    val max_completion_tokens: Int? = null,
     val temperature: Double = 0.2,
     val stream: Boolean = false
 )
@@ -196,13 +224,29 @@ data class AssistantToolCallFunction(
 
 @Serializable
 data class ChatStreamChunk(
-    val choices: List<Choice> = emptyList()
+    val choices: List<Choice> = emptyList(),
+    /**
+     * 非流式响应兜底：部分兼容网关在 stream=true 下仍一次性返回完整
+     * chat.completion 对象（choices[].message），此处承接 message 内容，
+     * 避免"流式请求拿到整包 JSON 却解析不出任何内容"的静默空回复。
+     */
+    val message: ChatStreamChunkMessage? = null
+)
+
+@Serializable
+data class ChatStreamChunkMessage(
+    val role: String? = null,
+    val content: String? = null,
+    /** 非流式响应中的思考内容（如星火 X2）。 */
+    val reasoning_content: String? = null
 )
 
 @Serializable
 data class Choice(
     val delta: Delta = Delta(),
-    val finish_reason: String? = null
+    val finish_reason: String? = null,
+    /** 非流式响应兼容：choices[i].message（整包返回时携带完整回复）。 */
+    val message: ChatStreamChunkMessage? = null
 )
 
 @Serializable

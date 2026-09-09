@@ -43,6 +43,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -82,7 +83,7 @@ fun MiniAppsCenterScreen(
     val scope = rememberCoroutineScope()
     // 收回手势：上拉面板（整页跟手位移），松手超过阈值即收回（NavHost 滑出动画收尾）
     val listState = rememberLazyListState()
-    var pullUp by remember { mutableStateOf(0f) }
+    var pullUp by remember { mutableFloatStateOf(0f) }
     var pullTriggered by remember { mutableStateOf(false) }
     val maxPullDp = 160f
     val closeThresholdDp = 50f
