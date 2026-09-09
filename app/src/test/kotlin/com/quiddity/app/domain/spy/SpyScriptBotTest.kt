@@ -1,4 +1,4 @@
-﻿package com.quiddity.app.domain.spy
+package com.quiddity.app.domain.spy
 
 import kotlin.random.Random
 import kotlin.test.Test
