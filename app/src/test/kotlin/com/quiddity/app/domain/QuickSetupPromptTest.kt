@@ -116,7 +116,7 @@ class QuickSetupPromptTest {
     @Test
     fun `system prompt emphasizes analysis over expansion`() {
         val sys = QuickSetupPrompt.QUICK_SETUP_SYSTEM_PROMPT
-        // 1.7.0：剖析定位 + 名称检索双轨——具体输入剖析归位、禁止注水；仅名称/极模糊才启用知识检索补全
+        // 剖析定位 + 名称检索双轨——具体输入剖析归位、禁止注水；仅名称/极模糊才启用知识检索补全
         assertTrue(sys.contains("剖析"))
         assertTrue(sys.contains("名称检索"))
         assertTrue(sys.contains("禁止注水凑数"))
@@ -168,7 +168,7 @@ class QuickSetupPromptTest {
         assertTrue("ai_persona" in roughMissing)
         assertTrue("ai_character" in roughMissing)
         assertTrue("scene" in roughMissing)
-        // 1.7.0：用户人设全部按需填写，不强制用户名（聊天发送时再由应用层提示设置）
+        // 用户人设全部按需填写，不强制用户名（聊天发送时再由应用层提示设置）
         assertFalse("user_name" in roughMissing)
         assertTrue("memory" !in roughMissing)
 
@@ -176,7 +176,7 @@ class QuickSetupPromptTest {
         assertTrue("ai_appearance" in fullMissing)
         assertTrue("ai_world_background" in fullMissing)
         assertTrue("ai_desired" in fullMissing)
-        // 1.7.0：记忆与用户人设按需填写，无记忆不阻塞填入
+        // 记忆与用户人设按需填写，无记忆不阻塞填入
         assertFalse("memory" in fullMissing)
     }
 
