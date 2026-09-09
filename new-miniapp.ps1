@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
   小应用脚手架：生成一个可编译的最小小应用实现，并自动注册到 MiniAppRegistry。

@@ -1,4 +1,4 @@
-﻿# Quiddity Android
+# Quiddity Android
 
 > Quiddity AI 澶氭ā鍨嬪璇?Android 瀹㈡埛绔?鈥?涓€涓鎴风锛岃仛鍚堟墍鏈変富娴佸ぇ妯″瀷銆?
 >
